@@ -22,7 +22,7 @@ use youpdf_core::{
     fold_case, Annotation, AnnotationKind, AnnotationStyle, AttachmentInfo, Document,
     EncryptionOptions, EncryptionStrength, FormField, FormFieldKind, HeaderFooter, NumberStyle,
     OutlineItem, PageRange, PdfiumRenderer, RedactionRegion, RenderOptions, Renderer, SearchIndex,
-    SearchOptions, SearchResult, TextFragment, Watermark, STAMP_NAMES,
+    SearchOptions, SearchResult, TextFormat, TextFragment, Watermark, STAMP_NAMES,
 };
 
 // --------------------------------------------------------------------------
@@ -91,7 +91,8 @@ impl PageLayout {
 enum MenuAction {
     Save,
     SaveAs,
-    ExportText,
+    /// Ouvre la fenêtre d'export.
+    Export,
     /// Peint les annotations dans la page et les supprime.
     Flatten,
     Properties,
@@ -426,6 +427,9 @@ pub struct YouPdfApp {
     header_footer_open: bool,
     header_footer: HeaderFooter,
     header_footer_from: Option<u32>,
+    /// Fenêtre « Exporter » et le format choisi.
+    export_open: bool,
+    export_format: TextFormat,
     /// Fenêtre « Compresser » : dernier bilan affiché.
     compress_open: bool,
     compress_report: Option<String>,
@@ -558,6 +562,8 @@ impl YouPdfApp {
             header_footer_open: false,
             header_footer: HeaderFooter::default(),
             header_footer_from: None,
+            export_open: false,
+            export_format: TextFormat::Plain,
             compress_open: false,
             compress_report: None,
             protect_open: false,
@@ -800,32 +806,89 @@ impl YouPdfApp {
     }
 
     /// Exporte le texte extractible dans un fichier `.txt`.
-    fn export_text(&mut self, ctx: &egui::Context) {
-        let Some(tab) = self.tabs.get(self.active) else {
+    /// Fenêtre « Exporter » : choix du format texte.
+    fn export_window(&mut self, ctx: &egui::Context) {
+        if !self.export_open {
             return;
-        };
-        let stem = tab
-            .path
-            .as_ref()
-            .and_then(|p| p.file_stem().map(|n| n.to_string_lossy().into_owned()))
-            .unwrap_or_else(|| tab.title.clone());
+        }
+        let mut open = true;
+        let mut run = false;
+        egui::Window::new("Export")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(360.0);
+                ui.label(RichText::new("Format").size(12.0).color(MUTED));
+                for format in [TextFormat::Plain, TextFormat::Markdown, TextFormat::Html] {
+                    if ui
+                        .selectable_label(self.export_format == format, format.display_name())
+                        .clicked()
+                    {
+                        self.export_format = format;
+                    }
+                }
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(
+                        "Only the text layer is exported: images, tables and the page layout \
+                         are not rebuilt, and pages without extractable text come out empty.",
+                    )
+                    .size(11.0)
+                    .color(MUTED),
+                );
+                ui.add_space(8.0);
+                if ui.button("Export…").clicked() {
+                    run = true;
+                }
+            });
+        if run {
+            self.export_active(ctx);
+        }
+        if !open {
+            self.export_open = false;
+        }
+    }
+
+    /// Écrit la couche texte du document dans le format choisi.
+    fn export_active(&mut self, ctx: &egui::Context) {
+        let format = self.export_format;
+        let stem = self
+            .active_stem()
+            .or_else(|| self.tabs.get(self.active).map(|tab| tab.title.clone()))
+            .unwrap_or_else(|| "document".to_owned());
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Texte", &["txt"])
-            .set_file_name(format!("{stem}.txt"))
+            .add_filter("Export", &[format.extension()])
+            .set_file_name(format!("{stem}.{}", format.extension()))
             .save_file()
         else {
             return;
         };
-        let text = match tab.doc.all_text() {
-            Ok(text) => text,
-            Err(err) => {
-                self.toast(ctx, format!("Text export failed: {err}"));
-                return;
+        let result = self
+            .tabs
+            .get(self.active)
+            .map(|tab| tab.doc.export_text(format));
+        match result {
+            Some(Ok(text)) => {
+                let pages = self.tabs.get(self.active).map(|tab| tab.total()).unwrap_or(0);
+                let chars = text.chars().count();
+                match std::fs::write(&path, text) {
+                    Ok(()) => {
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "the file".to_owned());
+                        self.toast(
+                            ctx,
+                            format!("Exported {pages} page(s), {chars} characters to {name}"),
+                        );
+                    }
+                    Err(err) => self.toast(ctx, format!("Export failed: {err}")),
+                }
             }
-        };
-        match std::fs::write(&path, text) {
-            Ok(()) => self.toast(ctx, format!("Exported {}", path.display())),
-            Err(err) => self.toast(ctx, format!("Text export failed: {err}")),
+            Some(Err(err)) => self.toast(ctx, format!("Export failed: {err}")),
+            None => {}
         }
     }
 
@@ -3604,8 +3667,8 @@ impl YouPdfApp {
                             if menu_row(ui, "Save as…", "Shift+⌘S") {
                                 action = Some(MenuAction::SaveAs);
                             }
-                            if menu_row(ui, "Export text…", "") {
-                                action = Some(MenuAction::ExportText);
+                            if menu_row(ui, "Export…", "") {
+                                action = Some(MenuAction::Export);
                             }
                             if menu_row(ui, "Flatten annotations", "") {
                                 action = Some(MenuAction::Flatten);
@@ -3694,7 +3757,7 @@ impl YouPdfApp {
                 match action {
                     MenuAction::Save => self.save_active(ctx),
                     MenuAction::SaveAs => self.save_as(ctx),
-                    MenuAction::ExportText => self.export_text(ctx),
+                    MenuAction::Export => self.export_open = true,
                     MenuAction::Flatten => self.flatten_annotations(ctx),
                     MenuAction::Properties => self.props_open = true,
                     MenuAction::Close => {
@@ -5356,6 +5419,7 @@ impl eframe::App for YouPdfApp {
         self.toolbar(ctx);
         self.zoom_overlay(ctx);
         self.properties_window(ctx);
+        self.export_window(ctx);
         self.watermark_window(ctx);
         self.header_footer_window(ctx);
         self.compress_window(ctx);

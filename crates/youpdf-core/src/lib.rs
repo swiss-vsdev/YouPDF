@@ -40,6 +40,7 @@ pub mod watermark;
 
 pub use annotate::{Annotation, AnnotationKind, AnnotationStyle, STAMP_NAMES, stamp_name};
 pub use compare::{ComparisonReport, Difference, DifferenceKind};
+pub use convert::TextFormat;
 pub use compress::CompressionReport;
 pub use document::Document;
 pub use edit::{ImageInfo, TextFragment, TextSpan, encode_pdf_literal};
