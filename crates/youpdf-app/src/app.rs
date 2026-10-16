@@ -22,10 +22,11 @@ use youpdf_core::ocr::{make_searchable, TesseractEngine};
 use youpdf_core::{
     blank_document, document_from_images, fold_case, Annotation, AnnotationKind, AnnotationStyle,
     AttachmentInfo, Background, Bates, BatesPosition, ComparisonReport, CropMargins, DifferenceKind,
-    Document, EncryptionOptions, EncryptionStrength, FormField, FormFieldKind, HeaderFooter,
-    ImageFormat, MeasureKind, Measurement, NumberStyle, OcrEngine, OcrMode, OutlineItem, PageRange,
-    PdfiumRenderer, RedactionRegion, RenderOptions, Renderer, SearchIndex, SearchOptions,
-    SearchResult, TextFormat, TextFragment, Watermark, STAMP_NAMES,
+    Document, EncryptionOptions, EncryptionStrength, ExtractedTable, FieldProperties,
+    FormDataFormat, FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, MeasureKind,
+    Measurement, NumberStyle, OcrEngine, OcrMode, OutlineItem, PageRange, PdfiumRenderer,
+    RedactionRegion, RenderOptions, Renderer, SearchIndex, SearchOptions, SearchResult, TextFormat,
+    TextFragment, Watermark, STAMP_NAMES,
 };
 
 // --------------------------------------------------------------------------
@@ -142,6 +143,8 @@ enum MenuAction {
     Slideshow,
     /// Ouvre la fenêtre de traitement par lots.
     Batch,
+    /// Ouvre la fenêtre d'extraction de données.
+    Extract,
 }
 
 /// Répartit les pages en rangées selon la disposition choisie. Chaque rangée
@@ -602,6 +605,10 @@ pub struct YouPdfApp {
     measure_scale: f32,
     /// Unité affichée.
     measure_unit: String,
+    /// Fenêtre « Extraire les données » et son résultat.
+    extract_open: bool,
+    extract_tables: Vec<ExtractedTable>,
+    extract_pairs: Vec<KeyValue>,
     /// Présentation plein écran, une page à la fois.
     slideshow: bool,
     /// Fenêtre « Traitement par lots ».
@@ -689,6 +696,10 @@ pub struct YouPdfApp {
     redact_sanitize: bool,
     /// Champ de formulaire sélectionné et saisie en cours.
     form_edit: Option<(usize, String)>,
+    /// Brouillon des propriétés du champ sélectionné.
+    form_props: Option<(usize, FieldProperties)>,
+    /// Format choisi pour l'échange de données de formulaire.
+    form_data_format: FormDataFormat,
     /// Fond du canevas choisi dans Aspect.
     canvas_style: usize,
     /// Ombre portée sous les pages.
@@ -778,6 +789,9 @@ impl YouPdfApp {
             measure_kind: MeasureKind::Distance,
             measure_scale: 72.0,
             measure_unit: "in".to_owned(),
+            extract_open: false,
+            extract_tables: Vec::new(),
+            extract_pairs: Vec::new(),
             slideshow: false,
             batch_open: false,
             batch_files: Vec::new(),
@@ -826,6 +840,8 @@ impl YouPdfApp {
             edit_text: None,
             redact_sanitize: true,
             form_edit: None,
+            form_props: None,
+            form_data_format: FormDataFormat::Fdf,
             canvas_style: 0,
             page_shadow: true,
             thumb_scale: 1.0,
@@ -1494,6 +1510,93 @@ impl YouPdfApp {
 
         let mut jump = None;
         let mut select = None;
+
+        // Échange de données de formulaire (FDF, XFDF, CSV, JSON).
+        let mut import = false;
+        let mut export = false;
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("form-data-format")
+                .width(80.0)
+                .selected_text(self.form_data_format.display_name())
+                .show_ui(ui, |ui| {
+                    for format in [
+                        FormDataFormat::Fdf,
+                        FormDataFormat::Xfdf,
+                        FormDataFormat::Csv,
+                        FormDataFormat::Json,
+                    ] {
+                        if ui
+                            .selectable_label(
+                                self.form_data_format == format,
+                                format.display_name(),
+                            )
+                            .clicked()
+                        {
+                            self.form_data_format = format;
+                        }
+                    }
+                });
+            if ui.button("Import").clicked() {
+                import = true;
+            }
+            if ui.button("Export").clicked() {
+                export = true;
+            }
+        });
+        ui.add_space(4.0);
+
+        if import {
+            let format = self.form_data_format;
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter(format.display_name(), &[format.extension()])
+                .pick_file()
+            {
+                match std::fs::read_to_string(&path) {
+                    Ok(data) => {
+                        let result = self
+                            .tabs
+                            .get_mut(self.active)
+                            .map(|tab| tab.doc.import_form_data(format, &data));
+                        match result {
+                            Some(Ok(count)) => {
+                                self.mark_document_changed();
+                                self.ensure_structure();
+                                self.toast(ctx, format!("{count} field value(s) imported"));
+                            }
+                            Some(Err(err)) => self.toast(ctx, format!("Import failed: {err}")),
+                            None => {}
+                        }
+                    }
+                    Err(err) => self.toast(ctx, format!("Import failed: {err}")),
+                }
+            }
+            return;
+        }
+        if export {
+            let format = self.form_data_format;
+            let result = self
+                .tabs
+                .get(self.active)
+                .map(|tab| tab.doc.export_form_data(format));
+            match result {
+                Some(Ok(data)) => {
+                    let stem = self.active_stem().unwrap_or_else(|| "form".to_owned());
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter(format.display_name(), &[format.extension()])
+                        .set_file_name(format!("{stem}.{}", format.extension()))
+                        .save_file()
+                    {
+                        match std::fs::write(&path, data) {
+                            Ok(()) => self.toast(ctx, "Form data exported"),
+                            Err(err) => self.toast(ctx, format!("Export failed: {err}")),
+                        }
+                    }
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Export failed: {err}")),
+                None => {}
+            }
+            return;
+        }
         ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -1550,6 +1653,23 @@ impl YouPdfApp {
                 .map(|row| row.4.clone())
                 .unwrap_or_default();
             self.form_edit = Some((idx, current));
+            self.form_props = self
+                .tabs
+                .get(self.active)
+                .and_then(|tab| tab.forms.get(idx))
+                .map(|field| {
+                    (
+                        idx,
+                        FieldProperties {
+                            name: field.name.clone(),
+                            tooltip: String::new(),
+                            required: false,
+                            read_only: field.read_only,
+                            multiline: false,
+                            options: field.options.clone(),
+                        },
+                    )
+                });
             if let Some(page) = rows.get(idx).and_then(|row| row.2) {
                 self.jump = Some(page);
             }
@@ -1613,6 +1733,92 @@ impl YouPdfApp {
                 }
             });
         ui.add_space(6.0);
+
+        // Propriétés du champ : nom, aide, drapeaux, options.
+        let mut props = self
+            .form_props
+            .take()
+            .filter(|(i, _)| *i == idx)
+            .map(|(_, props)| props)
+            .unwrap_or_else(|| FieldProperties {
+                name: field.name.clone(),
+                tooltip: String::new(),
+                required: false,
+                read_only: field.read_only,
+                multiline: false,
+                options: field.options.clone(),
+            });
+        let mut apply_props = false;
+        let choice = matches!(
+            field.kind,
+            FormFieldKind::Choice | FormFieldKind::MultiChoice
+        );
+        Frame::none()
+            .fill(WIDGET_BG)
+            .rounding(Rounding::same(8.0))
+            .inner_margin(Margin::symmetric(10.0, 8.0))
+            .show(ui, |ui| {
+                ui.label(RichText::new("Properties").size(11.5).color(ICON_BRIGHT));
+                ui.add_space(4.0);
+                ui.add_sized(
+                    vec2(PANEL_W - 46.0, 24.0),
+                    TextEdit::singleline(&mut props.name).hint_text("Name"),
+                );
+                ui.add_sized(
+                    vec2(PANEL_W - 46.0, 24.0),
+                    TextEdit::singleline(&mut props.tooltip).hint_text("Tooltip"),
+                );
+                ui.checkbox(&mut props.required, "Required");
+                ui.checkbox(&mut props.read_only, "Read only");
+                if matches!(field.kind, FormFieldKind::Text) {
+                    ui.checkbox(&mut props.multiline, "Multiline");
+                }
+                if choice {
+                    let mut options = props.options.join(", ");
+                    if ui
+                        .add_sized(
+                            vec2(PANEL_W - 46.0, 24.0),
+                            TextEdit::singleline(&mut options)
+                                .hint_text("Options, comma separated"),
+                        )
+                        .changed()
+                    {
+                        props.options = options
+                            .split(',')
+                            .map(|item| item.trim().to_owned())
+                            .filter(|item| !item.is_empty())
+                            .collect();
+                    }
+                }
+                ui.add_space(4.0);
+                if ui.button("Apply properties").clicked() {
+                    apply_props = true;
+                }
+            });
+        ui.add_space(6.0);
+
+        if apply_props {
+            if let Some(tab) = self.tabs.get_mut(self.active) {
+                if let Some(field) = tab.forms.get(idx).cloned() {
+                    match tab.doc.update_form_field(&field, &props) {
+                        Ok(()) => {
+                            if let Some(entry) = tab.forms.get_mut(idx) {
+                                entry.name = props.name.clone();
+                                entry.read_only = props.read_only;
+                                entry.options = props.options.clone();
+                            }
+                            tab.dirty = true;
+                            tab.cache.clear();
+                            self.toast(ctx, format!("Field {} updated", props.name));
+                        }
+                        Err(err) => self.toast(ctx, format!("Field update failed: {err}")),
+                    }
+                }
+            }
+            self.form_props = None;
+        } else {
+            self.form_props = Some((idx, props));
+        }
 
         if apply {
             let Some(tab) = self.tabs.get_mut(self.active) else {
@@ -4183,6 +4389,9 @@ impl YouPdfApp {
                             if menu_row(ui, "Batch processing…", "") {
                                 action = Some(MenuAction::Batch);
                             }
+                            if menu_row(ui, "Extract data…", "") {
+                                action = Some(MenuAction::Extract);
+                            }
                             ui.add_space(4.0);
                             let sep = ui.cursor().top();
                             ui.painter().hline(
@@ -4280,6 +4489,7 @@ impl YouPdfApp {
                     MenuAction::Combine => self.combine_active(ctx),
                     MenuAction::Slideshow => self.enter_slideshow(ctx),
                     MenuAction::Batch => self.batch_open = true,
+                    MenuAction::Extract => self.extract_open = true,
                 }
             }
         }
@@ -5955,6 +6165,141 @@ impl YouPdfApp {
         }
     }
 
+    /// Fenêtre « Extraire les données » : tableaux et paires clé/valeur.
+    fn extract_window(&mut self, ctx: &egui::Context) {
+        if !self.extract_open {
+            return;
+        }
+        let mut open = true;
+        let mut scan = false;
+        let mut export_tables = false;
+        let mut export_pairs = false;
+        egui::Window::new("Extract data")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size(vec2(560.0, 460.0))
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(560.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Scan the document").clicked() {
+                        scan = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            !self.extract_tables.is_empty(),
+                            egui::Button::new("Tables to CSV…"),
+                        )
+                        .clicked()
+                    {
+                        export_tables = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            !self.extract_pairs.is_empty(),
+                            egui::Button::new("Pairs to CSV…"),
+                        )
+                        .clicked()
+                    {
+                        export_pairs = true;
+                    }
+                });
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(format!(
+                        "{} table(s), {} key/value pair(s)",
+                        self.extract_tables.len(),
+                        self.extract_pairs.len()
+                    ))
+                    .size(11.0)
+                    .color(MUTED),
+                );
+                ui.add_space(6.0);
+                ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                    for (idx, table) in self.extract_tables.iter().enumerate() {
+                        ui.label(
+                            RichText::new(format!("Table {} — page {}", idx + 1, table.page))
+                                .size(11.5)
+                                .color(ICON_BRIGHT),
+                        );
+                        for row in &table.rows {
+                            ui.label(
+                                RichText::new(row.join("  |  ")).size(11.0).color(ICON_BRIGHT),
+                            );
+                        }
+                        ui.add_space(6.0);
+                    }
+                    for pair in &self.extract_pairs {
+                        ui.label(
+                            RichText::new(format!("p{}  {} = {}", pair.page, pair.key, pair.value))
+                                .size(11.0)
+                                .color(ICON_BRIGHT),
+                        );
+                    }
+                });
+            });
+
+        if scan {
+            let result = self
+                .tabs
+                .get(self.active)
+                .map(|tab| (tab.doc.extract_tables(), tab.doc.extract_key_values()));
+            match result {
+                Some((Ok(tables), Ok(pairs))) => {
+                    let count = tables.len() + pairs.len();
+                    self.extract_tables = tables;
+                    self.extract_pairs = pairs;
+                    self.toast(ctx, format!("Found {count} item(s)"));
+                }
+                Some((Err(err), _)) | Some((_, Err(err))) => {
+                    self.toast(ctx, format!("Scan failed: {err}"));
+                }
+                None => self.toast(ctx, "Open a document first"),
+            }
+        }
+        if export_tables {
+            let mut body = String::new();
+            for (idx, table) in self.extract_tables.iter().enumerate() {
+                if idx > 0 {
+                    body.push('\n');
+                }
+                for row in &table.rows {
+                    let line: Vec<String> = row.iter().map(|cell| csv_cell(cell)).collect();
+                    body.push_str(&line.join(","));
+                    body.push('\n');
+                }
+            }
+            self.save_extract(ctx, "tables.csv", &body);
+        }
+        if export_pairs {
+            let mut body = String::from("key,value\n");
+            for pair in &self.extract_pairs {
+                body.push_str(&format!("{},{}", csv_cell(&pair.key), csv_cell(&pair.value)));
+                body.push('\n');
+            }
+            self.save_extract(ctx, "pairs.csv", &body);
+        }
+        if !open {
+            self.extract_open = false;
+        }
+    }
+
+    /// Écrit un fichier d'extraction choisi par l'utilisateur.
+    fn save_extract(&mut self, ctx: &egui::Context, name: &str, body: &str) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("CSV", &["csv"])
+            .set_file_name(name)
+            .save_file()
+        else {
+            return;
+        };
+        match std::fs::write(&path, body) {
+            Ok(()) => self.toast(ctx, "Extraction exported"),
+            Err(err) => self.toast(ctx, format!("Export failed: {err}")),
+        }
+    }
+
     /// Fenêtre « Traitement par lots » : plusieurs fichiers, mêmes opérations.
     fn batch_window(&mut self, ctx: &egui::Context) {
         if !self.batch_open {
@@ -7338,6 +7683,7 @@ impl eframe::App for YouPdfApp {
         self.ocr_window(ctx);
         self.create_window(ctx);
         self.batch_window(ctx);
+        self.extract_window(ctx);
         self.measure_window(ctx);
         self.password_window(ctx);
         self.draft_window(ctx);
@@ -7525,6 +7871,16 @@ fn menu_row(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
         MUTED,
     );
     resp.clicked()
+}
+
+/// Échappe une cellule CSV selon RFC 4180 : guillemets si la valeur contient
+/// une virgule, un guillemet ou un saut de ligne, guillemets internes doublés.
+fn csv_cell(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_owned()
+    }
 }
 
 /// Bouton-icône 38×38 avec fond sélection/hover.
