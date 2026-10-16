@@ -4681,6 +4681,7 @@ dependencies = [
  "docx-rs",
  "egui",
  "getrandom 0.2.17",
+ "image",
  "lopdf",
  "md-5",
  "pdfium-render",

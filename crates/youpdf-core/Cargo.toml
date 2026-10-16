@@ -18,6 +18,10 @@ tracing       = { workspace = true }
 # `render::PageBitmap::to_egui_image` produit une `egui::ColorImage`.
 egui = { workspace = true }
 
+# Compression JPEC des pages caviardées (rasterisées). `image` est déjà
+# tiré par `pdfium-render` et `eframe` : aucune dépendance nouvelle.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+
 # Rendu réel via pdfium (binaire embarqué).
 pdfium-render = { version = "0.8", features = ["bindings"] }
 

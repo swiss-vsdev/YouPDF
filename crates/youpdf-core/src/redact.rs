@@ -44,7 +44,7 @@ use crate::document::Document;
 use crate::render::{RenderOptions, Renderer};
 
 /// Une région à caviarder sur une page.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RedactionRegion {
     /// Page (1-indexée).
     pub page: usize,
@@ -273,6 +273,19 @@ impl Document {
             rgb.push(chunk[2]);
         }
 
+        // Compression JPEG : une page A4 rastérisée en RGB brut pèse
+        // ~25 Mo, en JPEG ~200 Ko. La qualité 88 reste lisible à l'écran.
+        let mut jpeg: Vec<u8> = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 88);
+        encoder
+            .encode(
+                &rgb,
+                width,
+                height,
+                image::ExtendedColorType::Rgb8,
+            )
+            .map_err(|e| Error::Pdf(format!("encodage JPEG de la page : {e}")))?;
+
         // Image XObject.
         let image_dict = dictionary! {
             "Type" => Object::Name(b"XObject".to_vec()),
@@ -281,8 +294,9 @@ impl Document {
             "Height" => Object::Integer(height as i64),
             "ColorSpace" => Object::Name(b"DeviceRGB".to_vec()),
             "BitsPerComponent" => Object::Integer(8),
+            "Filter" => Object::Name(b"DCTDecode".to_vec()),
         };
-        let image_stream = Stream::new(image_dict, rgb);
+        let image_stream = Stream::new(image_dict, jpeg);
         let image_id = self.inner_mut().add_object(image_stream);
 
         // Flux de contenu : dessine l'image pour couvrir toute la page.
