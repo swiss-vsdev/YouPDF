@@ -8,7 +8,7 @@
 //! Rendu net sur écrans HiDPI : les bitmaps PDFium sont rastérisés à
 //! `échelle_logique × pixels_per_point`, puis dessinés à la taille logique.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use egui::{
@@ -316,6 +316,12 @@ pub struct YouPdfApp {
     search_rects_page: Option<u32>,
     /// Saisie de la page à atteindre (pastille bas-droite).
     page_entry: String,
+    /// Fenêtre « Organiser les pages » ouverte.
+    organize_open: bool,
+    /// Pages cochées dans cette fenêtre (vide = document entier).
+    organize_selected: BTreeSet<usize>,
+    /// Pages par fichier pour le découpage.
+    organize_split: usize,
     /// Ligne « remplacer » ouverte.
     replace_open: bool,
     /// Texte de remplacement.
@@ -390,6 +396,9 @@ impl YouPdfApp {
             search_rects: Vec::new(),
             search_rects_page: None,
             page_entry: String::new(),
+            organize_open: false,
+            organize_selected: BTreeSet::new(),
+            organize_split: 1,
             replace_open: false,
             replace_text: String::new(),
             redact_regions: Vec::new(),
@@ -1408,6 +1417,26 @@ impl YouPdfApp {
             });
     }
 
+    /// À appeler après toute opération qui réécrit le document (pages,
+    /// caviardage…) : caches de rendu, plan, formulaires, résultats de
+    /// recherche et instantanés d'annulation deviennent caducs.
+    fn mark_document_changed(&mut self) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.dirty = true;
+            tab.cache.clear();
+            tab.annots_loaded = false;
+            tab.structure_loaded = false;
+            tab.undo.clear();
+            tab.redo.clear();
+            tab.page = tab.page.clamp(1, tab.total().max(1));
+        }
+        self.search_index = None;
+        self.search_rects.clear();
+        self.search_rects_page = None;
+        self.search_active = None;
+        self.results.clear();
+    }
+
     // -- Zoom --------------------------------------------------------------
 
     fn set_zoom(&mut self, zoom: Option<f32>) {
@@ -1637,27 +1666,16 @@ impl YouPdfApp {
                     } else {
                         0
                     };
-                    tab.dirty = true;
-                    tab.cache.clear();
-                    tab.annots_loaded = false;
-                    tab.structure_loaded = false;
-                    // Le caviardage détruit des annotations : les instantanés
-                    // d'annulation ne sont plus valables.
-                    tab.undo.clear();
-                    tab.redo.clear();
                     Ok((regions.len(), cleaned))
                 }
                 Err(err) => Err(err.to_string()),
             }
         };
+        // Le caviardage réécrit les pages : caches et instantanés caducs.
+        self.mark_document_changed();
         match outcome {
             Ok((areas, cleaned)) => {
-                self.search_index = None;
-                self.search_rects.clear();
-                self.search_active = None;
                 self.annot_tool = Some(0);
-                // Les correspondances affichées n'existent plus.
-                self.results.clear();
                 let suffix = if sanitize {
                     format!(" · {cleaned} metadata entries removed")
                 } else {
@@ -2011,6 +2029,28 @@ impl YouPdfApp {
                 ui.horizontal(|ui| {
                     ui.add_space(12.0);
                     ui.label(RichText::new(panel.title()).size(13.0).strong());
+                    if panel == Panel::Thumbnails {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.add_space(10.0);
+                            let (rect, resp) =
+                                ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
+                            if resp.hovered() {
+                                ui.painter().rect_filled(
+                                    rect,
+                                    Rounding::same(6.0),
+                                    Color32::from_rgb(0x33, 0x33, 0x33),
+                                );
+                            }
+                            icon_grid(
+                                ui.painter(),
+                                rect.shrink(7.0),
+                                if resp.hovered() { ICON_BRIGHT } else { ICON },
+                            );
+                            if resp.clicked() {
+                                self.organize_open = true;
+                            }
+                        });
+                    }
                     if panel == Panel::Search {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.add_space(10.0);
@@ -2399,6 +2439,247 @@ impl YouPdfApp {
         }
     }
 
+    /// Fenêtre « Organiser les pages » : grille des pages avec rotation,
+    /// suppression, extraction, découpage et insertion. Les opérations
+    /// s'appliquent immédiatement au document en mémoire ; rien n'est écrit
+    /// sur le disque tant que l'utilisateur n'enregistre pas.
+    fn organize_window(&mut self, ctx: &egui::Context) {
+        if !self.organize_open {
+            return;
+        }
+        if self.tabs.is_empty() {
+            self.organize_open = false;
+            return;
+        }
+
+        let active = self.active;
+        let ppp = ctx.pixels_per_point();
+        let renderer = &*self.renderer;
+        let status = &mut self.render_status;
+        let tab = &mut self.tabs[active];
+        let total = tab.total();
+        let current = tab.page;
+        let mut selected = std::mem::take(&mut self.organize_selected);
+        // Un document plus court (suppression, nouvelle ouverture) laisse des
+        // pages fantômes dans la sélection.
+        selected.retain(|page| *page >= 1 && *page <= total);
+        let mut split_per = self.organize_split;
+        let mut action: Option<OrganizeAction> = None;
+        let mut open = true;
+
+        egui::Window::new("Organize pages")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size(vec2(720.0, 520.0))
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if organize_button(ui, icon_rotate_left, "Rotate left") {
+                        action = Some(OrganizeAction::Rotate(-90));
+                    }
+                    if organize_button(ui, icon_rotate_right, "Rotate right") {
+                        action = Some(OrganizeAction::Rotate(90));
+                    }
+                    if organize_button(ui, icon_trash, "Delete") {
+                        action = Some(OrganizeAction::Delete);
+                    }
+                    if organize_button(ui, icon_export, "Extract…") {
+                        action = Some(OrganizeAction::Extract);
+                    }
+                    if organize_button(ui, icon_scissors, "Split…") {
+                        action = Some(OrganizeAction::Split);
+                    }
+                    if organize_button(ui, icon_file_plus, "Insert…") {
+                        action = Some(OrganizeAction::Insert);
+                    }
+                });
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    let count = if selected.is_empty() { total } else { selected.len() };
+                    ui.label(
+                        RichText::new(if selected.is_empty() {
+                            format!("No selection: actions apply to all {total} page(s)")
+                        } else {
+                            format!("{count} of {total} page(s) selected")
+                        })
+                        .size(11.0)
+                        .color(MUTED),
+                    );
+                    if ui.small_button("Select all").clicked() {
+                        selected = (1..=total).collect();
+                    }
+                    if ui.small_button("Clear").clicked() {
+                        selected.clear();
+                    }
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Split every").size(11.0).color(MUTED));
+                    ui.add(egui::DragValue::new(&mut split_per).range(1..=200).speed(0.2));
+                    ui.label(RichText::new("page(s)").size(11.0).color(MUTED));
+                });
+                ui.add_space(6.0);
+                ui.separator();
+
+                ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            for page in 1..=total as u32 {
+                                let (wp, hp) = tab.doc.page_size(page);
+                                let scale = 104.0 / wp.max(1.0);
+                                let thumb = vec2(wp * scale, hp * scale);
+                                let (rect, resp) =
+                                    ui.allocate_exact_size(vec2(116.0, 172.0), Sense::click());
+                                let img_rect = Rect::from_center_size(
+                                    pos2(rect.center().x, rect.min.y + 8.0 + thumb.y * 0.5),
+                                    thumb,
+                                );
+                                let picked = selected.contains(&(page as usize));
+                                ui.painter().rect_filled(
+                                    img_rect.expand(3.0),
+                                    Rounding::same(3.0),
+                                    if picked {
+                                        THUMB_TINT
+                                    } else {
+                                        Color32::from_rgb(0x28, 0x28, 0x28)
+                                    },
+                                );
+                                if let Some(tex) = Self::page_texture(
+                                    ctx, renderer, tab, page, 1, scale, ppp, status,
+                                ) {
+                                    ui.painter().image(
+                                        tex.id(),
+                                        img_rect,
+                                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                                        Color32::WHITE,
+                                    );
+                                }
+                                if picked {
+                                    ui.painter().rect_stroke(
+                                        img_rect.expand(3.0),
+                                        3.0,
+                                        Stroke::new(1.5_f32, ACCENT),
+                                    );
+                                }
+                                ui.painter().text(
+                                    pos2(rect.center().x, img_rect.max.y + 14.0),
+                                    Align2::CENTER_CENTER,
+                                    page.to_string(),
+                                    FontId::proportional(11.0),
+                                    if picked { ACCENT } else { MUTED },
+                                );
+                                if page as usize == current {
+                                    ui.painter().circle_filled(
+                                        pos2(rect.min.x + 8.0, rect.min.y + 8.0),
+                                        3.0,
+                                        ACCENT,
+                                    );
+                                }
+                                if resp.clicked() {
+                                    if picked {
+                                        selected.remove(&(page as usize));
+                                    } else {
+                                        selected.insert(page as usize);
+                                    }
+                                }
+                                ui.add_space(2.0);
+                            }
+                        });
+                    });
+            });
+
+        self.organize_selected = selected;
+        self.organize_split = split_per.max(1);
+        if !open {
+            self.organize_open = false;
+        }
+        let Some(action) = action else {
+            return;
+        };
+
+        // Pages visées : la sélection, ou le document entier.
+        let pages: Vec<usize> = if self.organize_selected.is_empty() {
+            (1..=total).collect()
+        } else {
+            self.organize_selected.iter().copied().collect()
+        };
+        let Some(tab) = self.tabs.get_mut(active) else {
+            return;
+        };
+        let per_file = self.organize_split;
+
+        let outcome: Result<String, String> = match action {
+            OrganizeAction::Rotate(delta) => tab
+                .doc
+                .rotate_pages(&pages, delta)
+                .map(|count| format!("{count} page(s) rotated"))
+                .map_err(|err| format!("Rotation failed: {err}")),
+            OrganizeAction::Delete => {
+                if pages.len() >= total {
+                    Err("Keep at least one page".to_owned())
+                } else {
+                    tab.doc
+                        .delete_pages(&pages)
+                        .map(|count| format!("{count} page(s) removed"))
+                        .map_err(|err| format!("Delete failed: {err}"))
+                }
+            }
+            OrganizeAction::Extract => match rfd::FileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .set_file_name("extract.pdf")
+                .save_file()
+            {
+                Some(path) => tab
+                    .doc
+                    .extract_pages(&pages, &path)
+                    .map(|_| {
+                        format!(
+                            "{} page(s) extracted to {}",
+                            pages.len(),
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        )
+                    })
+                    .map_err(|err| format!("Extract failed: {err}")),
+                None => Err(String::new()),
+            },
+            OrganizeAction::Split => match rfd::FileDialog::new().pick_folder() {
+                Some(directory) => tab
+                    .doc
+                    .split(&directory, per_file)
+                    .map(|files| format!("{} file(s) written", files.len()))
+                    .map_err(|err| format!("Split failed: {err}")),
+                None => Err(String::new()),
+            },
+            OrganizeAction::Insert => match rfd::FileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .pick_file()
+            {
+                Some(path) => {
+                    let after = pages.iter().copied().max().unwrap_or(1);
+                    tab.doc
+                        .insert_pages_after(after, &path)
+                        .map(|count| format!("{count} page(s) inserted after page {after}"))
+                        .map_err(|err| format!("Insert failed: {err}"))
+                }
+                None => Err(String::new()),
+            },
+        };
+
+        match action {
+            OrganizeAction::Rotate(_) | OrganizeAction::Delete | OrganizeAction::Insert => {
+                if outcome.is_ok() {
+                    self.mark_document_changed();
+                }
+            }
+            OrganizeAction::Extract | OrganizeAction::Split => {}
+        }
+        match outcome {
+            Ok(message) => self.toast(ctx, message),
+            Err(message) if !message.is_empty() => self.toast(ctx, message),
+            Err(_) => {}
+        }
+    }
+
     /// Fenêtre de confirmation du caviardage.
     fn redact_window(&mut self, ctx: &egui::Context) {
         if !self.redact_modal {
@@ -2647,7 +2928,7 @@ impl YouPdfApp {
                             ui.add_space(8.0);
                             if menu_row(ui, "Organize pages", "^5") {
                                 close = true;
-                                self.toast(ctx, "Organize pages — planned");
+                                self.organize_open = true;
                             }
                         });
                 });
@@ -3531,6 +3812,7 @@ impl eframe::App for YouPdfApp {
         self.properties_window(ctx);
         self.draft_window(ctx);
         self.redact_window(ctx);
+        self.organize_window(ctx);
         if !self.render_status.is_empty() {
             let message = std::mem::take(&mut self.render_status);
             self.toast(ctx, message);
@@ -3819,6 +4101,24 @@ fn icon_tools(p: &Painter, r: Rect, c: Color32) {
 fn icon_trash(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::TRASH);
 }
+fn icon_grid(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::SQUARES_FOUR);
+}
+fn icon_rotate_left(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::ARROW_COUNTER_CLOCKWISE);
+}
+fn icon_rotate_right(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::ARROW_CLOCKWISE);
+}
+fn icon_export(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::EXPORT);
+}
+fn icon_scissors(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::SCISSORS);
+}
+fn icon_file_plus(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::FILE_PLUS);
+}
 fn icon_undo(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::ARROW_COUNTER_CLOCKWISE);
 }
@@ -3956,6 +4256,45 @@ fn replace_occurrences(text: &str, needle: &str, replacement: &str) -> String {
     }
     out.push_str(&text[cursor..]);
     out
+}
+
+/// Opérations de la fenêtre « Organiser les pages ».
+#[derive(Clone, Copy)]
+enum OrganizeAction {
+    /// Rotation de `delta` degrés (multiple de 90).
+    Rotate(i64),
+    /// Suppression des pages sélectionnées.
+    Delete,
+    /// Extraction vers un nouveau fichier.
+    Extract,
+    /// Découpage en fichiers de N pages.
+    Split,
+    /// Insertion des pages d'un autre PDF.
+    Insert,
+}
+
+/// Bouton d'action de la fenêtre d'organisation : icône puis libellé.
+fn organize_button(ui: &mut egui::Ui, icon: IconFn, label: &str) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(116.0, 28.0), Sense::click());
+    ui.painter().rect_filled(
+        rect,
+        Rounding::same(6.0),
+        if resp.hovered() { HOVER_BG } else { WIDGET_BG },
+    );
+    let color = if resp.hovered() { ICON_BRIGHT } else { ICON };
+    icon(
+        ui.painter(),
+        Rect::from_center_size(pos2(rect.min.x + 15.0, rect.center().y), vec2(14.0, 14.0)),
+        color,
+    );
+    ui.painter().text(
+        pos2(rect.min.x + 28.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(11.5),
+        color,
+    );
+    resp.clicked()
 }
 
 /// Réglages de zoom proposés par la pastille bas-droite.
