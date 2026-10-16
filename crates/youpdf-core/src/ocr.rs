@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use youpdf_shared::{Error, Result};
 
 use crate::document::Document;
+use crate::edit::encode_pdf_literal;
 use crate::render::PageBitmap;
 
 /// Mode de sortie de l'OCR.
@@ -481,17 +482,20 @@ pub fn make_searchable(
         let (w_pt, h_pt) = source.page_size(page_num as u32);
 
         // 5. Flux de contenu : image + calque texte invisible.
-        let mut content = String::new();
-        content.push_str("q\n");
-        content.push_str(&format!("{w_pt:.2} 0 0 {h_pt:.2} 0 0 cm\n"));
-        content.push_str("/Im0 Do\n");
-        content.push_str("Q\n");
+        // Le flux est construit en octets : la couche texte utilise une
+        // police WinAnsi, et un accent écrit en UTF-8 y produirait deux
+        // octets, donc deux glyphes faux.
+        let mut content: Vec<u8> = Vec::new();
+        content.extend_from_slice(b"q\n");
+        content.extend_from_slice(format!("{w_pt:.2} 0 0 {h_pt:.2} 0 0 cm\n").as_bytes());
+        content.extend_from_slice(b"/Im0 Do\n");
+        content.extend_from_slice(b"Q\n");
 
         // Calque texte.
-        content.push_str("BT\n");
+        content.extend_from_slice(b"BT\n");
         // Mode 3 : ni rempli, ni contourné → invisible.
-        content.push_str("3 Tr\n");
-        content.push_str("0 g\n");
+        content.extend_from_slice(b"3 Tr\n");
+        content.extend_from_slice(b"0 g\n");
 
         // Le facteur de conversion entre pixels bitmap et points PDF.
         let sx = w_pt / bitmap.width as f32;
@@ -507,14 +511,16 @@ pub fn make_searchable(
             // pour que la boîte de sélection corresponde visuellement.
             let size = (word.height as f32 * sy * 1.1).max(4.0);
 
-            content.push_str(&format!("/F1 {size:.2} Tf\n"));
-            content.push_str(&format!("1 0 0 1 {x_pt:.2} {y_pt:.2} Tm\n"));
-            content.push_str(&format!("({}) Tj\n", escape_pdf_string(&word.text)));
+            content.extend_from_slice(format!("/F1 {size:.2} Tf\n").as_bytes());
+            content.extend_from_slice(format!("1 0 0 1 {x_pt:.2} {y_pt:.2} Tm\n").as_bytes());
+            content.push(b'(');
+            content.extend_from_slice(&encode_pdf_literal(&word.text));
+            content.extend_from_slice(b") Tj\n");
         }
 
-        content.push_str("ET\n");
+        content.extend_from_slice(b"ET\n");
 
-        let content_stream = Stream::new(dictionary! {}, content.into_bytes());
+        let content_stream = Stream::new(dictionary! {}, content);
         let content_id = out.add_object(content_stream);
 
         // 6. Dictionnaire de page.
@@ -575,27 +581,6 @@ fn rgba_to_rgb(rgba: &[u8]) -> Vec<u8> {
         rgb.push(chunk[2]);
     }
     rgb
-}
-
-/// Échappe une chaîne pour l'inclusion dans un littéral `(…)` PDF.
-///
-/// On retire les caractères non supportés par WinAnsiEncoding (les
-/// accents passent, les émojis sont filtrés).
-fn escape_pdf_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '(' => out.push_str("\\("),
-            ')' => out.push_str("\\)"),
-            '\\' => out.push_str("\\\\"),
-            '\n' | '\r' | '\t' => out.push(' '),
-            c if c.is_ascii() => out.push(c),
-            // Les caractères Latin-1 (U+00A0 à U+00FF) passent en WinAnsi.
-            c if (c as u32) >= 0xA0 && (c as u32) <= 0xFF => out.push(c),
-            _ => {} // ignore les autres
-        }
-    }
-    out
 }
 
 // ────────────────────────────────────────────────────────────────────────
