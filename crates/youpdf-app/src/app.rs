@@ -362,6 +362,10 @@ pub struct YouPdfApp {
     props_open: bool,
     /// Outil d'annotation actif (index dans la barre du mode Comment).
     annot_tool: Option<usize>,
+    /// Type de marque du surligneur (surlignage, soulignage, barré, ondulé).
+    marker: AnnotationKind,
+    /// Type de forme de l'outil Formes (rectangle, ellipse, ligne, flèche).
+    shape: AnnotationKind,
     /// Préréglages du pinceau/surligneur.
     annot_color: [u8; 3],
     annot_opacity: f32,
@@ -475,6 +479,8 @@ impl YouPdfApp {
             actions_open: false,
             props_open: false,
             annot_tool: None,
+            marker: AnnotationKind::Highlight,
+            shape: AnnotationKind::Square,
             annot_color: [255, 235, 59],
             annot_opacity: 0.45,
             annot_width: 2.0,
@@ -1259,11 +1265,11 @@ impl YouPdfApp {
         }
         match self.annot_tool {
             Some(0) => ToolAction::Select,
-            Some(1) => ToolAction::DragRect(AnnotationKind::Highlight),
+            Some(1) => ToolAction::DragRect(self.marker),
             Some(2) => ToolAction::Click(AnnotationKind::FreeText),
             Some(3) => ToolAction::Click(AnnotationKind::Note),
             Some(4) => ToolAction::Ink,
-            Some(5) => ToolAction::DragRect(AnnotationKind::Square),
+            Some(5) => ToolAction::DragRect(self.shape),
             Some(7) => ToolAction::Click(AnnotationKind::Link),
             Some(8) => ToolAction::Click(AnnotationKind::Stamp),
             Some(9) => ToolAction::Click(AnnotationKind::FreeText),
@@ -1286,7 +1292,18 @@ impl YouPdfApp {
 
     /// Ajoute une annotation de type rectangle (surlignage, formes).
     fn add_rect_annot(&mut self, page: usize, kind: AnnotationKind, rect: [f32; 4]) {
-        if (rect[2] - rect[0]).abs() < 2.0 {
+        if (rect[2] - rect[0]).abs() < 2.0 && (rect[3] - rect[1]).abs() < 2.0 {
+            return;
+        }
+        // Une ligne ou une flèche, c'est deux extrémités : le rectangle n'est
+        // que leur boîte englobante, et il ne faut donc pas l'épaissir comme
+        // une bande de surlignage.
+        if matches!(kind, AnnotationKind::Line | AnnotationKind::Arrow) {
+            let mut annot = Annotation::new(page, kind, rect);
+            annot.style = self.annot_style(kind);
+            annot.add_ink_stroke(vec![[rect[0], rect[1]], [rect[2], rect[3]]]);
+            annot.recompute_ink_bbox();
+            self.push_annot(annot);
             return;
         }
         // Un glissé horizontal (surlignage) donne une bande de hauteur nulle :
@@ -1486,6 +1503,34 @@ impl YouPdfApp {
                     .stroke(Stroke::new(1.0_f32, SEPARATOR))
                     .inner_margin(Margin::symmetric(10.0, 8.0))
                     .show(ui, |ui| {
+                        // Type de marque (surligneur) ou de forme : le même
+                        // outil couvre les quatre variantes que PDF connaît.
+                        let kinds: &[(AnnotationKind, &str)] = match tool {
+                            1 => &[
+                                (AnnotationKind::Highlight, "Highlight"),
+                                (AnnotationKind::Underline, "Underline"),
+                                (AnnotationKind::StrikeOut, "Strikeout"),
+                                (AnnotationKind::Squiggly, "Squiggly"),
+                            ],
+                            5 => &[
+                                (AnnotationKind::Square, "Rectangle"),
+                                (AnnotationKind::Circle, "Ellipse"),
+                                (AnnotationKind::Line, "Line"),
+                                (AnnotationKind::Arrow, "Arrow"),
+                            ],
+                            _ => &[],
+                        };
+                        if !kinds.is_empty() {
+                            ui.horizontal(|ui| {
+                                for (kind, label) in kinds {
+                                    let current = self.annot_kind_for(tool) == *kind;
+                                    if ui.selectable_label(current, *label).clicked() {
+                                        self.set_annot_kind(tool, *kind);
+                                    }
+                                }
+                            });
+                            ui.add_space(2.0);
+                        }
                         ui.horizontal(|ui| {
                             for color in PRESET_COLORS {
                                 let selected = color == self.annot_color;
@@ -1549,6 +1594,32 @@ impl YouPdfApp {
                         }
                     });
             });
+    }
+
+    /// Type de marque ou de forme associé à un outil du menu.
+    fn annot_kind_for(&self, tool: usize) -> AnnotationKind {
+        match tool {
+            1 => self.marker,
+            5 => self.shape,
+            _ => AnnotationKind::Highlight,
+        }
+    }
+
+    /// Choisit le type de marque ou de forme d'un outil.
+    fn set_annot_kind(&mut self, tool: usize, kind: AnnotationKind) {
+        match tool {
+            1 => self.marker = kind,
+            5 => {
+                self.shape = kind;
+                // Un trait fin se règle en points, pas en bande de
+                // surlignage : la largeur courante serait énorme.
+                if matches!(kind, AnnotationKind::Line | AnnotationKind::Arrow) && self.annot_width > 4.0
+                {
+                    self.annot_width = 2.0;
+                }
+            }
+            _ => {}
+        }
     }
 
     /// À appeler après toute opération qui réécrit le document (pages,
@@ -4982,8 +5053,24 @@ fn draw_annots(
         let font = (annot.style.font_size * scale).clamp(6.0, 48.0);
 
         match annot.kind {
-            AnnotationKind::Highlight | AnnotationKind::Squiggly => {
+            AnnotationKind::Highlight => {
                 painter.rect_filled(r, Rounding::same(2.0), fill);
+            }
+            AnnotationKind::Squiggly => {
+                // Même ondulation que l'apparence enregistrée : deux crans
+                // par motif, posés sur le bas de la boîte.
+                let amp = (3.0 * scale).max(1.0);
+                let steps = ((r.width() / (4.0 * scale)).ceil() as usize * 2).max(4);
+                let pts: Vec<egui::Pos2> = (0..=steps)
+                    .map(|i| {
+                        let t = i as f32 / steps as f32;
+                        pos2(
+                            r.min.x + t * r.width(),
+                            r.max.y - if i % 2 == 0 { amp * 0.6 } else { amp * 1.8 },
+                        )
+                    })
+                    .collect();
+                painter.add(Shape::line(pts, Stroke::new(width, color)));
             }
             AnnotationKind::Underline => {
                 painter.line_segment(
@@ -5031,6 +5118,33 @@ fn draw_annots(
                     FontId::proportional(font.max(9.0)),
                     color,
                 );
+            }
+            AnnotationKind::Circle => {
+                painter.add(Shape::circle_stroke(
+                    r.center(),
+                    r.width().min(r.height()) / 2.0,
+                    Stroke::new(width, color),
+                ));
+            }
+            AnnotationKind::Line | AnnotationKind::Arrow => {
+                let pts = annot.ink_points.first().cloned().unwrap_or_default();
+                let (a, b) = match (pts.first(), pts.get(1)) {
+                    (Some(a), Some(b)) => (to_screen(a[0], a[1]), to_screen(b[0], b[1])),
+                    _ => (r.min, r.max),
+                };
+                painter.line_segment([a, b], Stroke::new(width, color));
+                if annot.kind == AnnotationKind::Arrow {
+                    let d = b - a;
+                    let len = d.length().max(0.01);
+                    let u = d / len;
+                    let side = vec2(-u.y, u.x);
+                    let head = (len * 0.2).clamp(6.0, 20.0);
+                    painter.add(Shape::convex_polygon(
+                        vec![b, b - u * head + side * head * 0.45, b - u * head - side * head * 0.45],
+                        color,
+                        Stroke::NONE,
+                    ));
+                }
             }
             AnnotationKind::Link => {
                 painter.line_segment(
