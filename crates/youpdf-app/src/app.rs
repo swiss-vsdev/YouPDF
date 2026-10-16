@@ -19,9 +19,9 @@ use egui::{
 use egui_phosphor::regular as ph;
 use youpdf_core::render::NullRenderer;
 use youpdf_core::{
-    Annotation, AnnotationKind, AnnotationStyle, AttachmentInfo, Document, FormField,
-    FormFieldKind, OutlineItem, PdfiumRenderer, RenderOptions, Renderer, SearchIndex,
-    SearchResult, STAMP_NAMES,
+    fold_case, Annotation, AnnotationKind, AnnotationStyle, AttachmentInfo, Document,
+    FormField, FormFieldKind, OutlineItem, PdfiumRenderer, RedactionRegion, RenderOptions,
+    Renderer, SearchIndex, SearchResult, STAMP_NAMES,
 };
 
 // --------------------------------------------------------------------------
@@ -29,6 +29,11 @@ use youpdf_core::{
 // --------------------------------------------------------------------------
 
 const CANVAS_BG: Color32 = Color32::from_rgb(0x30, 0x30, 0x30);
+/// Rouge des marques de caviardage.
+const REDACT_RED: Color32 = Color32::from_rgb(0xE0, 0x4F, 0x5F);
+/// Jaune des correspondances de recherche.
+const SEARCH_MATCH: Color32 = Color32::from_rgba_premultiplied(0x50, 0x40, 0x05, 0x6E);
+
 /// Fonds proposés dans le panneau Aspect.
 const CANVAS_STYLES: [Color32; 4] = [
     Color32::from_rgb(0x30, 0x30, 0x30),
@@ -205,6 +210,8 @@ enum ToolAction {
     Click(AnnotationKind),
     Erase,
     Select,
+    /// Glissé d'une zone à caviarder.
+    RedactRect,
 }
 
 /// Couleurs de préréglage proposées dans la popup.
@@ -299,6 +306,22 @@ pub struct YouPdfApp {
     stamp_choice: usize,
     /// Type d'annotation créé par le brouillon courant.
     draft_annot_kind: AnnotationKind,
+    /// Résultat de recherche actif (navigation ⌘G).
+    search_active: Option<usize>,
+    /// Rectangles de la correspondance active, en coordonnées PDF.
+    search_rects: Vec<[f32; 4]>,
+    /// Page des rectangles de recherche affichés.
+    search_rects_page: Option<u32>,
+    /// Ligne « remplacer » ouverte.
+    replace_open: bool,
+    /// Texte de remplacement.
+    replace_text: String,
+    /// Régions marquées pour le caviardage.
+    redact_regions: Vec<RedactionRegion>,
+    /// Fenêtre de confirmation du caviardage.
+    redact_modal: bool,
+    /// Nettoyer les métadonnées en même temps que le caviardage.
+    redact_sanitize: bool,
     /// Champ de formulaire sélectionné et saisie en cours.
     form_edit: Option<(usize, String)>,
     /// Fond du canevas choisi dans Aspect.
@@ -359,6 +382,14 @@ impl YouPdfApp {
             drag_to: None,
             stamp_choice: 0,
             draft_annot_kind: AnnotationKind::FreeText,
+            search_active: None,
+            search_rects: Vec::new(),
+            search_rects_page: None,
+            replace_open: false,
+            replace_text: String::new(),
+            redact_regions: Vec::new(),
+            redact_modal: false,
+            redact_sanitize: true,
             form_edit: None,
             canvas_style: 0,
             page_shadow: true,
@@ -1067,6 +1098,13 @@ impl YouPdfApp {
 
     /// Action du canevas selon le mode et l'outil choisi.
     fn canvas_action(&self) -> ToolAction {
+        if self.mode == Some(3) {
+            return if self.annot_tool == Some(1) {
+                ToolAction::RedactRect
+            } else {
+                ToolAction::None
+            };
+        }
         if self.mode != Some(0) {
             return ToolAction::None;
         }
@@ -1407,7 +1445,201 @@ impl YouPdfApp {
             self.history.retain(|q| q != &query);
             self.history.insert(0, query);
             self.history.truncate(8);
+            self.search_active = if count > 0 { Some(0) } else { None };
+            self.focus_search_result();
             self.toast(ctx, format!("{count} result(s)"));
+        }
+    }
+
+    // -- Recherche active, remplacement, caviardage ------------------------
+
+    /// Passe au résultat suivant (`delta` = ±1) et y saute.
+    fn search_step(&mut self, delta: isize) {
+        if self.results.is_empty() {
+            return;
+        }
+        let count = self.results.len() as isize;
+        let current = self.search_active.map(|idx| idx as isize).unwrap_or(-1);
+        let next = (((current + delta) % count) + count) % count;
+        self.search_active = Some(next as usize);
+        self.focus_search_result();
+    }
+
+    /// Saute à la page du résultat actif et prépare son surlignage.
+    fn focus_search_result(&mut self) {
+        let Some(result) = self
+            .search_active
+            .and_then(|idx| self.results.get(idx))
+            .cloned()
+        else {
+            return;
+        };
+        let page = result.page;
+        self.jump = Some(page);
+        self.search_rects.clear();
+        self.search_rects_page = Some(page as u32);
+        let needle = fold_case(self.search_query.trim());
+        if needle.is_empty() {
+            return;
+        }
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let Ok(fragments) = tab.doc.extract_text_fragments(page as u32) else {
+            return;
+        };
+        for fragment in fragments {
+            self.search_rects
+                .extend(match_rects(&fragment.text, fragment.rect, &needle));
+        }
+    }
+
+    /// Remplace (ou supprime, `replacement` vide) toutes les correspondances.
+    fn replace_matches(&mut self, ctx: &egui::Context, replacement: &str) -> usize {
+        let query = self.search_query.trim().to_owned();
+        if query.is_empty() {
+            return 0;
+        }
+        let needle = fold_case(&query);
+        let pages: std::collections::BTreeSet<usize> =
+            self.results.iter().map(|result| result.page).collect();
+        let mut changed = 0usize;
+        {
+            let Some(tab) = self.tabs.get_mut(self.active) else {
+                return 0;
+            };
+            for page in pages {
+                let Ok(fragments) = tab.doc.extract_text_fragments(page as u32) else {
+                    continue;
+                };
+                for fragment in fragments {
+                    if !fold_case(&fragment.text).contains(&needle) {
+                        continue;
+                    }
+                    let new_text = replace_occurrences(&fragment.text, &needle, replacement);
+                    if new_text == fragment.text {
+                        continue;
+                    }
+                    if tab.doc.replace_text_fragment(&fragment, &new_text).is_ok() {
+                        changed += 1;
+                    }
+                }
+            }
+            if changed > 0 {
+                tab.dirty = true;
+                tab.cache.clear();
+                tab.annots_loaded = false;
+            }
+        }
+        if changed > 0 {
+            self.search_index = None;
+            self.run_search(ctx);
+        }
+        changed
+    }
+
+    /// Marque toutes les correspondances pour caviardage et ouvre le mode.
+    ///
+    /// `confirm` ouvre directement la fenêtre d'application : c'est le
+    /// comportement de « supprimer les correspondances », qui doit être
+    /// destructif pour être honnête (masquer le texte ne le supprime pas).
+    fn mark_matches_for_redaction(&mut self, ctx: &egui::Context, confirm: bool) {
+        let needle = fold_case(self.search_query.trim());
+        if needle.is_empty() {
+            return;
+        }
+        let pages: std::collections::BTreeSet<usize> =
+            self.results.iter().map(|result| result.page).collect();
+        let mut added = 0usize;
+        {
+            let Some(tab) = self.tabs.get(self.active) else {
+                return;
+            };
+            for page in pages {
+                let Ok(fragments) = tab.doc.extract_text_fragments(page as u32) else {
+                    continue;
+                };
+                for fragment in fragments {
+                    for rect in match_rects(&fragment.text, fragment.rect, &needle) {
+                        // Ne pas empiler deux fois la même marque : le bouton
+                        // corbeille et le bouton surlignage peuvent se suivre.
+                        let region = RedactionRegion { page, rect };
+                        if !self.redact_regions.contains(&region) {
+                            self.redact_regions.push(region);
+                            added += 1;
+                        }
+                    }
+                }
+            }
+        }
+        if added == 0 {
+            self.toast(ctx, "Nothing to mark");
+            return;
+        }
+        self.mode = Some(3);
+        self.annot_tool = Some(1);
+        self.panel = Some(Panel::Search);
+        self.redact_modal = confirm;
+        if confirm {
+            self.toast(ctx, format!("{added} match(es) marked for deletion"));
+        } else {
+            self.toast(ctx, format!("{added} area(s) marked — press Apply"));
+        }
+    }
+
+    /// Applique le caviardage marqué (destructif).
+    fn apply_redactions(&mut self, ctx: &egui::Context) {
+        let regions = std::mem::take(&mut self.redact_regions);
+        self.redact_modal = false;
+        if regions.is_empty() {
+            self.toast(ctx, "No areas marked");
+            return;
+        }
+        let sanitize = self.redact_sanitize;
+        let outcome: Result<(usize, usize), String> = {
+            let Some(tab) = self.tabs.get_mut(self.active) else {
+                return;
+            };
+            let renderer = &*self.renderer;
+            match tab.doc.redact(&regions, renderer) {
+                Ok(()) => {
+                    let cleaned = if sanitize {
+                        tab.doc.sanitize().unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    tab.dirty = true;
+                    tab.cache.clear();
+                    tab.annots_loaded = false;
+                    tab.structure_loaded = false;
+                    // Le caviardage détruit des annotations : les instantanés
+                    // d'annulation ne sont plus valables.
+                    tab.undo.clear();
+                    tab.redo.clear();
+                    Ok((regions.len(), cleaned))
+                }
+                Err(err) => Err(err.to_string()),
+            }
+        };
+        match outcome {
+            Ok((areas, cleaned)) => {
+                self.search_index = None;
+                self.search_rects.clear();
+                self.search_active = None;
+                self.annot_tool = Some(0);
+                // Les correspondances affichées n'existent plus.
+                self.results.clear();
+                let suffix = if sanitize {
+                    format!(" · {cleaned} metadata entries removed")
+                } else {
+                    String::new()
+                };
+                self.toast(ctx, format!("Redaction applied ({areas} areas){suffix}"));
+            }
+            Err(err) => {
+                self.redact_regions = regions;
+                self.toast(ctx, format!("Redaction failed: {err}"));
+            }
         }
     }
 
@@ -1908,14 +2140,16 @@ impl YouPdfApp {
                 if resp.hovered() { ICON_BRIGHT } else { ICON },
             );
             if resp.clicked() {
-                self.toast(ctx, "Find & replace — planned");
+                self.replace_open = !self.replace_open;
             }
 
-            if panel_action(ui, false, icon_trash).clicked() {
-                self.toast(ctx, "Find & delete — planned");
+            let delete_clicked = panel_action(ui, false, icon_trash).clicked();
+            let redact_clicked = panel_action(ui, false, icon_highlighter).clicked();
+            if delete_clicked {
+                self.mark_matches_for_redaction(ctx, true);
             }
-            if panel_action(ui, false, icon_highlighter).clicked() {
-                self.toast(ctx, "Find & redact — planned");
+            if redact_clicked {
+                self.mark_matches_for_redaction(ctx, false);
             }
         });
         ui.add_space(10.0);
@@ -1927,14 +2161,50 @@ impl YouPdfApp {
                 TextEdit::singleline(&mut self.search_query).hint_text("Search text"),
             );
             if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                self.run_search(ctx);
+                if self.results.is_empty() {
+                    self.run_search(ctx);
+                } else {
+                    self.search_step(1);
+                }
             }
         });
+
+        if self.replace_open {
+            ui.add_space(6.0);
+            let mut replace_now = false;
+            ui.horizontal(|ui| {
+                ui.add_space(12.0);
+                let resp = ui.add_sized(
+                    vec2(PANEL_W - 26.0, 28.0),
+                    TextEdit::singleline(&mut self.replace_text).hint_text("Replace with"),
+                );
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    replace_now = true;
+                }
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.add_space(12.0);
+                if ui.button("Replace all").clicked() {
+                    replace_now = true;
+                }
+            });
+            if replace_now {
+                let replacement = self.replace_text.clone();
+                let changed = self.replace_matches(ctx, &replacement);
+                if changed > 0 {
+                    self.toast(ctx, format!("{changed} replacement(s)"));
+                } else {
+                    self.toast(ctx, "Nothing replaced");
+                }
+            }
+        }
         ui.add_space(12.0);
 
         let mut jump = None;
         let mut forget = None;
         let mut clear_history = false;
+        let mut pending_step: Option<isize> = None;
         ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -2000,21 +2270,61 @@ impl YouPdfApp {
                         ui.add_space(4.0);
                     }
                 } else {
+                    let active = self.search_active;
+                    let total = self.results.len();
+                    let mut step: Option<isize> = None;
                     ui.horizontal(|ui| {
                         ui.add_space(12.0);
+                        let shown = active.map(|idx| idx + 1).unwrap_or(0);
                         ui.label(
-                            RichText::new(format!("Results · {}", self.results.len()))
+                            RichText::new(format!("Results · {shown}/{total}"))
                                 .size(12.0)
                                 .strong(),
                         );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.add_space(10.0);
+                            if panel_action(ui, false, icon_chevron).clicked() {
+                                step = Some(1);
+                            }
+                            {
+                                // Flèche vers le haut : résultat précédent.
+                                let (rect, resp) =
+                                    ui.allocate_exact_size(vec2(30.0, 28.0), Sense::click());
+                                if resp.hovered() {
+                                    ui.painter().rect_filled(
+                                        rect,
+                                        Rounding::same(6.0),
+                                        Color32::from_rgb(0x33, 0x33, 0x33),
+                                    );
+                                }
+                                icon_caret_up(
+                                    ui.painter(),
+                                    rect.shrink(8.0),
+                                    if resp.hovered() { ICON_BRIGHT } else { ICON },
+                                );
+                                if resp.clicked() {
+                                    step = Some(-1);
+                                }
+                            }
+                        });
                     });
+                    if let Some(delta) = step {
+                        pending_step = Some(delta);
+                    }
                     ui.add_space(6.0);
                     for (idx, result) in self.results.iter().enumerate() {
                         let (rect, resp) =
                             ui.allocate_exact_size(vec2(PANEL_W - 24.0, 28.0), Sense::click());
-                        if resp.hovered() {
-                            ui.painter()
-                                .rect_filled(rect, Rounding::same(6.0), WIDGET_BG);
+                        if resp.hovered() || active == Some(idx) {
+                            ui.painter().rect_filled(
+                                rect,
+                                Rounding::same(6.0),
+                                if active == Some(idx) {
+                                    HOVER_BG
+                                } else {
+                                    WIDGET_BG
+                                },
+                            );
                         }
                         ui.painter().text(
                             pos2(rect.min.x + 8.0, rect.center().y),
@@ -2044,15 +2354,75 @@ impl YouPdfApp {
         if let Some(idx) = forget {
             self.history.remove(idx);
         }
+        if let Some(delta) = pending_step {
+            self.search_step(delta);
+        }
         if let Some(idx) = jump {
             if self.results.is_empty() {
                 if let Some(query) = self.history.get(idx).cloned() {
                     self.search_query = query;
                     self.run_search(ctx);
                 }
-            } else if let Some(page) = self.results.get(idx).map(|r| r.page) {
-                self.jump = Some(page);
+            } else if self.results.get(idx).is_some() {
+                self.search_active = Some(idx);
+                self.focus_search_result();
             }
+        }
+    }
+
+    /// Fenêtre de confirmation du caviardage.
+    fn redact_window(&mut self, ctx: &egui::Context) {
+        if !self.redact_modal {
+            return;
+        }
+        let areas = self.redact_regions.len();
+        let mut confirm = false;
+        let mut cancel = false;
+        egui::Window::new("Apply redaction")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(360.0);
+                ui.label(
+                    RichText::new(format!("{areas} area(s) will be blacked out permanently."))
+                        .size(12.5)
+                        .color(ICON_BRIGHT),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
+                        "Redaction replaces each marked page with an image: the text                          underneath is destroyed, not hidden, and cannot be recovered.                          Annotations overlapping a marked area are deleted.",
+                    )
+                    .size(11.0)
+                    .color(MUTED),
+                );
+                ui.add_space(8.0);
+                ui.checkbox(
+                    &mut self.redact_sanitize,
+                    "Also remove metadata, XMP, JavaScript and attachments",
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("Apply").color(Color32::WHITE))
+                                .fill(REDACT_RED),
+                        )
+                        .clicked()
+                    {
+                        confirm = true;
+                    }
+                });
+            });
+        if cancel {
+            self.redact_modal = false;
+        }
+        if confirm {
+            self.apply_redactions(ctx);
         }
     }
 
@@ -2149,6 +2519,35 @@ impl YouPdfApp {
                 }
                 match mode {
                     0 => {}
+                    3 => match idx {
+                        1 => {}
+                        2 => {
+                            self.panel = Some(Panel::Search);
+                            self.redact_modal = false;
+                        }
+                        3 => {
+                            let cleaned = self
+                                .tabs
+                                .get_mut(self.active)
+                                .map(|tab| {
+                                    let removed = tab.doc.sanitize().unwrap_or(0);
+                                    if removed > 0 {
+                                        tab.dirty = true;
+                                    }
+                                    removed
+                                })
+                                .unwrap_or(0);
+                            self.toast(ctx, format!("{cleaned} metadata entries removed"));
+                        }
+                        4 => {
+                            if self.redact_regions.is_empty() {
+                                self.toast(ctx, "Mark areas first");
+                            } else {
+                                self.redact_modal = true;
+                            }
+                        }
+                        _ => {}
+                    },
                     _ => self.toast(
                         ctx,
                         format!(
@@ -2452,6 +2851,10 @@ impl YouPdfApp {
         let mut pending_ink: Option<(usize, Vec<[f32; 2]>)> = None;
         let mut pending_click: Option<(usize, [f32; 2])> = None;
         let mut pending_hit: Option<(usize, [f32; 2])> = None;
+        let mut pending_redact: Option<(usize, [f32; 4])> = None;
+        let redact_marks = &self.redact_regions;
+        let search_rects = &self.search_rects;
+        let search_rects_page = self.search_rects_page;
         let selected_annot = self.selected_annot;
         let has_selection = self.has_annot_selection;
         let show_shadow = self.page_shadow;
@@ -2503,6 +2906,50 @@ impl YouPdfApp {
                                 Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
                                 Color32::WHITE,
                             );
+                        }
+
+                        // Régions marquées pour caviardage et résultats
+                        // de recherche actifs.
+                        for region in redact_marks.iter().filter(|r| r.page == page as usize) {
+                            let rect = Rect::from_two_pos(
+                                pos2(
+                                    page_rect.min.x + region.rect[0] * scale,
+                                    page_rect.max.y - region.rect[3] * scale,
+                                ),
+                                pos2(
+                                    page_rect.min.x + region.rect[2] * scale,
+                                    page_rect.max.y - region.rect[1] * scale,
+                                ),
+                            );
+                            ui.painter().rect_filled(
+                                rect,
+                                Rounding::ZERO,
+                                Color32::from_black_alpha(190),
+                            );
+                            ui.painter().rect_stroke(
+                                rect,
+                                Rounding::ZERO,
+                                Stroke::new(1.5_f32, REDACT_RED),
+                            );
+                        }
+                        if search_rects_page == Some(page) {
+                            for rect in search_rects {
+                                let rect = Rect::from_two_pos(
+                                    pos2(
+                                        page_rect.min.x + rect[0] * scale,
+                                        page_rect.max.y - rect[3] * scale,
+                                    ),
+                                    pos2(
+                                        page_rect.min.x + rect[2] * scale,
+                                        page_rect.max.y - rect[1] * scale,
+                                    ),
+                                );
+                                ui.painter().rect_filled(
+                                    rect.expand(1.0),
+                                    Rounding::same(2.0),
+                                    SEARCH_MATCH,
+                                );
+                            }
                         }
 
                         // Annotations posées sur la page.
@@ -2590,6 +3037,45 @@ impl YouPdfApp {
                                     }
                                 }
                             }
+                            ToolAction::RedactRect => {
+                                if resp.dragged() {
+                                    let point = resp.interact_pointer_pos().map(to_pdf);
+                                    if drag_from.is_none() {
+                                        *drag_from = point;
+                                    }
+                                    if point.is_some() {
+                                        *drag_to = point;
+                                    }
+                                }
+                                if resp.drag_stopped() {
+                                    let from = drag_from.take();
+                                    let to = drag_to.take();
+                                    if let (Some(a), Some(b)) = (from, to) {
+                                        pending_redact = Some((
+                                            page as usize,
+                                            [
+                                                a[0].min(b[0]),
+                                                a[1].min(b[1]),
+                                                a[0].max(b[0]),
+                                                a[1].max(b[1]),
+                                            ],
+                                        ));
+                                    }
+                                }
+                                if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
+                                    let rect = Rect::from_two_pos(to_screen(a), to_screen(b));
+                                    ui.painter().rect_filled(
+                                        rect,
+                                        Rounding::ZERO,
+                                        Color32::from_black_alpha(140),
+                                    );
+                                    ui.painter().rect_stroke(
+                                        rect,
+                                        Rounding::ZERO,
+                                        Stroke::new(1.5_f32, REDACT_RED),
+                                    );
+                                }
+                            }
                             ToolAction::Erase | ToolAction::Select => {
                                 if resp.clicked() {
                                     if let Some(p) = resp.interact_pointer_pos() {
@@ -2629,6 +3115,11 @@ impl YouPdfApp {
         }
         if let Some((page, point)) = pending_click {
             self.open_draft(page, point);
+        }
+        if let Some((page, rect)) = pending_redact {
+            if (rect[2] - rect[0]).abs() > 2.0 && (rect[3] - rect[1]).abs() > 2.0 {
+                self.redact_regions.push(RedactionRegion { page, rect });
+            }
         }
         if let Some((page, point)) = pending_hit {
             match action {
@@ -2774,7 +3265,10 @@ impl YouPdfApp {
                     .rounding(Rounding::same(8.0))
                     .inner_margin(Margin::symmetric(12.0, 6.0))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(&text).size(11.5).color(ICON_BRIGHT));
+                        ui.add(
+                            egui::Label::new(RichText::new(&text).size(11.5).color(ICON_BRIGHT))
+                                .extend(),
+                        );
                     });
             });
     }
@@ -2789,7 +3283,7 @@ impl YouPdfApp {
             self.toast(ctx, "Annotation removed");
             return;
         }
-        let (cmd, shift, open, close, plus, minus, zero, save) = ctx.input(|i| {
+        let (cmd, shift, open, close, plus, minus, zero, save, find) = ctx.input(|i| {
             (
                 i.modifiers.command,
                 i.modifiers.shift,
@@ -2799,8 +3293,13 @@ impl YouPdfApp {
                 i.key_pressed(egui::Key::Minus),
                 i.key_pressed(egui::Key::Num0),
                 i.key_pressed(egui::Key::S),
+                i.key_pressed(egui::Key::G),
             )
         });
+        if cmd && find {
+            self.search_step(if shift { -1 } else { 1 });
+            return;
+        }
         if !cmd {
             return;
         }
@@ -2860,6 +3359,7 @@ impl eframe::App for YouPdfApp {
         self.zoom_overlay(ctx);
         self.properties_window(ctx);
         self.draft_window(ctx);
+        self.redact_window(ctx);
         if !self.render_status.is_empty() {
             let message = std::mem::take(&mut self.render_status);
             self.toast(ctx, message);
@@ -3135,6 +3635,10 @@ fn icon_plus(p: &Painter, r: Rect, c: Color32) {
 fn icon_close(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::X);
 }
+fn icon_caret_up(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::CARET_UP);
+}
+
 fn icon_chevron(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::CARET_DOWN);
 }
@@ -3229,6 +3733,58 @@ fn icon_layout(p: &Painter, r: Rect, c: Color32) {
 // Icônes d'application (fichiers, zoom, gestion de pages).
 fn icon_minus(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::MINUS);
+}
+
+/// Sous-rectangles d'une ligne couvrant chaque occurrence de `needle`.
+///
+/// Le texte d'un fragment est une ligne : la position de la correspondance
+/// dans la chaîne donne sa place proportionnelle dans la largeur du
+/// rectangle. C'est une approximation (police proportionnelle), suffisante
+/// pour surligner ou marquer une correspondance.
+///
+/// `needle` doit déjà être plié par [`fold_case`], comme le texte comparé.
+fn match_rects(text: &str, rect: [f32; 4], needle: &str) -> Vec<[f32; 4]> {
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let folded = fold_case(text);
+    let total = folded.len().max(1) as f32;
+    let width = rect[2] - rect[0];
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(offset) = folded[cursor..].find(needle) {
+        let start = cursor + offset;
+        let end = start + needle.len();
+        let before = start as f32 / total;
+        let hit = (needle.len() as f32 / total).min(1.0 - before);
+        let left = rect[0] + width * before;
+        let right = (rect[0] + width * (before + hit)).max(left + 2.0);
+        out.push([left, rect[1], right, rect[3]]);
+        cursor = end;
+    }
+    out
+}
+
+/// Remplace toutes les occurrences de `needle` (déjà plié) dans `text`.
+///
+/// `fold_case` préserve la longueur en octets : les positions trouvées dans la
+/// version pliée sont donc directement valables dans l'original.
+fn replace_occurrences(text: &str, needle: &str, replacement: &str) -> String {
+    if needle.is_empty() {
+        return text.to_owned();
+    }
+    let folded = fold_case(text);
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+    while let Some(offset) = folded[cursor..].find(needle) {
+        let start = cursor + offset;
+        let end = start + needle.len();
+        out.push_str(&text[cursor..start]);
+        out.push_str(replacement);
+        cursor = end;
+    }
+    out.push_str(&text[cursor..]);
+    out
 }
 
 /// Taille lisible : octets sous 1 Ko, puis Ko et Mo.
