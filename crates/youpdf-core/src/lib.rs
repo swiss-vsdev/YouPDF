@@ -17,6 +17,7 @@
 //! - [`edit`]     : extraction de texte positionné et d'images
 //! - [`signature`]: signature visuelle et demande de signature
 //! - [`compare`]  : comparaison de deux documents
+//! - [`watermark`]: filigranes, en-têtes et numéros de page
 
 pub mod annotate;
 pub mod compare;
@@ -33,6 +34,7 @@ pub mod render;
 pub mod search;
 pub mod signature;
 pub mod structure;
+pub mod watermark;
 
 pub use annotate::{Annotation, AnnotationKind, AnnotationStyle, STAMP_NAMES, stamp_name};
 pub use compare::{ComparisonReport, Difference, DifferenceKind};
@@ -47,3 +49,4 @@ pub use render::{PageBitmap, PdfiumRenderer, RenderOptions, Renderer};
 pub use search::{SearchIndex, SearchOptions, SearchResult, fold_case};
 pub use signature::{SignaturePlacement, SignatureRequest, SignatureStatus};
 pub use structure::{AttachmentInfo, OutlineItem, decode_pdf_text};
+pub use watermark::{HeaderFooter, NumberStyle, PageRange, Watermark};
