@@ -152,32 +152,46 @@ impl Document {
 
     /// Dimensions (largeur, hauteur) d'une page en points PDF (1/72 pouce).
     ///
-    /// Retourne `(595.0, 842.0)` (A4) si la page n'a pas de `MediaBox`
-    /// exploitable.
+    /// Résout `/CropBox` puis `/MediaBox` en remontant la chaîne des
+    /// `/Parent` : ces clés sont fréquemment héritées du nœud `Pages`
+    /// (documents produits par `cupsfilter`, par exemple).
+    ///
+    /// Retourne `(595.0, 842.0)` (A4) si aucune boîte exploitable n'existe.
     pub fn page_size(&self, page_number: u32) -> (f32, f32) {
         let Ok(page_id) = self.page_id(page_number) else {
             return (595.0, 842.0);
         };
-        let Ok(page) = self.inner.get_dictionary(page_id) else {
-            return (595.0, 842.0);
-        };
-        let Ok(media_box) = page.get(b"MediaBox") else {
-            return (595.0, 842.0);
-        };
-        let Ok(array) = media_box.as_array() else {
-            return (595.0, 842.0);
-        };
-        if array.len() < 4 {
-            return (595.0, 842.0);
+
+        let mut current = Some(page_id);
+        for _ in 0..16 {
+            let Some(id) = current else { break };
+            let Ok(dict) = self.inner.get_dictionary(id) else {
+                break;
+            };
+
+            for key in [b"CropBox".as_slice(), b"MediaBox".as_slice()] {
+                if let Ok(object) = dict.get_deref(key, &self.inner) {
+                    if let Ok(array) = object.as_array() {
+                        if array.len() >= 4 {
+                            let num =
+                                |i: usize| -> f32 { array[i].as_float().unwrap_or(0.0) };
+                            let w = (num(2) - num(0)).abs();
+                            let h = (num(3) - num(1)).abs();
+                            if w > 0.0 && h > 0.0 {
+                                return (w, h);
+                            }
+                        }
+                    }
+                }
+            }
+
+            current = dict
+                .get(b"Parent")
+                .ok()
+                .and_then(|parent| parent.as_reference().ok());
         }
-        let num = |i: usize| -> f32 { array[i].as_float().unwrap_or(0.0) };
-        let w = (num(2) - num(0)).abs();
-        let h = (num(3) - num(1)).abs();
-        if w <= 0.0 || h <= 0.0 {
-            (595.0, 842.0)
-        } else {
-            (w, h)
-        }
+
+        (595.0, 842.0)
     }
 
     /// Chemin d'origine, si connu.
