@@ -203,3 +203,55 @@ fn retrait_des_decorations() {
         "le filigrane devait disparaître"
     );
 }
+
+/// Une trame sur une page démesurée reste bornée, et couvre encore la page.
+///
+/// Sans borne, une boîte de 20 000 points de côté demandait plus de cent
+/// mille motifs : des centaines de mégaoctets de flux de contenu pour une
+/// seule page.
+#[test]
+fn trame_bornee_sur_page_demesuree() {
+    use lopdf::{dictionary, Document as LopdfDoc, Object, Stream};
+
+    // Page carrée de 20 000 points de côté (≈ 7 mètres).
+    let mut doc = LopdfDoc::with_version("1.7");
+    let font = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Font".to_vec()),
+        "Subtype" => Object::Name(b"Type1".to_vec()),
+        "BaseFont" => Object::Name(b"Helvetica".to_vec()),
+    });
+    let content = doc.add_object(Stream::new(dictionary! {}, Vec::new()));
+    let page = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 20000.into(), 20000.into()]),
+        "Contents" => content,
+        "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+    });
+    let pages = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![page.into()]),
+        "Count" => 1,
+    });
+    let catalog = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()), "Pages" => pages });
+    doc.trailer.set("Root", Object::Reference(catalog));
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).expect("écriture");
+
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+    let wm = Watermark {
+        text: "CONFIDENTIEL".to_owned(),
+        tiled: true,
+        ..Default::default()
+    };
+    doc.add_text_watermark(&wm).expect("filigrane");
+
+    let out = doc.to_bytes().expect("sérialisation");
+    let content = text_of(&out, 1);
+    let stamps = content.matches("Tj").count();
+    assert!(stamps >= 4, "la trame a disparu : {stamps} motif(s)");
+    assert!(
+        stamps <= 500,
+        "la trame n'est pas bornée : {stamps} motifs"
+    );
+}
