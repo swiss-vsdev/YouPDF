@@ -1,0 +1,42 @@
+[package]
+name        = "youpdf-core"
+description = "Moteur PDF de YouPDF : parsing, rendu, annotation, OCR, conversion, protection, édition."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[dependencies]
+youpdf-shared = { workspace = true }
+lopdf         = { workspace = true }
+serde         = { workspace = true }
+thiserror     = { workspace = true }
+uuid          = { workspace = true }
+chrono        = { workspace = true }
+tracing       = { workspace = true }
+
+# `render::PageBitmap::to_egui_image` produit une `egui::ColorImage`.
+egui = { workspace = true }
+
+# Rendu réel via pdfium (binaire embarqué).
+pdfium-render = { version = "0.8", features = ["bindings"] }
+
+# Génération de fichiers .docx (conversion PDF → Word).
+# ponytail: optionnel — les versions 0.4.x exigent des `zip` « yanked » sur
+# crates.io à cette date ; l'export Word sera réactivé (feature `convert-docx`)
+# dès qu'une combinaison résoudra. Le reste de `convert` compile sans cette dep.
+docx-rs = { version = "0.4.22", optional = true }
+
+# Fichiers temporaires pour l'OCR.
+tempfile = "3"
+
+# Cryptographie.
+md-5      = "0.10"
+sha2      = "0.10"
+aes       = "0.8"
+cbc       = { version = "0.1", features = ["alloc"] }
+getrandom = "0.2"
+
+[features]
+default = []
+convert-docx = ["dep:docx-rs"]

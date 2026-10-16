@@ -1,0 +1,68 @@
+# YouPDF — Espace de travail Rust
+#
+# Architecture en 4 crates :
+#   - youpdf-shared : types, erreurs et thèmes communs
+#   - youpdf-core   : moteur PDF (parsing, rendu, édition, OCR…)
+#   - youpdf-ai     : couche IA multi-fournisseurs (OpenAI, Anthropic, Ollama…)
+#   - youpdf-app    : application desktop egui/eframe
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/youpdf-shared",
+    "crates/youpdf-core",
+    "crates/youpdf-ai",
+    "crates/youpdf-app",
+]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2021"
+rust-version = "1.78"
+license      = "MIT"
+authors      = ["YouPDF contributors"]
+
+[workspace.dependencies]
+# ---- Crates internes -----------------------------------------------------
+youpdf-shared = { path = "crates/youpdf-shared" }
+youpdf-core   = { path = "crates/youpdf-core" }
+youpdf-ai     = { path = "crates/youpdf-ai" }
+
+# ---- Sérialisation -------------------------------------------------------
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ---- Erreurs -------------------------------------------------------------
+thiserror = "1"
+anyhow    = "1"
+
+# ---- Async ---------------------------------------------------------------
+tokio        = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+async-trait  = "0.1"
+futures      = "0.3"
+
+# ---- HTTP (rustls : pas de dépendance OpenSSL) ---------------------------
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# ---- Journalisation ------------------------------------------------------
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# ---- Interface graphique -------------------------------------------------
+egui   = "0.29"
+eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow"] }
+
+# ---- PDF -----------------------------------------------------------------
+lopdf = "0.34"
+
+# ---- Utilitaires ---------------------------------------------------------
+uuid        = { version = "1", features = ["v4", "serde"] }
+chrono      = { version = "0.4", features = ["serde"] }
+directories = "5"
+
+# ---- Profils de compilation ---------------------------------------------
+[profile.release]
+lto           = "thin"
+codegen-units = 1
+opt-level     = 3
+strip         = "symbols"

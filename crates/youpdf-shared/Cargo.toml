@@ -1,0 +1,12 @@
+[package]
+name        = "youpdf-shared"
+description = "Types, erreurs et jetons de thème partagés par tous les crates YouPDF."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[dependencies]
+# `Error` (thiserror) et `Theme` (egui) : rien d'autre n'est utilisé ici.
+thiserror = { workspace = true }
+egui      = { workspace = true }
