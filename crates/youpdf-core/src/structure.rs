@@ -298,6 +298,11 @@ pub fn decode_pdf_text(bytes: &[u8]) -> String {
             .collect();
         return String::from_utf16_lossy(&units);
     }
+    // Beaucoup de producteurs écrivent de l'UTF-8 brut : on le préfère,
+    // sinon on retombe sur Latin-1 (octet = caractère).
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_owned();
+    }
     bytes
         .iter()
         .map(|byte| match byte {
