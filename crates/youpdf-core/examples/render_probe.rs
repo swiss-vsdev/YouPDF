@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let file = format!("/private/var/folders/rv/m46fplc57jb5v1k82v053hk80000gn/T/opencode/probe-{scale}.ppm");
         let mut out = std::fs::File::create(&file)?;
         write!(out, "P6\n{iw} {ih}\n255\n")?;
-        let mut bytes = Vec::with_capacity((iw * ih * 3) as usize);
+        let mut bytes = Vec::with_capacity(iw * ih * 3);
         for px in &image.pixels {
             bytes.push(px.r());
             bytes.push(px.g());
