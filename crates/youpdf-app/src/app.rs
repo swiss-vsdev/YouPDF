@@ -13,12 +13,15 @@ use std::path::PathBuf;
 
 use egui::{
     pos2, vec2, Align, Align2, Area, Button, CentralPanel, Color32, FontId, Frame, Id, Layout,
-    Margin, Order, Painter, Rect, RichText, Rounding, ScrollArea, Sense, SidePanel, Stroke,
+    Margin, Order, Painter, Rect, RichText, Rounding, ScrollArea, Sense, Shape, SidePanel, Stroke,
     TextEdit, TextureHandle, TextureOptions, TopBottomPanel, ViewportCommand,
 };
 use egui_phosphor::regular as ph;
 use youpdf_core::render::NullRenderer;
-use youpdf_core::{Document, PdfiumRenderer, RenderOptions, Renderer, SearchIndex, SearchResult};
+use youpdf_core::{
+    Annotation, AnnotationKind, AnnotationStyle, Document, PdfiumRenderer,
+    RenderOptions, Renderer, SearchIndex, SearchResult, STAMP_NAMES,
+};
 
 // --------------------------------------------------------------------------
 // Palette
@@ -162,6 +165,51 @@ const TOOLS_MENU: [(&str, &str); 4] = [
     ("Redact", "^4"),
 ];
 
+/// Nature du brouillon de texte en cours de saisie.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DraftKind {
+    Note,
+    FreeText,
+    Signature,
+    Link,
+    Stamp,
+}
+
+/// Saisie en cours pour une annotation textuelle.
+struct TextDraft {
+    kind: DraftKind,
+    page: usize,
+    rect: [f32; 4],
+    buffer: String,
+    /// Premier affichage : demande le focus clavier.
+    fresh: bool,
+}
+
+/// Ce que fait un outil sur le canevas.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolAction {
+    None,
+    /// Glissé rectangulaire (surlignage, formes).
+    DragRect(AnnotationKind),
+    /// Crayon libre.
+    Ink,
+    /// Clic simple (note, texte, tampon, signature, lien).
+    Click(AnnotationKind),
+    Erase,
+    Select,
+}
+
+/// Couleurs de préréglage proposées dans la popup.
+const PRESET_COLORS: [[u8; 3]; 7] = [
+    [255, 235, 59],
+    [120, 220, 120],
+    [255, 140, 200],
+    [255, 170, 60],
+    [120, 170, 255],
+    [230, 80, 80],
+    [40, 40, 40],
+];
+
 // --------------------------------------------------------------------------
 // Onglets
 // --------------------------------------------------------------------------
@@ -176,6 +224,14 @@ struct Tab {
     zoom: Option<f32>,
     /// Bitmaps déjà rendus ; clé `(page, bucket)`, bucket 1 = vignette.
     cache: HashMap<(u32, u32), TextureHandle>,
+    /// Modifications non enregistrées.
+    dirty: bool,
+    /// Annotations YouPDF en mémoire (chargées à la demande).
+    annots: Vec<Annotation>,
+    annots_loaded: bool,
+    /// Piles d'annulation/rétablissement (instantanés des annotations).
+    undo: Vec<Vec<Annotation>>,
+    redo: Vec<Vec<Annotation>>,
 }
 
 impl Tab {
@@ -199,6 +255,34 @@ pub struct YouPdfApp {
     mode: Option<usize>,
     /// Liste déroulante `Outils` ouverte.
     tools_open: bool,
+    /// Menu `…` (enregistrer, exporter, propriétés).
+    actions_open: bool,
+    /// Fenêtre « Propriétés du document ».
+    props_open: bool,
+    /// Outil d'annotation actif (index dans la barre du mode Comment).
+    annot_tool: Option<usize>,
+    /// Préréglages du pinceau/surligneur.
+    annot_color: [u8; 3],
+    annot_opacity: f32,
+    annot_width: f32,
+    /// Popup de préréglages d'outil.
+    preset_open: bool,
+    /// Brouillon de texte (note, texte libre, signature, lien).
+    text_draft: Option<TextDraft>,
+    /// Annotation sélectionnée (outil Sélection).
+    selected_annot: usize,
+    /// Sélection active.
+    has_annot_selection: bool,
+    /// Tracé de crayon en cours (coordonnées PDF).
+    ink_current: Vec<[f32; 2]>,
+    /// Coin de départ d'un glissé en cours (coordonnées PDF).
+    drag_from: Option<[f32; 2]>,
+    /// Position courante du glissé (coordonnées PDF), pour l'aperçu.
+    drag_to: Option<[f32; 2]>,
+    /// Tampon choisi pour l'outil Tampon.
+    stamp_choice: usize,
+    /// Type d'annotation créé par le brouillon courant.
+    draft_annot_kind: AnnotationKind,
 
     search_query: String,
     search_index: Option<(usize, SearchIndex)>,
@@ -236,6 +320,21 @@ impl YouPdfApp {
             panel: Some(Panel::Thumbnails),
             mode: None,
             tools_open: false,
+            actions_open: false,
+            props_open: false,
+            annot_tool: None,
+            annot_color: [255, 235, 59],
+            annot_opacity: 0.45,
+            annot_width: 2.0,
+            preset_open: false,
+            text_draft: None,
+            selected_annot: 0,
+            has_annot_selection: false,
+            ink_current: Vec::new(),
+            drag_from: None,
+            drag_to: None,
+            stamp_choice: 0,
+            draft_annot_kind: AnnotationKind::FreeText,
             search_query: String::new(),
             search_index: None,
             results: Vec::new(),
@@ -292,6 +391,11 @@ impl YouPdfApp {
                     page: 1,
                     zoom: None,
                     cache: HashMap::new(),
+                    dirty: false,
+                    annots: Vec::new(),
+                    annots_loaded: false,
+                    undo: Vec::new(),
+                    redo: Vec::new(),
                 });
                 self.active = self.tabs.len() - 1;
                 self.panel = Some(Panel::Thumbnails);
@@ -329,6 +433,493 @@ impl YouPdfApp {
 
     fn active_tab(&self) -> Option<&Tab> {
         self.tabs.get(self.active)
+    }
+
+    // -- Enregistrement ----------------------------------------------------
+
+    /// ⌘S : écrit le document sur son chemin, ou demande un chemin.
+    fn save_active(&mut self, ctx: &egui::Context) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let Some(path) = tab.path.clone() else {
+            self.save_as(ctx);
+            return;
+        };
+        if let Err(err) = self.flush_annots() {
+            self.toast(ctx, format!("Save failed: {err}"));
+            return;
+        }
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        tab.annots_loaded = false;
+        match tab.doc.save(&path) {
+            Ok(()) => {
+                tab.dirty = false;
+                self.toast(ctx, format!("Saved {}", path.display()));
+            }
+            Err(err) => self.toast(ctx, format!("Save failed: {err}")),
+        }
+    }
+
+    /// ⇧⌘S : choisit une destination puis écrit une copie.
+    fn save_as(&mut self, ctx: &egui::Context) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let default_name = tab
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| format!("{}.pdf", tab.title));
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("PDF", &["pdf"])
+            .set_file_name(&default_name)
+            .save_file()
+        else {
+            return;
+        };
+        match tab.doc.save(&path) {
+            Ok(()) => {
+                tab.dirty = false;
+                tab.path = Some(path.clone());
+                tab.title = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| tab.title.clone());
+                let title = tab.title.clone();
+                self.toast(ctx, format!("Saved {title}"));
+            }
+            Err(err) => self.toast(ctx, format!("Save failed: {err}")),
+        }
+    }
+
+    /// Exporte le texte extractible dans un fichier `.txt`.
+    fn export_text(&mut self, ctx: &egui::Context) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let stem = tab
+            .path
+            .as_ref()
+            .and_then(|p| p.file_stem().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| tab.title.clone());
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Texte", &["txt"])
+            .set_file_name(format!("{stem}.txt"))
+            .save_file()
+        else {
+            return;
+        };
+        let text = match tab.doc.all_text() {
+            Ok(text) => text,
+            Err(err) => {
+                self.toast(ctx, format!("Text export failed: {err}"));
+                return;
+            }
+        };
+        match std::fs::write(&path, text) {
+            Ok(()) => self.toast(ctx, format!("Exported {}", path.display())),
+            Err(err) => self.toast(ctx, format!("Text export failed: {err}")),
+        }
+    }
+
+    // -- Annotations -------------------------------------------------------
+
+    /// Charge les annotations du document à la première utilisation.
+    fn ensure_annots(&mut self) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            if !tab.annots_loaded {
+                tab.annots = tab.doc.read_annotations();
+                tab.annots_loaded = true;
+            }
+        }
+    }
+
+    fn undo(&mut self, ctx: &egui::Context) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        if let Some(previous) = tab.undo.pop() {
+            tab.redo.push(std::mem::replace(&mut tab.annots, previous));
+            tab.dirty = true;
+            self.toast(ctx, "Undone");
+        }
+    }
+
+    fn redo(&mut self, ctx: &egui::Context) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        if let Some(next) = tab.redo.pop() {
+            tab.undo.push(std::mem::replace(&mut tab.annots, next));
+            tab.dirty = true;
+            self.toast(ctx, "Redone");
+        }
+    }
+
+    /// Style courant pour un type d'annotation donné.
+    fn annot_style(&self, kind: AnnotationKind) -> AnnotationStyle {
+        let mut style = AnnotationStyle {
+            color: self.annot_color,
+            opacity: 1.0,
+            line_width: self.annot_width,
+            font_size: 12.0,
+        };
+        let _ = &mut style;
+        style.opacity = match kind {
+            AnnotationKind::Highlight | AnnotationKind::Squiggly | AnnotationKind::Underline
+            | AnnotationKind::StrikeOut => self.annot_opacity,
+            AnnotationKind::Ink | AnnotationKind::Square | AnnotationKind::Circle
+            | AnnotationKind::Line | AnnotationKind::Arrow => 1.0,
+            _ => 1.0,
+        };
+        if kind == AnnotationKind::Note {
+            style.font_size = 10.0;
+        }
+        style
+    }
+
+    /// Ajoute une annotation et l'inscrit dans l'historique.
+    fn push_annot(&mut self, annot: Annotation) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.undo.push(tab.annots.clone());
+            if tab.undo.len() > 60 {
+                tab.undo.remove(0);
+            }
+            tab.redo.clear();
+            tab.annots.push(annot);
+            tab.dirty = true;
+        }
+    }
+
+    /// Retire l'annotation d'indice donné.
+    fn remove_annot(&mut self, index: usize) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            if index < tab.annots.len() {
+                tab.undo.push(tab.annots.clone());
+                tab.redo.clear();
+                tab.annots.remove(index);
+                tab.dirty = true;
+            }
+        }
+        self.has_annot_selection = false;
+    }
+
+    /// Écrit les annotations dans le document avant enregistrement.
+    fn flush_annots(&mut self) -> std::result::Result<(), String> {
+        self.ensure_annots();
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return Ok(());
+        };
+        if tab.annots.is_empty() {
+            return Ok(());
+        }
+        tab.doc
+            .apply_annotations(&tab.annots)
+            .map_err(|err| err.to_string())
+    }
+
+    // -- Outils d'annotation ------------------------------------------------
+
+    /// Action du canevas selon le mode et l'outil choisi.
+    fn canvas_action(&self) -> ToolAction {
+        if self.mode != Some(0) {
+            return ToolAction::None;
+        }
+        match self.annot_tool {
+            Some(0) => ToolAction::Select,
+            Some(1) => ToolAction::DragRect(AnnotationKind::Highlight),
+            Some(2) => ToolAction::Click(AnnotationKind::FreeText),
+            Some(3) => ToolAction::Click(AnnotationKind::Note),
+            Some(4) => ToolAction::Ink,
+            Some(5) => ToolAction::DragRect(AnnotationKind::Square),
+            Some(7) => ToolAction::Click(AnnotationKind::Link),
+            Some(8) => ToolAction::Click(AnnotationKind::Stamp),
+            Some(9) => ToolAction::Click(AnnotationKind::FreeText),
+            Some(10) => ToolAction::Erase,
+            _ => ToolAction::None,
+        }
+    }
+
+    /// Type de brouillon pour l'outil courant (texte, note, tampon, lien).
+    fn draft_kind(&self) -> DraftKind {
+        match self.annot_tool {
+            Some(2) => DraftKind::FreeText,
+            Some(3) => DraftKind::Note,
+            Some(7) => DraftKind::Link,
+            Some(8) => DraftKind::Stamp,
+            Some(9) => DraftKind::Signature,
+            _ => DraftKind::FreeText,
+        }
+    }
+
+    /// Ajoute une annotation de type rectangle (surlignage, formes).
+    fn add_rect_annot(&mut self, page: usize, kind: AnnotationKind, rect: [f32; 4]) {
+        if (rect[2] - rect[0]).abs() < 2.0 {
+            return;
+        }
+        // Un glissé horizontal (surlignage) donne une bande de hauteur nulle :
+        // on l'épaissit autour de la ligne visée.
+        let mut rect = rect;
+        if (rect[3] - rect[1]).abs() < 3.0 {
+            let middle = (rect[1] + rect[3]) / 2.0;
+            rect[1] = middle - 6.0;
+            rect[3] = middle + 6.0;
+        }
+        let mut annot = Annotation::new(page, kind, rect);
+        annot.style = self.annot_style(kind);
+        if kind == AnnotationKind::Stamp {
+            let label = STAMP_NAMES[self.stamp_choice.min(STAMP_NAMES.len() - 1)];
+            annot.content = label.to_owned();
+        }
+        self.push_annot(annot);
+    }
+
+    /// Ajoute un tracé de crayon.
+    fn add_ink_annot(&mut self, page: usize, points: Vec<[f32; 2]>) {
+        if points.len() < 2 {
+            return;
+        }
+        let mut annot = Annotation::new(page, AnnotationKind::Ink, [0.0, 0.0, 0.0, 0.0]);
+        annot.style = self.annot_style(AnnotationKind::Ink);
+        annot.add_ink_stroke(points);
+        annot.recompute_ink_bbox();
+        self.push_annot(annot);
+    }
+
+    /// Ouvre le brouillon de saisie pour un clic sur la page.
+    fn open_draft(&mut self, page: usize, point: [f32; 2]) {
+        let kind = self.draft_kind();
+        let draft_kind = self.draft_kind();
+        let (annot_kind, rect, buffer) = match draft_kind {
+            DraftKind::Note => (
+                AnnotationKind::Note,
+                [point[0], point[1] - 20.0, point[0] + 20.0, point[1]],
+                String::new(),
+            ),
+            DraftKind::Stamp => {
+                let label = STAMP_NAMES[self.stamp_choice.min(STAMP_NAMES.len() - 1)];
+                (
+                    AnnotationKind::Stamp,
+                    [point[0], point[1] - 20.0, point[0] + 130.0, point[1] + 20.0],
+                    label.to_owned(),
+                )
+            }
+            DraftKind::Link => (
+                AnnotationKind::Link,
+                [point[0], point[1] - 12.0, point[0] + 150.0, point[1] + 12.0],
+                String::new(),
+            ),
+            DraftKind::Signature => (
+                AnnotationKind::FreeText,
+                [point[0], point[1] - 18.0, point[0] + 170.0, point[1] + 18.0],
+                String::new(),
+            ),
+            DraftKind::FreeText => (
+                AnnotationKind::FreeText,
+                [point[0], point[1] - 14.0, point[0] + 180.0, point[1] + 22.0],
+                String::new(),
+            ),
+        };
+        let _ = kind;
+        self.text_draft = Some(TextDraft {
+            kind: draft_kind,
+            page,
+            rect,
+            buffer,
+            fresh: true,
+        });
+        self.draft_annot_kind = annot_kind;
+        if draft_kind == DraftKind::Stamp {
+            self.confirm_draft();
+        }
+    }
+
+    /// Valide le brouillon courant.
+    fn confirm_draft(&mut self) {
+        let Some(draft) = self.text_draft.take() else {
+            return;
+        };
+        let kind = self.draft_annot_kind;
+        if draft.buffer.trim().is_empty() && draft.kind != DraftKind::Stamp {
+            return;
+        }
+        let mut annot = Annotation::new(draft.page, kind, draft.rect);
+        annot.content = draft.buffer.trim().to_owned();
+        annot.style = self.annot_style(kind);
+        if kind == AnnotationKind::FreeText {
+            match draft.kind {
+                DraftKind::Signature => {
+                    annot.style.font_size = 22.0;
+                    annot.style.color = [20, 20, 20];
+                }
+                _ => {
+                    annot.style.font_size = 13.0;
+                    annot.style.color = self.annot_color;
+                }
+            }
+        }
+        if kind == AnnotationKind::Link {
+            annot.style.color = [40, 96, 200];
+        }
+        self.push_annot(annot);
+    }
+
+    /// Zone réagissant aux clics pour les annulations/sélections.
+    fn hit_test(&self, page: usize, point: [f32; 2]) -> Option<usize> {
+        let tab = self.tabs.get(self.active)?;
+        tab.annots
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, a)| {
+                a.page == page
+                    && point[0] >= a.rect[0] - 4.0
+                    && point[0] <= a.rect[2] + 4.0
+                    && point[1] >= a.rect[1] - 4.0
+                    && point[1] <= a.rect[3] + 4.0
+            })
+            .map(|(idx, _)| idx)
+    }
+
+    /// Fenêtre de saisie du brouillon (texte, note, lien, signature).
+    fn draft_window(&mut self, ctx: &egui::Context) {
+        let Some(draft) = self.text_draft.as_mut() else {
+            return;
+        };
+        let title = match draft.kind {
+            DraftKind::Note => "Add note",
+            DraftKind::FreeText => "Add text",
+            DraftKind::Signature => "Add signature",
+            DraftKind::Link => "Add link",
+            DraftKind::Stamp => "Stamp text",
+        };
+        let hint = match draft.kind {
+            DraftKind::Link => "https://…",
+            DraftKind::Signature => "Type your name",
+            _ => "Text…",
+        };
+        let fresh = draft.fresh;
+        draft.fresh = false;
+        let buffer = &mut draft.buffer;
+
+        let mut confirm = false;
+        let mut cancel = false;
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                let resp = ui.add_sized(
+                    vec2(280.0, 26.0),
+                    TextEdit::singleline(buffer).hint_text(hint),
+                );
+                if fresh {
+                    resp.request_focus();
+                }
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    confirm = true;
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Add").clicked() {
+                        confirm = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if confirm {
+            self.confirm_draft();
+        } else if cancel {
+            self.text_draft = None;
+        }
+    }
+
+    /// Popup des préréglages (couleur, épaisseur, opacité).
+    fn preset_popup(&mut self, ctx: &egui::Context, canvas_left: f32, top: f32) {
+        if !self.preset_open || self.mode != Some(0) {
+            return;
+        }
+        let tool = self.annot_tool.unwrap_or(0);
+        let wants_text = matches!(self.draft_kind(), DraftKind::FreeText | DraftKind::Signature)
+            && matches!(tool, 2 | 9);
+        let wants_opacity = tool == 1;
+        Area::new(Id::new("presets"))
+            .anchor(Align2::CENTER_TOP, vec2(canvas_left / 2.0, top + 40.0))
+            .order(Order::Foreground)
+            .show(ctx, |ui| {
+                Frame::none()
+                    .fill(CHROME_BG)
+                    .rounding(Rounding::same(8.0))
+                    .stroke(Stroke::new(1.0_f32, SEPARATOR))
+                    .inner_margin(Margin::symmetric(10.0, 8.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for color in PRESET_COLORS {
+                                let selected = color == self.annot_color;
+                                let (rect, resp) =
+                                    ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+                                ui.painter().rect_filled(
+                                    rect,
+                                    Rounding::same(4.0),
+                                    Color32::from_rgb(color[0], color[1], color[2]),
+                                );
+                                if selected {
+                                    ui.painter().rect_stroke(
+                                        rect.expand(2.0),
+                                        5.0,
+                                        Stroke::new(1.5_f32, Color32::WHITE),
+                                    );
+                                }
+                                if resp.clicked() {
+                                    self.annot_color = color;
+                                }
+                            }
+                        });
+                        if tool != 3 && tool != 8 {
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("Width").size(11.0).color(MUTED));
+                                ui.add(
+                                    egui::Slider::new(&mut self.annot_width, 0.5..=8.0)
+                                        .fixed_decimals(1),
+                                );
+                            });
+                        }
+                        if wants_opacity {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("Opacity").size(11.0).color(MUTED));
+                                ui.add(
+                                    egui::Slider::new(&mut self.annot_opacity, 0.1..=1.0)
+                                        .fixed_decimals(2),
+                                );
+                            });
+                        }
+                        if tool == 8 {
+                            ui.horizontal(|ui| {
+                                for (idx, name) in STAMP_NAMES.iter().take(3).enumerate() {
+                                    if ui.selectable_label(self.stamp_choice == idx, *name).clicked()
+                                    {
+                                        self.stamp_choice = idx;
+                                    }
+                                }
+                            });
+                        }
+                        if wants_text {
+                            ui.label(
+                                RichText::new("Color applies to new text")
+                                    .size(10.0)
+                                    .color(MUTED),
+                            );
+                        }
+                        if ui.button("Done").clicked() {
+                            self.preset_open = false;
+                        }
+                    });
+            });
     }
 
     // -- Zoom --------------------------------------------------------------
@@ -452,8 +1043,13 @@ impl YouPdfApp {
                     for (idx, tab) in self.tabs.iter().enumerate() {
                         let selected = idx == self.active;
                         let color = if selected { ICON_BRIGHT } else { MUTED };
+                        let label = if tab.dirty {
+                            format!("{} •", shorten(&tab.title, 22))
+                        } else {
+                            shorten(&tab.title, 24)
+                        };
                         let galley = ui.painter().layout_no_wrap(
-                            shorten(&tab.title, 24),
+                            label,
                             FontId::proportional(12.5),
                             color,
                         );
@@ -581,6 +1177,122 @@ impl YouPdfApp {
             });
     }
 
+    // -- Panneau Commentaires ----------------------------------------------
+
+    fn comments_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        self.ensure_annots();
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        if tab.annots.is_empty() {
+            ui.add_space(14.0);
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    RichText::new("No annotations yet")
+                        .size(12.0)
+                        .color(MUTED),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Use Comment mode to add one")
+                        .size(11.0)
+                        .color(MUTED),
+                );
+            });
+            return;
+        }
+
+        let entries: Vec<(usize, String, String, usize, String, [u8; 3])> = tab
+            .annots
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                (
+                    i,
+                    annot_label(a.kind).to_owned(),
+                    if a.content.is_empty() {
+                        "(no text)".to_owned()
+                    } else {
+                        a.content.clone()
+                    },
+                    a.page,
+                    a.created_at.clone(),
+                    a.style.color,
+                )
+            })
+            .collect();
+
+        let mut jump = None;
+        let mut remove = None;
+        ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(6.0);
+                for (idx, kind, text, page, when, color) in &entries {
+                    let (rect, resp) = ui
+                        .allocate_exact_size(vec2(PANEL_W - 24.0, 44.0), Sense::click());
+                    if resp.hovered() {
+                        ui.painter()
+                            .rect_filled(rect, Rounding::same(6.0), WIDGET_BG);
+                    }
+                    let swatch = Rect::from_center_size(
+                        pos2(rect.min.x + 16.0, rect.center().y),
+                        vec2(10.0, 10.0),
+                    );
+                    ui.painter().rect_filled(
+                        swatch,
+                        Rounding::same(2.0),
+                        Color32::from_rgb(color[0], color[1], color[2]),
+                    );
+                    ui.painter().text(
+                        pos2(rect.min.x + 28.0, rect.min.y + 12.0),
+                        Align2::LEFT_CENTER,
+                        format!("{kind} · p.{page}"),
+                        FontId::proportional(11.5),
+                        ICON_BRIGHT,
+                    );
+                    ui.painter().text(
+                        pos2(rect.min.x + 28.0, rect.min.y + 28.0),
+                        Align2::LEFT_CENTER,
+                        shorten(text, 26),
+                        FontId::proportional(11.0),
+                        MUTED,
+                    );
+                    ui.painter().text(
+                        pos2(rect.max.x - 10.0, rect.min.y + 12.0),
+                        Align2::RIGHT_CENTER,
+                        when.get(..10).unwrap_or(""),
+                        FontId::proportional(9.5),
+                        MUTED,
+                    );
+                    let x_rect = Rect::from_center_size(
+                        pos2(rect.max.x - 16.0, rect.max.y - 12.0),
+                        vec2(16.0, 16.0),
+                    );
+                    let x_resp = ui.interact(x_rect, Id::new(("annot-x", *idx)), Sense::click());
+                    icon_close(
+                        ui.painter(),
+                        x_rect,
+                        if x_resp.hovered() { ICON_BRIGHT } else { MUTED },
+                    );
+                    if x_resp.clicked() {
+                        remove = Some(*idx);
+                    } else if resp.clicked() {
+                        jump = Some(*page);
+                    }
+                    ui.add_space(4.0);
+                }
+            });
+
+        if let Some(idx) = remove {
+            self.remove_annot(idx);
+            let _ = ctx;
+        }
+        if let Some(page) = jump {
+            self.jump = Some(page);
+        }
+    }
+
     // -- Panneau latéral ---------------------------------------------------
 
     fn side_panel(&mut self, ctx: &egui::Context) {
@@ -630,6 +1342,7 @@ impl YouPdfApp {
                 match panel {
                     Panel::Thumbnails => self.thumbnails(ui),
                     Panel::Search => self.search_ui(ctx, ui),
+                    Panel::Comments => self.comments_panel(ctx, ui),
                     other => {
                         ui.add_space(14.0);
                         ui.vertical_centered(|ui| {
@@ -938,6 +1651,8 @@ impl YouPdfApp {
         let modes_anchor = vec2(canvas_left / 2.0, top);
         if let Some(mode) = self.mode {
             let mut exit = false;
+            let mut chosen_tool: Option<(usize, bool)> = None;
+            let annot_tool = self.annot_tool;
             Area::new(Id::new("modetools"))
                 .anchor(Align2::CENTER_TOP, modes_anchor)
                 .order(Order::Foreground)
@@ -951,14 +1666,22 @@ impl YouPdfApp {
                                 // Les modes à libellés longs gardent le texte ;
                                 // les autres restent compacts, info-bulle au survol.
                                 let labeled = mode == 1 || mode == 3;
-                                for ModeTool(label, draw, chevron, primary) in mode_tools(mode) {
+                                for (idx, ModeTool(label, draw, chevron, primary)) in
+                                    mode_tools(mode).iter().enumerate()
+                                {
+                                    let selected = annot_tool == Some(idx);
                                     let resp = if labeled {
-                                        pill_button(ui, label, *draw, *chevron, *primary, false)
+                                        pill_button(ui, label, *draw, *chevron, *primary, selected)
                                     } else {
-                                        icon_pill(ui, *draw, *chevron, *primary)
+                                        icon_pill(ui, *draw, *chevron, *primary, selected)
                                     };
-                                    if resp.on_hover_text(*label).clicked() {
-                                        self.toast(ctx, format!("{label} — planned"));
+                                    let hovered = resp.on_hover_text(*label);
+                                    if hovered.clicked() {
+                                        let in_chevron = hovered
+                                            .interact_pointer_pos()
+                                            .map(|p| p.x > hovered.rect.max.x - 20.0)
+                                            .unwrap_or(false);
+                                        chosen_tool = Some((idx, *chevron && in_chevron));
                                     }
                                 }
                                 if pill_button(ui, "Close", icon_close, false, false, false)
@@ -969,8 +1692,28 @@ impl YouPdfApp {
                             });
                         });
                 });
+            if let Some((idx, want_preset)) = chosen_tool {
+                self.annot_tool = Some(idx);
+                if want_preset {
+                    self.preset_open = true;
+                } else if !mode_tools(mode).get(idx).map(|t| t.2).unwrap_or(false) {
+                    self.preset_open = false;
+                }
+                match mode {
+                    0 => {}
+                    _ => self.toast(
+                        ctx,
+                        format!(
+                            "{} — planned",
+                            mode_tools(mode).get(idx).map(|t| t.0).unwrap_or("Tool")
+                        ),
+                    ),
+                }
+            }
             if exit {
                 self.mode = None;
+                self.annot_tool = None;
+                self.preset_open = false;
             }
         } else {
             Area::new(Id::new("modes"))
@@ -991,6 +1734,8 @@ impl YouPdfApp {
                                     if resp.clicked() {
                                         self.mode = Some(idx);
                                         self.tools_open = false;
+                                        self.annot_tool = None;
+                                        self.preset_open = false;
                                     }
                                 }
                             });
@@ -1033,10 +1778,14 @@ impl YouPdfApp {
             if let Some(idx) = chosen {
                 self.mode = Some(idx);
                 self.tools_open = false;
+                self.annot_tool = None;
+                self.preset_open = false;
             } else if close {
                 self.tools_open = false;
             }
         }
+
+        self.preset_popup(ctx, canvas_left, top);
 
         // Annuler / rétablir / débordement à droite.
         Area::new(Id::new("actions"))
@@ -1049,25 +1798,47 @@ impl YouPdfApp {
                     .inner_margin(Margin::symmetric(6.0, 4.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            let can_undo = self
+                                .tabs
+                                .get(self.active)
+                                .map(|t| !t.undo.is_empty())
+                                .unwrap_or(false);
+                            let can_redo = self
+                                .tabs
+                                .get(self.active)
+                                .map(|t| !t.redo.is_empty())
+                                .unwrap_or(false);
                             let undo = {
                                 let (rect, resp) =
                                     ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
-                                let color = if resp.hovered() { ICON_BRIGHT } else { MUTED };
+                                let color = if !can_undo {
+                                    MUTED
+                                } else if resp.hovered() {
+                                    ICON_BRIGHT
+                                } else {
+                                    ICON
+                                };
                                 icon_undo(ui.painter(), rect.shrink(6.0), color);
                                 resp
                             };
-                            if undo.clicked() {
-                                self.toast(ctx, "Undo — planned");
+                            if undo.clicked() && can_undo {
+                                self.undo(ctx);
                             }
                             let redo = {
                                 let (rect, resp) =
                                     ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
-                                let color = if resp.hovered() { ICON_BRIGHT } else { MUTED };
+                                let color = if !can_redo {
+                                    MUTED
+                                } else if resp.hovered() {
+                                    ICON_BRIGHT
+                                } else {
+                                    ICON
+                                };
                                 icon_redo(ui.painter(), rect.shrink(6.0), color);
                                 resp
                             };
-                            if redo.clicked() {
-                                self.toast(ctx, "Redo — planned");
+                            if redo.clicked() && can_redo {
+                                self.redo(ctx);
                             }
                             let more = {
                                 let (rect, resp) =
@@ -1077,11 +1848,119 @@ impl YouPdfApp {
                                 resp
                             };
                             if more.clicked() {
-                                self.toast(ctx, "Save / more — planned");
+                                self.actions_open = !self.actions_open;
                             }
                         });
                     });
             });
+
+        // Menu `…` : enregistrer, exporter, propriétés.
+        if self.actions_open {
+            let mut action = None;
+            Area::new(Id::new("actions-menu"))
+                .anchor(Align2::RIGHT_TOP, vec2(-14.0, top + 38.0))
+                .order(Order::Foreground)
+                .show(ctx, |ui| {
+                    Frame::none()
+                        .fill(CHROME_BG)
+                        .rounding(Rounding::same(8.0))
+                        .stroke(Stroke::new(1.0_f32, SEPARATOR))
+                        .inner_margin(Margin::symmetric(4.0, 4.0))
+                        .show(ui, |ui| {
+                            if menu_row(ui, "Save", "⌘S") {
+                                action = Some(0);
+                            }
+                            if menu_row(ui, "Save as…", "⇧⌘S") {
+                                action = Some(1);
+                            }
+                            if menu_row(ui, "Export text…", "") {
+                                action = Some(2);
+                            }
+                            ui.add_space(4.0);
+                            let sep = ui.cursor().top();
+                            ui.painter().hline(
+                                ui.max_rect().x_range(),
+                                sep,
+                                Stroke::new(1.0_f32, SEPARATOR),
+                            );
+                            ui.add_space(4.0);
+                            if menu_row(ui, "Properties…", "⌘D") {
+                                action = Some(3);
+                            }
+                            if menu_row(ui, "Close tab", "⌘W") {
+                                action = Some(4);
+                            }
+                        });
+                });
+            if let Some(action) = action {
+                self.actions_open = false;
+                match action {
+                    0 => self.save_active(ctx),
+                    1 => self.save_as(ctx),
+                    2 => self.export_text(ctx),
+                    3 => self.props_open = true,
+                    4 => {
+                        let idx = self.active;
+                        self.close_tab(idx);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // -- Propriétés --------------------------------------------------------
+
+    /// Fenêtre « Propriétés du document » (lecture seule).
+    fn properties_window(&mut self, ctx: &egui::Context) {
+        if !self.props_open {
+            return;
+        }
+        let Some(tab) = self.tabs.get(self.active) else {
+            self.props_open = false;
+            return;
+        };
+        let meta = tab.doc.metadata().clone();
+        let total = tab.total();
+        let path = tab
+            .path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(not saved yet)".to_owned());
+        let size = tab
+            .path
+            .as_ref()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .map(|m| format!("{:.1} KB", m.len() as f64 / 1024.0))
+            .unwrap_or_else(|| "—".to_owned());
+        let mut open = true;
+
+        egui::Window::new("Document properties")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                let mut row = |label: &str, value: &str| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(label).size(12.0).color(MUTED));
+                        ui.label(RichText::new(value).size(12.0).color(ICON_BRIGHT));
+                    });
+                };
+                row("File", &tab.title);
+                row("Path", &path);
+                row("Size", &size);
+                row("Pages", &total.to_string());
+                row("Title", meta.title.as_deref().unwrap_or("—"));
+                row("Author", meta.author.as_deref().unwrap_or("—"));
+                row("Subject", meta.subject.as_deref().unwrap_or("—"));
+                row("Keywords", meta.keywords.as_deref().unwrap_or("—"));
+                row("Producer", meta.producer.as_deref().unwrap_or("—"));
+            });
+
+        if !open {
+            self.props_open = false;
+        }
     }
 
     // -- Canevas -----------------------------------------------------------
@@ -1103,10 +1982,30 @@ impl YouPdfApp {
         let ctx = ui.ctx().clone();
         let ppp = ctx.pixels_per_point();
         let renderer = &*self.renderer;
+        let action = if self.mode == Some(0) {
+            self.canvas_action()
+        } else {
+            ToolAction::None
+        };
         let status = &mut self.render_status;
         let last_fit = &mut self.last_fit;
         let tab = &mut self.tabs[active];
         let total = tab.total();
+        let sense = if action == ToolAction::None {
+            Sense::click()
+        } else {
+            Sense::click_and_drag()
+        };
+        let annot_width = self.annot_width;
+        let ink_current = &mut self.ink_current;
+        let drag_from = &mut self.drag_from;
+        let drag_to = &mut self.drag_to;
+        let mut pending_rect: Option<(usize, AnnotationKind, [f32; 4])> = None;
+        let mut pending_ink: Option<(usize, Vec<[f32; 2]>)> = None;
+        let mut pending_click: Option<(usize, [f32; 2])> = None;
+        let mut pending_hit: Option<(usize, [f32; 2])> = None;
+        let selected_annot = self.selected_annot;
+        let has_selection = self.has_annot_selection;
 
         ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -1123,7 +2022,7 @@ impl YouPdfApp {
                     }
                     let size = vec2(wp * scale, hp * scale);
                     let (rect, resp) =
-                        ui.allocate_exact_size(size + vec2(0.0, PAGE_SPACING), Sense::click());
+                        ui.allocate_exact_size(size + vec2(0.0, PAGE_SPACING), sense);
                     let page_rect = Rect::from_min_size(rect.min, size);
 
                     if jump == Some(page as usize) {
@@ -1154,6 +2053,101 @@ impl YouPdfApp {
                                 Color32::WHITE,
                             );
                         }
+
+                        // Annotations posées sur la page.
+                        let selected = if has_selection {
+                            Some(selected_annot)
+                        } else {
+                            None
+                        };
+                        draw_annots(ui.painter(), tab, page, page_rect, scale, selected);
+                    }
+
+                    // Interaction des outils d'annotation.
+                    if action != ToolAction::None {
+                        let to_pdf = |pos: egui::Pos2| -> [f32; 2] {
+                            [
+                                (pos.x - page_rect.min.x) / scale,
+                                (page_rect.max.y - pos.y) / scale,
+                            ]
+                        };
+                        let to_screen = |p: [f32; 2]| -> egui::Pos2 {
+                            pos2(
+                                page_rect.min.x + p[0] * scale,
+                                page_rect.max.y - p[1] * scale,
+                            )
+                        };
+                        match action {
+                            ToolAction::DragRect(kind) => {
+                                if resp.dragged() {
+                                    let point = resp.interact_pointer_pos().map(to_pdf);
+                                    if drag_from.is_none() {
+                                        *drag_from = point;
+                                    }
+                                    if point.is_some() {
+                                        *drag_to = point;
+                                    }
+                                }
+                                if resp.drag_stopped() {
+                                    let from = drag_from.take();
+                                    let to = drag_to.take();
+                                    if let (Some(a), Some(b)) = (from, to) {
+                                        pending_rect = Some((
+                                            page as usize,
+                                            kind,
+                                            [
+                                                a[0].min(b[0]),
+                                                a[1].min(b[1]),
+                                                a[0].max(b[0]),
+                                                a[1].max(b[1]),
+                                            ],
+                                        ));
+                                    }
+                                }
+                                if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
+                                    let r = Rect::from_two_pos(to_screen(a), to_screen(b));
+                                    ui.painter().rect_stroke(
+                                        r,
+                                        2.0,
+                                        Stroke::new(1.5_f32, ACCENT),
+                                    );
+                                }
+                            }
+                            ToolAction::Ink => {
+                                if resp.dragged() {
+                                    if let Some(p) = resp.interact_pointer_pos() {
+                                        ink_current.push(to_pdf(p));
+                                    }
+                                }
+                                if resp.drag_stopped() {
+                                    pending_ink =
+                                        Some((page as usize, std::mem::take(ink_current)));
+                                }
+                                if ink_current.len() > 1 {
+                                    let pts: Vec<egui::Pos2> =
+                                        ink_current.iter().map(|p| to_screen(*p)).collect();
+                                    ui.painter().add(Shape::line(
+                                        pts,
+                                        Stroke::new(annot_width * scale.max(0.4), ACCENT),
+                                    ));
+                                }
+                            }
+                            ToolAction::Click(_) => {
+                                if resp.clicked() {
+                                    if let Some(p) = resp.interact_pointer_pos() {
+                                        pending_click = Some((page as usize, to_pdf(p)));
+                                    }
+                                }
+                            }
+                            ToolAction::Erase | ToolAction::Select => {
+                                if resp.clicked() {
+                                    if let Some(p) = resp.interact_pointer_pos() {
+                                        pending_hit = Some((page as usize, to_pdf(p)));
+                                    }
+                                }
+                            }
+                            ToolAction::None => {}
+                        }
                     }
 
                     if resp.clicked() {
@@ -1174,6 +2168,35 @@ impl YouPdfApp {
                         .retain(|key, _| (key.0 as i64 - current).abs() < 10);
                 }
             });
+
+        if let Some((page, kind, rect)) = pending_rect {
+            self.add_rect_annot(page, kind, rect);
+        }
+        if let Some((page, points)) = pending_ink {
+            tracing::info!("ink annot page {page} points {}", points.len());
+            self.add_ink_annot(page, points);
+        }
+        if let Some((page, point)) = pending_click {
+            self.open_draft(page, point);
+        }
+        if let Some((page, point)) = pending_hit {
+            match action {
+                ToolAction::Erase => {
+                    if let Some(idx) = self.hit_test(page, point) {
+                        self.remove_annot(idx);
+                    }
+                }
+                ToolAction::Select => {
+                    if let Some(idx) = self.hit_test(page, point) {
+                        self.selected_annot = idx;
+                        self.has_annot_selection = true;
+                    } else {
+                        self.has_annot_selection = false;
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn empty_state(&mut self, ui: &mut egui::Ui) {
@@ -1306,18 +2329,36 @@ impl YouPdfApp {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        let (cmd, open, close, plus, minus, zero) = ctx.input(|i| {
+        let delete_pressed = ctx.input(|i| {
+            i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::Delete)
+        });
+        if delete_pressed && self.has_annot_selection {
+            let idx = self.selected_annot;
+            self.remove_annot(idx);
+            self.toast(ctx, "Annotation removed");
+            return;
+        }
+        let (cmd, shift, open, close, plus, minus, zero, save) = ctx.input(|i| {
             (
                 i.modifiers.command,
+                i.modifiers.shift,
                 i.key_pressed(egui::Key::O),
                 i.key_pressed(egui::Key::W),
                 i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals),
                 i.key_pressed(egui::Key::Minus),
                 i.key_pressed(egui::Key::Num0),
+                i.key_pressed(egui::Key::S),
             )
         });
         if !cmd {
             return;
+        }
+        if save {
+            if shift {
+                self.save_as(ctx);
+            } else {
+                self.save_active(ctx);
+            }
         }
         if open {
             self.open_dialog();
@@ -1354,6 +2395,7 @@ impl YouPdfApp {
 impl eframe::App for YouPdfApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_drops(ctx);
+        self.ensure_annots();
         self.shortcuts(ctx);
         self.title_bar(ctx);
         self.rail(ctx);
@@ -1365,6 +2407,8 @@ impl eframe::App for YouPdfApp {
             });
         self.toolbar(ctx);
         self.zoom_overlay(ctx);
+        self.properties_window(ctx);
+        self.draft_window(ctx);
         if !self.render_status.is_empty() {
             let message = std::mem::take(&mut self.render_status);
             self.toast(ctx, message);
@@ -1475,10 +2519,11 @@ fn icon_pill(
     draw: IconFn,
     chevron: bool,
     primary: bool,
+    selected: bool,
 ) -> egui::Response {
     let width = if chevron { 38.0 } else { 30.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 26.0), Sense::click());
-    if primary {
+    if primary || selected {
         ui.painter().rect_filled(rect, Rounding::same(6.0), ACCENT);
     } else if resp.hovered() {
         ui.painter().rect_filled(rect, Rounding::same(6.0), HOVER_BG);
@@ -1733,4 +2778,135 @@ fn icon_layout(p: &Painter, r: Rect, c: Color32) {
 // Icônes d'application (fichiers, zoom, gestion de pages).
 fn icon_minus(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::MINUS);
+}
+
+/// Libellé anglais d'un type d'annotation (le cœur est en français).
+fn annot_label(kind: AnnotationKind) -> &'static str {
+    match kind {
+        AnnotationKind::Highlight => "Highlight",
+        AnnotationKind::Underline => "Underline",
+        AnnotationKind::StrikeOut => "Strikeout",
+        AnnotationKind::Squiggly => "Squiggly",
+        AnnotationKind::Note => "Note",
+        AnnotationKind::FreeText => "Text",
+        AnnotationKind::Square => "Rectangle",
+        AnnotationKind::Circle => "Circle",
+        AnnotationKind::Line => "Line",
+        AnnotationKind::Arrow => "Arrow",
+        AnnotationKind::Ink => "Ink",
+        AnnotationKind::Stamp => "Stamp",
+        AnnotationKind::Link => "Link",
+        AnnotationKind::FileAttachment => "Attachment",
+    }
+}
+
+/// Dessine les annotations d'une page ; coordonnées PDF → écran.
+fn draw_annots(
+    painter: &Painter,
+    tab: &Tab,
+    page: u32,
+    page_rect: Rect,
+    scale: f32,
+    selected: Option<usize>,
+) {
+    for (idx, annot) in tab.annots.iter().enumerate() {
+        if annot.page != page as usize {
+            continue;
+        }
+        let to_screen =
+            |x: f32, y: f32| pos2(page_rect.min.x + x * scale, page_rect.max.y - y * scale);
+        let r = Rect::from_two_pos(
+            to_screen(annot.rect[0], annot.rect[1]),
+            to_screen(annot.rect[2], annot.rect[3]),
+        );
+        let color = Color32::from_rgb(
+            annot.style.color[0],
+            annot.style.color[1],
+            annot.style.color[2],
+        );
+        let alpha = (annot.style.opacity.clamp(0.05, 1.0) * 255.0) as u8;
+        let fill = Color32::from_rgba_unmultiplied(
+            annot.style.color[0],
+            annot.style.color[1],
+            annot.style.color[2],
+            alpha,
+        );
+        let width = (annot.style.line_width * scale.max(0.3)).max(1.0);
+        let font = (annot.style.font_size * scale).clamp(6.0, 48.0);
+
+        match annot.kind {
+            AnnotationKind::Highlight | AnnotationKind::Squiggly => {
+                painter.rect_filled(r, Rounding::same(2.0), fill);
+            }
+            AnnotationKind::Underline => {
+                painter.line_segment(
+                    [pos2(r.min.x, r.max.y), pos2(r.max.x, r.max.y)],
+                    Stroke::new(width, color),
+                );
+            }
+            AnnotationKind::StrikeOut => {
+                painter.line_segment(
+                    [pos2(r.min.x, r.center().y), pos2(r.max.x, r.center().y)],
+                    Stroke::new(width, color),
+                );
+            }
+            AnnotationKind::Ink => {
+                for stroke in &annot.ink_points {
+                    if stroke.len() < 2 {
+                        continue;
+                    }
+                    let pts: Vec<egui::Pos2> =
+                        stroke.iter().map(|p| to_screen(p[0], p[1])).collect();
+                    painter.add(Shape::line(pts, Stroke::new(width, color)));
+                }
+            }
+            AnnotationKind::Note => {
+                painter.rect_filled(r, Rounding::same(3.0), fill);
+                painter.rect_stroke(
+                    r,
+                    3.0,
+                    Stroke::new(1.0_f32, Color32::from_black_alpha(120)),
+                );
+                painter.text(
+                    r.center(),
+                    Align2::CENTER_CENTER,
+                    "!",
+                    FontId::proportional((font * 0.9).max(8.0)),
+                    Color32::from_black_alpha(200),
+                );
+            }
+            AnnotationKind::Stamp => {
+                painter.rect_stroke(r, 3.0, Stroke::new((2.0 * scale).max(1.0), color));
+                painter.text(
+                    r.center(),
+                    Align2::CENTER_CENTER,
+                    &annot.content,
+                    FontId::proportional(font.max(9.0)),
+                    color,
+                );
+            }
+            AnnotationKind::Link => {
+                painter.line_segment(
+                    [pos2(r.min.x, r.max.y), pos2(r.max.x, r.max.y)],
+                    Stroke::new(1.0_f32, color),
+                );
+            }
+            _ => {
+                painter.rect_stroke(r, 1.0, Stroke::new(width, color));
+                if !annot.content.is_empty() {
+                    painter.text(
+                        r.left_top() + vec2(3.0, 2.0),
+                        Align2::LEFT_TOP,
+                        &annot.content,
+                        FontId::proportional(font.max(8.0)),
+                        color,
+                    );
+                }
+            }
+        }
+
+        if selected == Some(idx) {
+            painter.rect_stroke(r.expand(3.0), 2.0, Stroke::new(1.5_f32, ACCENT));
+        }
+    }
 }
