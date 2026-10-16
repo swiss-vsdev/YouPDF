@@ -724,7 +724,7 @@ fn winansi_byte(c: char) -> Option<u8> {
         return Some(*b);
     }
     let u = c as u32;
-    if u >= 0xA0 && u <= 0xFF {
+    if (0xA0..=0xFF).contains(&u) {
         Some(u as u8)
     } else {
         None

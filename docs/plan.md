@@ -88,4 +88,13 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
 2. i18n framework choice (brief requires no hard-coded strings from first commit; 12+ languages, RTL-ready).
 3. Verify `YouPDF_OLD` compiles as-is before porting (do this on the OLD copy, not in the new repo).
 
+## Session log
+
+- 2026-10-16 (UI pass 2): centered thumbnails; full vector icon set rewritten (rail, pills, tools)
+  plus 20 new tool icons; per-mode toolbars (Comment/Edit/Form/Redact) that replace the mode pills and
+  end with `Close`; `Tools` dropdown with mode entries (`^1`..`^4`) and Organize pages; search panel
+  header with funnel, 4 action buttons, `History` row with clear-all; floating toolbars anchored to the
+  canvas (they shift when a side panel opens, as in the reference); rail button 38 pt; panel 210 pt.
+  Dev helper: `YOUPDF_MODE=0..3` opens the app with that mode active.
+
 
