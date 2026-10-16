@@ -133,6 +133,27 @@ fn rotate_and_delete_pages() {
 }
 
 #[test]
+fn rotation_changes_displayed_page_size() {
+    let bytes = multipage_pdf(2).expect("PDF de test");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+    assert_eq!(doc.page_size(1), (612.0, 792.0), "portrait au départ");
+
+    doc.rotate_pages(&[1], 90).expect("rotation");
+    assert_eq!(
+        doc.page_size(1),
+        (792.0, 612.0),
+        "une page tournée à 90° s'affiche en paysage"
+    );
+    assert_eq!(doc.page_size(2), (612.0, 792.0), "la page 2 est intacte");
+
+    doc.rotate_pages(&[1], 90).expect("rotation");
+    assert_eq!(doc.page_size(1), (612.0, 792.0), "180° : portrait");
+
+    doc.rotate_pages(&[1], 270).expect("rotation");
+    assert_eq!(doc.page_size(1), (792.0, 612.0), "270° : paysage");
+}
+
+#[test]
 fn insert_and_extract_pages() {
     let base = multipage_pdf(2).expect("PDF de base");
     let extra = multipage_pdf(3).expect("PDF à insérer");

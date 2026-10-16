@@ -188,17 +188,30 @@ impl Document {
     /// (documents produits par `cupsfilter`, par exemple).
     ///
     /// Retourne `(595.0, 842.0)` (A4) si aucune boîte exploitable n'existe.
+    ///
+    /// La taille **d'affichage** est renvoyée : `/Rotate` (hérité, comme les
+    /// boîtes) est appliqué, donc une page A4 tournée à 90° mesure 842×595.
+    /// C'est ce que produit aussi le rendu pdfium, qui applique la rotation.
     pub fn page_size(&self, page_number: u32) -> (f32, f32) {
         let Ok(page_id) = self.page_id(page_number) else {
             return (595.0, 842.0);
         };
 
+        let mut rotation = 0_i64;
+        let mut rotation_known = false;
         let mut current = Some(page_id);
         for _ in 0..16 {
             let Some(id) = current else { break };
             let Ok(dict) = self.inner.get_dictionary(id) else {
                 break;
             };
+
+            if !rotation_known {
+                if let Ok(object) = dict.get_deref(b"Rotate", &self.inner) {
+                    rotation = object.as_i64().unwrap_or(0).rem_euclid(360);
+                    rotation_known = true;
+                }
+            }
 
             for key in [b"CropBox".as_slice(), b"MediaBox".as_slice()] {
                 if let Ok(object) = dict.get_deref(key, &self.inner) {
@@ -209,7 +222,7 @@ impl Document {
                             let w = (num(2) - num(0)).abs();
                             let h = (num(3) - num(1)).abs();
                             if w > 0.0 && h > 0.0 {
-                                return (w, h);
+                                return if matches!(rotation, 90 | 270) { (h, w) } else { (w, h) };
                             }
                         }
                     }
@@ -222,7 +235,11 @@ impl Document {
                 .and_then(|parent| parent.as_reference().ok());
         }
 
-        (595.0, 842.0)
+        if matches!(rotation, 90 | 270) {
+            (842.0, 595.0)
+        } else {
+            (595.0, 842.0)
+        }
     }
 
     /// Chemin d'origine, si connu.
