@@ -239,7 +239,7 @@ pub const APPEARANCE_GS_NAME: &str = "YouPdfGS0";
 
 /// Ajoute un littéral PDF `(…)` : échappé pour la syntaxe, encodé WinAnsi
 /// pour la police standard.
-fn push_text_literal(out: &mut Vec<u8>, text: &str) {
+pub(crate) fn push_text_literal(out: &mut Vec<u8>, text: &str) {
     out.push(b'(');
     out.extend_from_slice(&crate::edit::encode_pdf_literal(text));
     out.push(b')');
@@ -1100,7 +1100,7 @@ impl Document {
     }
 
     /// Annotations d'une page, tableau déjà déplié.
-    fn page_annots(&self, page_id: ObjectId) -> Vec<Object> {
+    pub(crate) fn page_annots(&self, page_id: ObjectId) -> Vec<Object> {
         let Ok(page) = self.inner().get_dictionary(page_id) else {
             return Vec::new();
         };
@@ -1118,7 +1118,7 @@ impl Document {
     }
 
     /// Réécrit `/Annots` : la clé disparaît quand il ne reste rien.
-    fn set_page_annots(&mut self, page_id: ObjectId, annots: &[Object]) -> Result<()> {
+    pub(crate) fn set_page_annots(&mut self, page_id: ObjectId, annots: &[Object]) -> Result<()> {
         let page = self
             .inner_mut()
             .get_object_mut(page_id)
@@ -1262,7 +1262,7 @@ impl Document {
     }
 
     /// Crée la police Helvetica des apparences.
-    fn ensure_appearance_font(&mut self) -> Result<ObjectId> {
+    pub(crate) fn ensure_appearance_font(&mut self) -> Result<ObjectId> {
         let font = dictionary! {
             "Type" => Object::Name(b"Font".to_vec()),
             "Subtype" => Object::Name(b"Type1".to_vec()),
