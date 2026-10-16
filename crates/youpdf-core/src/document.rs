@@ -109,6 +109,59 @@ impl PageView {
         }
     }
 
+    /// Inverse de `rotate_fraction` : fraction affichée vers fraction page.
+    fn unrotate_fraction(&self, du: f32, dv: f32) -> (f32, f32) {
+        match self.rotation {
+            90 => (1.0 - dv, du),
+            180 => (1.0 - du, 1.0 - dv),
+            270 => (dv, 1.0 - du),
+            _ => (du, dv),
+        }
+    }
+
+    /// Fraction `0..1` de la boîte visible vers le repère page.
+    fn box_point(&self, du: f32, dv: f32) -> [f32; 2] {
+        let (u, v) = self.unrotate_fraction(du, dv);
+        [self.x + u * self.width, self.y + v * self.height]
+    }
+
+    /// Convertit un point du repère affiché (origine en bas à gauche de la
+    /// boîte visible, rotation appliquée) vers le repère page.
+    pub fn page_point(&self, point: [f32; 2]) -> [f32; 2] {
+        let (width, height) = self.display_size();
+        if width <= 0.0 || height <= 0.0 {
+            return point;
+        }
+        self.box_point(point[0] / width, point[1] / height)
+    }
+
+    /// Convertit un point du repère page vers le repère affiché.
+    pub fn display_point(&self, point: [f32; 2]) -> [f32; 2] {
+        let (u, v) = self.box_fraction(point[0], point[1]);
+        let (du, dv) = self.rotate_fraction(u, v);
+        let (width, height) = self.display_size();
+        [du * width, dv * height]
+    }
+
+    /// Inverse de `display_rect` : rectangle affiché vers rectangle page.
+    ///
+    /// C'est la conversion utilisée quand l'interface pose un rectangle (image,
+    /// champ de formulaire) sur une page tournée.
+    pub fn page_rect(&self, rect: [f32; 4]) -> [f32; 4] {
+        let (width, height) = self.display_size();
+        if width <= 0.0 || height <= 0.0 {
+            return rect;
+        }
+        let a = self.box_point(rect[0] / width, rect[1] / height);
+        let b = self.box_point(rect[2] / width, rect[3] / height);
+        [
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[0].max(b[0]),
+            a[1].max(b[1]),
+        ]
+    }
+
     /// Convertit un rectangle du repère page vers le repère affiché : origine
     /// en bas à gauche de la boîte visible, rotation appliquée.
     pub fn display_rect(&self, rect: [f32; 4]) -> [f32; 4] {
