@@ -4814,33 +4814,33 @@ impl YouPdfApp {
                 ui.set_max_width(460.0);
                 ui.label(
                     RichText::new(
-                        "The band is drawn at the top and at the bottom of the page;                          the page number joins the footer centre.",
+                        "Each band has its own three slots; the page number joins the \
+                         footer centre.",
                     )
                     .size(11.0)
                     .color(MUTED),
                 );
                 ui.add_space(4.0);
-                egui::Grid::new("hf-grid")
-                    .num_columns(3)
-                    .spacing([8.0, 4.0])
-                    .show(ui, |ui| {
-                        ui.label(RichText::new("Left").size(11.0).color(MUTED));
-                        ui.label(RichText::new("Centre").size(11.0).color(MUTED));
-                        ui.label(RichText::new("Right").size(11.0).color(MUTED));
-                        ui.end_row();
-                        ui.add(
-                            TextEdit::singleline(&mut self.header_footer.left).desired_width(140.0),
-                        );
-                        ui.add(
-                            TextEdit::singleline(&mut self.header_footer.center)
-                                .desired_width(140.0),
-                        );
-                        ui.add(
-                            TextEdit::singleline(&mut self.header_footer.right)
-                                .desired_width(140.0),
-                        );
-                        ui.end_row();
-                    });
+                for (label, slots) in [
+                    ("Header", &mut self.header_footer.header),
+                    ("Footer", &mut self.header_footer.footer),
+                ] {
+                    ui.label(RichText::new(label).size(11.5).color(ICON_BRIGHT));
+                    egui::Grid::new(format!("hf-grid-{label}"))
+                        .num_columns(3)
+                        .spacing([8.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("Left").size(11.0).color(MUTED));
+                            ui.label(RichText::new("Centre").size(11.0).color(MUTED));
+                            ui.label(RichText::new("Right").size(11.0).color(MUTED));
+                            ui.end_row();
+                            ui.add(TextEdit::singleline(&mut slots.left).desired_width(140.0));
+                            ui.add(TextEdit::singleline(&mut slots.center).desired_width(140.0));
+                            ui.add(TextEdit::singleline(&mut slots.right).desired_width(140.0));
+                            ui.end_row();
+                        });
+                    ui.add_space(4.0);
+                }
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Page numbers").size(12.0).color(MUTED));
                     for (text, style) in [

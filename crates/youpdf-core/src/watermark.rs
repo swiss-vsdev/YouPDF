@@ -138,15 +138,36 @@ impl Default for Watermark {
     }
 }
 
-/// En-tête et pied de page, avec numérotation facultative.
-#[derive(Debug, Clone)]
-pub struct HeaderFooter {
-    /// Texte à gauche, en-tête et pied de page.
+/// Jeu de textes d'une bande : gauche, centre, droite.
+///
+/// Un en-tête et un pied de page ont chacun le leur : ce ne sont pas les mêmes
+/// textes en haut et en bas.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BandSlots {
+    /// Texte à gauche.
     pub left: String,
     /// Texte centré.
     pub center: String,
     /// Texte à droite.
     pub right: String,
+}
+
+impl BandSlots {
+    /// Vrai si les trois emplacements sont vides (espaces compris).
+    pub fn is_empty(&self) -> bool {
+        self.left.trim().is_empty()
+            && self.center.trim().is_empty()
+            && self.right.trim().is_empty()
+    }
+}
+
+/// En-tête et pied de page, avec numérotation facultative.
+#[derive(Debug, Clone)]
+pub struct HeaderFooter {
+    /// Bande du haut.
+    pub header: BandSlots,
+    /// Bande du bas.
+    pub footer: BandSlots,
     /// Distance au bord de la page, en points.
     pub margin: f32,
     /// Taille de police en points.
@@ -164,9 +185,8 @@ pub struct HeaderFooter {
 impl Default for HeaderFooter {
     fn default() -> Self {
         Self {
-            left: String::new(),
-            center: String::new(),
-            right: String::new(),
+            header: BandSlots::default(),
+            footer: BandSlots::default(),
             margin: 36.0,
             font_size: 10.0,
             page_numbers: None,
@@ -411,14 +431,15 @@ fn header_footer_ops(
     };
 
     // Le numéro rejoint le centre du pied de page.
-    let footer_center = match (&number, hf.center.trim()) {
+    let footer_center = match (&number, hf.footer.center.trim()) {
         (Some(n), "") => n.clone(),
         (Some(n), c) => format!("{c} {n}"),
-        (None, _) => hf.center.clone(),
+        (None, _) => hf.footer.center.clone(),
     };
 
-    let banded = !hf.left.is_empty() || !hf.right.is_empty() || !hf.center.is_empty();
-    if !banded && number.is_none() {
+    let header_band = !hf.header.is_empty();
+    let footer_band = !hf.footer.is_empty() || number.is_some();
+    if !header_band && !footer_band {
         return None;
     }
 
@@ -427,28 +448,30 @@ fn header_footer_ops(
 
     let mut out = Vec::new();
     out.extend_from_slice(b"q\n");
-    if banded {
+    if header_band {
         push_three(
             &mut out,
             size,
             margin,
             height - margin - size,
             width,
-            &hf.left,
-            &hf.center,
-            &hf.right,
+            &hf.header.left,
+            &hf.header.center,
+            &hf.header.right,
         );
     }
-    push_three(
-        &mut out,
-        size,
-        margin,
-        margin,
-        width,
-        &hf.left,
-        &footer_center,
-        &hf.right,
-    );
+    if footer_band {
+        push_three(
+            &mut out,
+            size,
+            margin,
+            margin,
+            width,
+            &hf.footer.left,
+            &footer_center,
+            &hf.footer.right,
+        );
+    }
     out.extend_from_slice(b"Q\n");
     Some(out)
 }
