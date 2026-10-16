@@ -91,6 +91,8 @@ enum MenuAction {
     Save,
     SaveAs,
     ExportText,
+    /// Peint les annotations dans la page et les supprime.
+    Flatten,
     Properties,
     Close,
     /// Change la disposition des pages du canevas.
@@ -568,8 +570,18 @@ impl YouPdfApp {
         }
 
         match Document::open(&path) {
-            Ok(doc) => {
+            Ok(mut doc) => {
                 let title = doc.display_name();
+                // Les annotations YouPDF sortent du document pour la durée de
+                // l'édition : l'interface les dessine, l'onglet les garde,
+                // l'enregistrement les remet en place avec leur apparence.
+                // Sans cette purge, le moteur de rendu les peindrait en même
+                // temps que l'interface et chaque marque apparaîtrait deux
+                // fois.
+                let annots = doc.read_annotations();
+                if !annots.is_empty() && doc.clear_youpdf_annotations().is_err() {
+                    tracing::warn!(path = %path.display(), "purge des annotations impossible");
+                }
                 self.tabs.push(Tab {
                     doc,
                     path: Some(path),
@@ -579,8 +591,8 @@ impl YouPdfApp {
                     zoom_fit_page: false,
                     cache: HashMap::new(),
                     dirty: false,
-                    annots: Vec::new(),
-                    annots_loaded: false,
+                    annots,
+                    annots_loaded: true,
                     undo: Vec::new(),
                     redo: Vec::new(),
                     outline: Vec::new(),
@@ -651,15 +663,10 @@ impl YouPdfApp {
             self.save_as(ctx);
             return;
         };
-        if let Err(err) = self.flush_annots() {
-            self.toast(ctx, format!("Save failed: {err}"));
-            return;
-        }
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };
-        tab.annots_loaded = false;
-        match tab.doc.save(&path) {
+        match tab.doc.save_with_annotations(&path, &tab.annots) {
             Ok(()) => {
                 tab.dirty = false;
                 self.toast(ctx, format!("Saved {}", path.display()));
@@ -685,7 +692,7 @@ impl YouPdfApp {
         else {
             return;
         };
-        match tab.doc.save(&path) {
+        match tab.doc.save_with_annotations(&path, &tab.annots) {
             Ok(()) => {
                 tab.dirty = false;
                 tab.path = Some(path.clone());
@@ -3199,6 +3206,9 @@ impl YouPdfApp {
                             if menu_row(ui, "Export text…", "") {
                                 action = Some(MenuAction::ExportText);
                             }
+                            if menu_row(ui, "Flatten annotations", "") {
+                                action = Some(MenuAction::Flatten);
+                            }
                             ui.add_space(4.0);
                             let sep = ui.cursor().top();
                             ui.painter().hline(
@@ -3257,6 +3267,7 @@ impl YouPdfApp {
                     MenuAction::Save => self.save_active(ctx),
                     MenuAction::SaveAs => self.save_as(ctx),
                     MenuAction::ExportText => self.export_text(ctx),
+                    MenuAction::Flatten => self.flatten_annotations(ctx),
                     MenuAction::Properties => self.props_open = true,
                     MenuAction::Close => {
                         let idx = self.active;
@@ -3267,6 +3278,44 @@ impl YouPdfApp {
                 }
             }
         }
+    }
+
+    /// Peint les annotations dans les pages du document ouvert.
+    ///
+    /// L'opération est définitive pour la session : le dessin devient du
+    /// contenu de page, les annotations disparaissent — y compris de
+    /// l'historique, qui ne saurait plus les remettre en état sans les
+    /// réintroduire dans le PDF au moment de l'enregistrement.
+    fn flatten_annotations(&mut self, ctx: &egui::Context) {
+        // Les annotations vivent dans l'onglet jusqu'à l'enregistrement : il
+        // faut d'abord les écrire dans le document pour pouvoir les aplatir.
+        if let Err(err) = self.flush_annots() {
+            self.toast(ctx, format!("Flatten failed: {err}"));
+            return;
+        }
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let result = tab.doc.flatten_annotations();
+        let count = match result {
+            Ok(count) => count,
+            Err(err) => {
+                self.toast(ctx, format!("Flatten failed: {err}"));
+                return;
+            }
+        };
+        if count == 0 {
+            self.toast(ctx, "Nothing to flatten");
+            return;
+        }
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.annots.clear();
+            tab.annots_loaded = true;
+        }
+        self.selected_annot = 0;
+        self.has_annot_selection = false;
+        self.mark_document_changed();
+        self.toast(ctx, format!("{count} annotation(s) flattened"));
     }
 
     /// Change la disposition des pages et ramène la page courante sous les

@@ -231,6 +231,270 @@ pub struct Annotation {
     pub created_at: String,
 }
 
+/// Nom de la police des apparences (Helvetica standard).
+pub const APPEARANCE_FONT_NAME: &str = "YouPdfF1";
+
+/// Nom de l'état graphique des apparences (transparence du surlignage).
+pub const APPEARANCE_GS_NAME: &str = "YouPdfGS0";
+
+/// Ajoute un littéral PDF `(…)` : échappé pour la syntaxe, encodé WinAnsi
+/// pour la police standard.
+fn push_text_literal(out: &mut Vec<u8>, text: &str) {
+    out.push(b'(');
+    out.extend_from_slice(&crate::edit::encode_pdf_literal(text));
+    out.push(b')');
+}
+
+/// Boîte d'un flux de formulaire (`/BBox`). Sans boîte, la taille de
+/// l'apparence est indéterminée.
+fn form_bbox(stream: &Stream) -> Option<[f32; 4]> {
+    let bbox = stream.dict.get(b"BBox").ok()?.as_array().ok()?;
+    if bbox.len() != 4 {
+        return None;
+    }
+    let mut out = [0.0f32; 4];
+    for (i, obj) in bbox.iter().enumerate() {
+        out[i] = obj.as_float().ok()?;
+    }
+    Some(out)
+}
+
+/// Apparence d'une annotation prête à peindre dans une page.
+struct Paintable {
+    /// Nom de ressource unique dans `/Resources /XObject`.
+    name: String,
+    /// Flux d'apparence (référence, ou copie si le flux était en ligne).
+    stream: Object,
+    /// Matrice `cm` qui amène la boîte du flux sur le `/Rect`.
+    matrix: [f32; 6],
+}
+
+impl Annotation {
+    /// Coin bas-gauche et dimensions du rectangle. Un `/Rect` PDF peut
+    /// arriver avec ses coins dans n'importe quel ordre.
+    pub fn frame(&self) -> (f32, f32, f32, f32) {
+        (
+            self.rect[0].min(self.rect[2]),
+            self.rect[1].min(self.rect[3]),
+            (self.rect[2] - self.rect[0]).abs(),
+            (self.rect[3] - self.rect[1]).abs(),
+        )
+    }
+
+    /// Contenu de l'apparence (`/AP /N`) dans le repère local de
+    /// l'annotation : origine au coin bas-gauche du `Rect`, axe Y vers le
+    /// haut, unités PDF. Le lecteur pose cette apparence sur le `Rect`.
+    ///
+    /// Renvoie `None` quand il n'y a rien à dessiner : un lien est
+    /// invisible, et lecteurs dessinent eux-mêmes l'icône des notes et des
+    /// pièces jointes. Sans apparence, les autres lecteurs n'afficheraient
+    /// rien du tout pour les autres types.
+    pub fn appearance_content(&self) -> Option<Vec<u8>> {
+        let (_x1, _y1, w, h) = self.frame();
+        if w <= 0.5 || h <= 0.5 {
+            return None;
+        }
+        let [r, g, b] = self.style.color;
+        let (rf, gf, bf) = (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+        let stroke = format!("{rf:.3} {gf:.3} {bf:.3} RG");
+        let fill = format!("{rf:.3} {gf:.3} {bf:.3} rg");
+        let lw = self.style.line_width.clamp(0.5, 12.0);
+        let gs = format!("q /{APPEARANCE_GS_NAME} gs ");
+        let mut c: Vec<u8> = Vec::new();
+
+        match self.kind {
+            AnnotationKind::Link | AnnotationKind::Note | AnnotationKind::FileAttachment => {
+                return None
+            }
+
+            // Le surlignage est une bande translucide ; le zigzag se dessine
+            // plus bas, comme un souligné ondulé.
+            AnnotationKind::Highlight => {
+                c.extend_from_slice(
+                    format!("{gs}{fill} 0 0 {w:.2} {h:.2} re f Q\n").as_bytes(),
+                );
+            }
+            AnnotationKind::Underline => {
+                let y = (lw * 0.6).min(h / 2.0);
+                c.extend_from_slice(
+                    format!("q {stroke} {lw:.2} w 0 {y:.2} m {w:.2} {y:.2} l S Q\n").as_bytes(),
+                );
+            }
+            AnnotationKind::StrikeOut => {
+                let y = h / 2.0;
+                c.extend_from_slice(
+                    format!("q {stroke} {lw:.2} w 0 {y:.2} m {w:.2} {y:.2} l S Q\n").as_bytes(),
+                );
+            }
+            AnnotationKind::Squiggly => {
+                let amp = 2.0_f32.min(h / 3.0);
+                c.extend_from_slice(
+                    format!("q {stroke} {lw:.2} w 1 J 1 j 0 {amp:.2} m").as_bytes(),
+                );
+                let mut x = 0.0_f32;
+                let mut up = true;
+                while x < w {
+                    x = (x + 2.0).min(w);
+                    let y = if up { amp * 2.0 } else { 0.0 };
+                    c.extend_from_slice(format!(" {x:.2} {y:.2} l").as_bytes());
+                    up = !up;
+                }
+                c.extend_from_slice(b" S Q\n");
+            }
+
+            AnnotationKind::FreeText => {
+                let size = self.style.font_size.clamp(4.0, 72.0);
+                let leading = size * 1.2;
+                c.extend_from_slice(
+                    format!(
+                        "{gs}BT /{APPEARANCE_FONT_NAME} {size:.2} Tf {fill} {leading:.2} TL \
+                         2 {:.2} Td\n",
+                        (h - size - 2.0).max(1.0)
+                    )
+                    .as_bytes(),
+                );
+                for line in self.content.lines() {
+                    push_text_literal(&mut c, line);
+                    c.extend_from_slice(b" Tj T*\n");
+                }
+                c.extend_from_slice(b"ET Q\n");
+            }
+
+            AnnotationKind::Square => {
+                let inset = lw / 2.0;
+                c.extend_from_slice(
+                    format!(
+                        "q {stroke} {lw:.2} w {inset:.2} {inset:.2} {:.2} {:.2} re S Q\n",
+                        (w - lw).max(0.1),
+                        (h - lw).max(0.1)
+                    )
+                    .as_bytes(),
+                );
+            }
+            AnnotationKind::Circle => {
+                // Ellipse : quatre courbes de Bézier, constante 0.5523.
+                let (rx, ry) = ((w - lw) / 2.0, (h - lw) / 2.0);
+                let (cx, cy) = (w / 2.0, h / 2.0);
+                let (kx, ky) = (rx * 0.5523, ry * 0.5523);
+                let quad = |x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32| {
+                    format!("{x1:.2} {y1:.2} {x2:.2} {y2:.2} {x3:.2} {y3:.2} c ")
+                };
+                let mut path = format!("q {stroke} {lw:.2} w {:.2} {:.2} m ", cx + rx, cy);
+                path.push_str(&quad(cx + rx, cy + ky, cx + kx, cy + ry, cx, cy + ry));
+                path.push_str(&quad(cx - kx, cy + ry, cx - rx, cy + ky, cx - rx, cy));
+                path.push_str(&quad(cx - rx, cy - ky, cx - kx, cy - ry, cx, cy - ry));
+                path.push_str(&quad(cx + kx, cy - ry, cx + rx, cy - ky, cx + rx, cy));
+                path.push_str(" h S Q\n");
+                c.extend_from_slice(path.as_bytes());
+            }
+
+            AnnotationKind::Line | AnnotationKind::Arrow => {
+                let (x1, y1, _w, _h) = self.frame();
+                let fallback = vec![[self.rect[0], self.rect[1]], [self.rect[2], self.rect[3]]];
+                let pts = if self.ink_points.first().map_or(0, |p| p.len()) >= 2 {
+                    self.ink_points.first().cloned().unwrap_or(fallback)
+                } else {
+                    fallback
+                };
+                let a = pts[0];
+                let b = pts[1];
+                let (ax, ay) = (a[0] - x1, a[1] - y1);
+                let (bx, by) = (b[0] - x1, b[1] - y1);
+                c.extend_from_slice(
+                    format!(
+                        "q {stroke} {lw:.2} w 0 J {ax:.2} {ay:.2} m {bx:.2} {by:.2} l S"
+                    )
+                    .as_bytes(),
+                );
+                if self.kind == AnnotationKind::Arrow {
+                    let (dx, dy) = (bx - ax, by - ay);
+                    let len = (dx * dx + dy * dy).sqrt().max(0.01);
+                    let head = (len * 0.2).clamp(5.0, 14.0);
+                    let (ux, uy) = (dx / len, dy / len);
+                    let (px, py) = (-uy, ux);
+                    let (hx, hy) = (bx - ux * head, by - uy * head);
+                    let half = head * 0.45;
+                    c.extend_from_slice(
+                        format!(
+                            " {fill} {bx:.2} {by:.2} m {:.2} {:.2} l {:.2} {:.2} l f",
+                            hx + px * half,
+                            hy + py * half,
+                            hx - px * half,
+                            hy - py * half
+                        )
+                        .as_bytes(),
+                    );
+                }
+                c.extend_from_slice(b" Q\n");
+            }
+
+            AnnotationKind::Ink => {
+                let (x1, y1, _w, _h) = self.frame();
+                c.extend_from_slice(
+                    format!("{gs}{stroke} {lw:.2} w 1 J 1 j ").as_bytes(),
+                );
+                for stroke in &self.ink_points {
+                    if stroke.len() < 2 {
+                        continue;
+                    }
+                    let mut first = true;
+                    for p in stroke {
+                        let (x, y) = (p[0] - x1, p[1] - y1);
+                        if first {
+                            c.extend_from_slice(format!("{x:.2} {y:.2} m ").as_bytes());
+                            first = false;
+                        } else {
+                            c.extend_from_slice(format!("{x:.2} {y:.2} l ").as_bytes());
+                        }
+                    }
+                }
+                c.extend_from_slice(b"S Q\n");
+            }
+
+            AnnotationKind::Stamp => {
+                let size = self.style.font_size.clamp(6.0, 48.0);
+                let chars = self.content.chars().count() as f32;
+                // Largeur approchée de l'Helvetica (0.5 cadratin par
+                // caractère) : le centrage ne peut pas être mesuré sans
+                // analyser la police.
+                let text_w = chars * size * 0.5;
+                let (x, y) = (((w - text_w) / 2.0).max(2.0), (h / 2.0) - size * 0.35);
+                c.extend_from_slice(
+                    format!(
+                        "q {stroke} {lw:.2} w 0 0 {w:.2} {h:.2} re S\n\
+                         BT /{APPEARANCE_FONT_NAME} {size:.2} Tf {fill} 1 0 0 1 {x:.2} {y:.2} Tm\n"
+                    )
+                    .as_bytes(),
+                );
+                push_text_literal(&mut c, &self.content);
+                c.extend_from_slice(b" Tj ET Q\n");
+            }
+        }
+
+        Some(c)
+    }
+
+    /// Ressources référencées par [`Self::appearance_content`] : Helvetica
+    /// pour le texte, état graphique pour la transparence.
+    pub fn appearance_resources(&self, font: Object) -> Dictionary {
+        let mut gs = Dictionary::new();
+        gs.set("Type", Object::Name(b"ExtGState".to_vec()));
+        gs.set("ca", Object::Real(self.style.opacity.clamp(0.05, 1.0)));
+        gs.set("CA", Object::Real(1.0));
+
+        let mut gstates = Dictionary::new();
+        gstates.set(APPEARANCE_GS_NAME, Object::Dictionary(gs));
+
+        let mut fonts = Dictionary::new();
+        fonts.set(APPEARANCE_FONT_NAME, font);
+
+        let mut res = Dictionary::new();
+        res.set("Font", Object::Dictionary(fonts));
+        res.set("ExtGState", Object::Dictionary(gstates));
+        res
+    }
+}
+
 impl Annotation {
     /// Crée une annotation avec un identifiant unique généré.
     pub fn new(page: usize, kind: AnnotationKind, rect: [f32; 4]) -> Self {
@@ -550,6 +814,29 @@ impl Document {
         out
     }
 
+    /// Enregistre le document en y ajoutant `annots`.
+    ///
+    /// Les annotations en cours d'édition vivent hors du document : c'est au
+    /// moment d'écrire le fichier qu'elles y prennent place, apparence
+    /// comprise. L'état en mémoire est rendu tel qu'il était — sans quoi le
+    /// moteur de rendu les peindrait lui-même, en plus du dessin de
+    /// l'interface, et chaque marque apparaîtrait deux fois.
+    pub fn save_with_annotations(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+        annots: &[Annotation],
+    ) -> Result<()> {
+        if !annots.is_empty() {
+            self.apply_annotations(annots)?;
+        }
+        let saved = self.save(path);
+        // Même si l'écriture a échoué, le document ne doit pas rester dans
+        // l'état « annotations posées » : l'interface dessine à partir de la
+        // liste de l'onglet, pas du document.
+        let cleared = self.clear_youpdf_annotations();
+        saved.and(cleared)
+    }
+
     /// Applique un ensemble d'annotations au document.
     ///
     /// **Idempotent** : les annotations préfixées `youpdf-` déjà présentes
@@ -574,6 +861,8 @@ impl Document {
 
             // Créer les objets annotation.
             let mut annot_refs: Vec<Object> = Vec::new();
+            // Police des apparences : créée une fois pour tout l'appel.
+            let mut appearance_font: Option<Object> = None;
             for ann in anns {
                 let mut dict = ann.to_pdf_dict();
 
@@ -582,6 +871,39 @@ impl Document {
                     if let Some(fs) = self.build_embedded_file(&ann.content)? {
                         dict.set("FS", fs);
                     }
+                }
+
+                // Apparence : sans `/AP`, les autres lecteurs n'affichent
+                // rien. YouPDF dessine les siennes à l'écran, mais un PDF
+                // partagé doit se voir partout.
+                if let Some(content) = ann.appearance_content() {
+                    let (_, _, w, h) = ann.frame();
+                    let font = match &appearance_font {
+                        Some(font) => font.clone(),
+                        None => {
+                            let font = Object::Reference(self.ensure_appearance_font()?);
+                            appearance_font = Some(font.clone());
+                            font
+                        }
+                    };
+                    let mut xobject = Dictionary::new();
+                    xobject.set("Type", Object::Name(b"XObject".to_vec()));
+                    xobject.set("Subtype", Object::Name(b"Form".to_vec()));
+                    xobject.set("FormType", Object::Integer(1));
+                    xobject.set(
+                        "BBox",
+                        Object::Array(vec![
+                            Object::Real(0.0),
+                            Object::Real(0.0),
+                            Object::Real(w),
+                            Object::Real(h),
+                        ]),
+                    );
+                    xobject.set("Resources", Object::Dictionary(ann.appearance_resources(font)));
+                    let stream_id = self.inner_mut().add_object(Stream::new(xobject, content));
+                    let mut ap = Dictionary::new();
+                    ap.set("N", Object::Reference(stream_id));
+                    dict.set("AP", Object::Dictionary(ap));
                 }
 
                 let id = self.inner_mut().add_object(Object::Dictionary(dict));
@@ -654,8 +976,12 @@ impl Document {
         Ok(Some(Object::Reference(fs_id)))
     }
 
-    /// Supprime toutes les annotations préfixées `youpdf-`.
-    fn clear_youpdf_annotations(&mut self) -> Result<()> {
+    /// Supprime du document toutes les annotations préfixées `youpdf-`.
+    ///
+    /// Sert à sortir les annotations du document pour les éditer : elles
+    /// reviennent dans le fichier écrit par [`Self::save_with_annotations`].
+    /// Les annotations des autres producteurs ne sont pas touchées.
+    pub fn clear_youpdf_annotations(&mut self) -> Result<()> {
         let pages = self.inner().get_pages();
         // (page_id, annotations à conserver) — liste déjà filtrée au
         // premier passage, réécrite telle quelle au second.
@@ -708,6 +1034,242 @@ impl Document {
         }
 
         Ok(())
+    }
+
+    /// Aplatit les annotations dans le contenu des pages.
+    ///
+    /// Chaque annotation dont l'apparence (`/AP /N`) est un flux de
+    /// formulaire est peinte dans la page par-dessus le contenu existant,
+    /// puis retirée de `/Annots`. Les annotations sans apparence exploitable
+    /// — liens, et ce que d'autres outils laissent sans `/AP` — restent en
+    /// place : les aplatir effacerait un dessin que seul le lecteur sait
+    /// produire.
+    ///
+    /// Renvoie le nombre d'annotations réellement aplaties.
+    pub fn flatten_annotations(&mut self) -> Result<usize> {
+        let pages = self.inner().get_pages();
+        let mut flattened = 0usize;
+
+        for (_page_num, page_id) in pages {
+            let annots = self.page_annots(page_id);
+            if annots.is_empty() {
+                continue;
+            }
+
+            let mut kept: Vec<Object> = Vec::new();
+            let mut painted: Vec<Paintable> = Vec::new();
+            for annot_ref in annots {
+                match self.paintable_for(&annot_ref, painted.len()) {
+                    Some(appearance) => painted.push(appearance),
+                    None => kept.push(annot_ref),
+                }
+            }
+            if painted.is_empty() {
+                continue;
+            }
+
+            // Les apparences sont ajoutées à la fin du contenu : dans un
+            // lecteur, une annotation se dessine par-dessus la page.
+            let mut ops: Vec<u8> = Vec::new();
+            let mut xobjects = Dictionary::new();
+            for appearance in &painted {
+                let [a, b, c, d, e, f] = appearance.matrix;
+                ops.extend_from_slice(
+                    format!(
+                        "q {a:.4} {b:.4} {c:.4} {d:.4} {e:.2} {f:.2} cm /{} Do Q\n",
+                        appearance.name
+                    )
+                    .as_bytes(),
+                );
+                xobjects.set(appearance.name.as_str(), appearance.stream.clone());
+            }
+
+            let stream_id = self
+                .inner_mut()
+                .add_object(Stream::new(Dictionary::new(), ops));
+            self.add_page_xobjects(page_id, &xobjects)?;
+            self.append_page_content(page_id, stream_id)?;
+            self.set_page_annots(page_id, &kept)?;
+            flattened += painted.len();
+        }
+
+        if flattened > 0 {
+            tracing::info!(flattened, "annotations aplaties dans les pages");
+        }
+        Ok(flattened)
+    }
+
+    /// Annotations d'une page, tableau déjà déplié.
+    fn page_annots(&self, page_id: ObjectId) -> Vec<Object> {
+        let Ok(page) = self.inner().get_dictionary(page_id) else {
+            return Vec::new();
+        };
+        match page.get(b"Annots") {
+            Ok(Object::Array(arr)) => arr.clone(),
+            Ok(Object::Reference(id)) => self
+                .inner()
+                .get_object(*id)
+                .ok()
+                .and_then(|o| o.as_array().ok())
+                .cloned()
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Réécrit `/Annots` : la clé disparaît quand il ne reste rien.
+    fn set_page_annots(&mut self, page_id: ObjectId, annots: &[Object]) -> Result<()> {
+        let page = self
+            .inner_mut()
+            .get_object_mut(page_id)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let dict = page
+            .as_dict_mut()
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        if annots.is_empty() {
+            dict.remove(b"Annots");
+        } else {
+            dict.set("Annots", Object::Array(annots.to_vec()));
+        }
+        Ok(())
+    }
+
+    /// Déplie l'apparence d'une annotation, si elle est peignable.
+    fn paintable_for(&mut self, annot_ref: &Object, index: usize) -> Option<Paintable> {
+        let dict = match annot_ref {
+            Object::Reference(id) => self.inner().get_dictionary(*id).ok()?.clone(),
+            Object::Dictionary(d) => d.clone(),
+            _ => return None,
+        };
+
+        // Sans `/Rect` exploitable, il n'y a pas de place où peindre.
+        let rect = dict.get(b"Rect").ok()?.as_array().ok()?;
+        if rect.len() != 4 {
+            return None;
+        }
+        let mut r = [0.0f32; 4];
+        for (i, obj) in rect.iter().enumerate() {
+            r[i] = obj.as_float().ok()?;
+        }
+        if (r[2] - r[0]).abs() < 0.5 || (r[3] - r[1]).abs() < 0.5 {
+            return None;
+        }
+
+        // `/AP /N` doit être un flux de formulaire. Un dictionnaire d'états
+        // (cases à cocher, boutons radio) demande de choisir l'état courant :
+        // ces annotations restent en place.
+        let ap = match dict.get(b"AP").ok()? {
+            Object::Reference(id) => self.inner().get_dictionary(*id).ok()?.clone(),
+            Object::Dictionary(d) => d.clone(),
+            _ => return None,
+        };
+        let (stream, bbox) = match ap.get(b"N").ok()?.clone() {
+            Object::Reference(id) => {
+                let stream = self.inner().get_object(id).ok()?.as_stream().ok()?.clone();
+                (Object::Reference(id), form_bbox(&stream)?)
+            }
+            Object::Stream(stream) => {
+                let bbox = form_bbox(&stream)?;
+                let id = self.inner_mut().add_object(stream);
+                (Object::Reference(id), bbox)
+            }
+            _ => return None,
+        };
+
+        let bw = (bbox[2] - bbox[0]).max(0.5);
+        let bh = (bbox[3] - bbox[1]).max(0.5);
+        let sx = (r[2] - r[0]).abs() / bw;
+        let sy = (r[3] - r[1]).abs() / bh;
+        let tx = r[0].min(r[2]) - bbox[0].min(bbox[2]) * sx;
+        let ty = r[1].min(r[3]) - bbox[1].min(bbox[3]) * sy;
+        Some(Paintable {
+            name: format!("YouPdfFlat{index}"),
+            stream,
+            matrix: [sx, 0.0, 0.0, sy, tx, ty],
+        })
+    }
+
+    /// Ajoute des XObjects aux ressources d'une page.
+    fn add_page_xobjects(&mut self, page_id: ObjectId, xobjects: &Dictionary) -> Result<()> {
+        let mut resources = self.read_page_resources(page_id)?;
+        let mut existing = resources
+            .get(b"XObject")
+            .ok()
+            .and_then(|o| o.as_dict().ok())
+            .cloned()
+            .unwrap_or_default();
+        for (name, obj) in xobjects.iter() {
+            existing.set(name.to_vec(), obj.clone());
+        }
+        resources.set("XObject", Object::Dictionary(existing));
+        self.write_page_resources(page_id, resources)
+    }
+
+    /// Ressources d'une page, résolues en dictionnaire direct.
+    fn read_page_resources(&self, page_id: ObjectId) -> Result<Dictionary> {
+        let page = self
+            .inner()
+            .get_dictionary(page_id)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        match page.get(b"Resources") {
+            Ok(Object::Dictionary(d)) => Ok(d.clone()),
+            Ok(Object::Reference(id)) => Ok(self
+                .inner()
+                .get_dictionary(*id)
+                .map_err(|e| Error::Pdf(format!("ressources : {e}")))?
+                .clone()),
+            _ => Ok(Dictionary::new()),
+        }
+    }
+
+    /// Écrit les ressources d'une page.
+    fn write_page_resources(&mut self, page_id: ObjectId, resources: Dictionary) -> Result<()> {
+        let page = self
+            .inner_mut()
+            .get_object_mut(page_id)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let dict = page
+            .as_dict_mut()
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        dict.set("Resources", Object::Dictionary(resources));
+        Ok(())
+    }
+
+    /// Concatène un flux à la fin du contenu d'une page.
+    fn append_page_content(&mut self, page_id: ObjectId, stream_id: ObjectId) -> Result<()> {
+        let page = self
+            .inner_mut()
+            .get_object_mut(page_id)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let dict = page
+            .as_dict_mut()
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        match dict.get_mut(b"Contents") {
+            Ok(Object::Reference(id)) => {
+                let existing = *id;
+                dict.set(
+                    "Contents",
+                    Object::Array(vec![
+                        Object::Reference(existing),
+                        Object::Reference(stream_id),
+                    ]),
+                );
+            }
+            Ok(Object::Array(arr)) => arr.push(Object::Reference(stream_id)),
+            _ => dict.set("Contents", Object::Reference(stream_id)),
+        }
+        Ok(())
+    }
+
+    /// Crée la police Helvetica des apparences.
+    fn ensure_appearance_font(&mut self) -> Result<ObjectId> {
+        let font = dictionary! {
+            "Type" => Object::Name(b"Font".to_vec()),
+            "Subtype" => Object::Name(b"Type1".to_vec()),
+            "BaseFont" => Object::Name(b"Helvetica".to_vec()),
+            "Encoding" => Object::Name(b"WinAnsiEncoding".to_vec()),
+        };
+        Ok(self.inner_mut().add_object(Object::Dictionary(font)))
     }
 }
 
