@@ -21,7 +21,7 @@ use youpdf_core::render::NullRenderer;
 use youpdf_core::{
     fold_case, Annotation, AnnotationKind, AnnotationStyle, AttachmentInfo, Document,
     FormField, FormFieldKind, OutlineItem, PdfiumRenderer, RedactionRegion, RenderOptions,
-    Renderer, SearchIndex, SearchOptions, SearchResult, STAMP_NAMES,
+    Renderer, SearchIndex, SearchOptions, SearchResult, TextFragment, STAMP_NAMES,
 };
 
 // --------------------------------------------------------------------------
@@ -274,6 +274,15 @@ struct TextDraft {
     fresh: bool,
 }
 
+/// Édition en cours du texte d'un bloc de la page (mode Édition).
+struct EditTextDraft {
+    /// Bloc touché, tel qu'extrait du document.
+    fragment: TextFragment,
+    buffer: String,
+    /// Premier affichage : demande le focus clavier.
+    fresh: bool,
+}
+
 /// Ce que fait un outil sur le canevas.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ToolAction {
@@ -288,6 +297,10 @@ enum ToolAction {
     Select,
     /// Glissé d'une zone à caviarder.
     RedactRect,
+    /// Clic sur un bloc de texte à réécrire (mode Édition).
+    EditText,
+    /// Clic pour poser une image (modes Comment et Édition).
+    InsertImage,
 }
 
 /// Couleurs de préréglage proposées dans la popup.
@@ -331,6 +344,9 @@ struct Tab {
     forms: Vec<FormField>,
     /// Pièces jointes du document.
     attachments: Vec<AttachmentInfo>,
+    /// Fragments de texte de chaque page, extraits à la demande pour
+    /// l'outil Texte du mode Édition.
+    fragments: HashMap<u32, Vec<TextFragment>>,
     /// Vrai quand plan, formulaires et pièces jointes ont été lus.
     structure_loaded: bool,
 }
@@ -429,6 +445,8 @@ pub struct YouPdfApp {
     redact_regions: Vec<RedactionRegion>,
     /// Fenêtre de confirmation du caviardage.
     redact_modal: bool,
+    /// Bloc de texte en cours de réécriture (mode Édition).
+    edit_text: Option<EditTextDraft>,
     /// Nettoyer les métadonnées en même temps que le caviardage.
     redact_sanitize: bool,
     /// Champ de formulaire sélectionné et saisie en cours.
@@ -513,6 +531,7 @@ impl YouPdfApp {
             replace_text: String::new(),
             redact_regions: Vec::new(),
             redact_modal: false,
+            edit_text: None,
             redact_sanitize: true,
             form_edit: None,
             canvas_style: 0,
@@ -604,6 +623,7 @@ impl YouPdfApp {
                     outline: Vec::new(),
                     forms: Vec::new(),
                     attachments: Vec::new(),
+                    fragments: HashMap::new(),
                     structure_loaded: false,
                 });
                 self.active = self.tabs.len() - 1;
@@ -1253,11 +1273,26 @@ impl YouPdfApp {
 
     /// Action du canevas selon le mode et l'outil choisi.
     fn canvas_action(&self) -> ToolAction {
+        // Tant qu'un bloc est ouvert à la réécriture, le canevas ne réagit
+        // plus : les clics reviennent au champ posé sur la page.
+        if self.edit_text.is_some() {
+            return ToolAction::None;
+        }
         if self.mode == Some(3) {
             return if self.annot_tool == Some(1) {
                 ToolAction::RedactRect
             } else {
                 ToolAction::None
+            };
+        }
+        if self.mode == Some(1) {
+            // Mode Édition : on touche au contenu de la page, pas aux
+            // annotations.
+            return match self.annot_tool {
+                Some(1) => ToolAction::EditText,
+                Some(2) => ToolAction::InsertImage,
+                Some(3) => ToolAction::Click(AnnotationKind::Link),
+                _ => ToolAction::None,
             };
         }
         if self.mode != Some(0) {
@@ -1270,6 +1305,7 @@ impl YouPdfApp {
             Some(3) => ToolAction::Click(AnnotationKind::Note),
             Some(4) => ToolAction::Ink,
             Some(5) => ToolAction::DragRect(self.shape),
+            Some(6) => ToolAction::InsertImage,
             Some(7) => ToolAction::Click(AnnotationKind::Link),
             Some(8) => ToolAction::Click(AnnotationKind::Stamp),
             Some(9) => ToolAction::Click(AnnotationKind::FreeText),
@@ -1431,6 +1467,143 @@ impl YouPdfApp {
     }
 
     /// Fenêtre de saisie du brouillon (texte, note, lien, signature).
+    /// Extrait le texte des pages visibles, une fois par page.
+    fn ensure_fragments(&mut self) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let total = tab.total() as u32;
+        let current = tab.page as u32;
+        let mut pages: Vec<u32> = page_layout_rows(self.page_layout, total, current)
+            .into_iter()
+            .find(|row| row.contains(&current))
+            .unwrap_or_default();
+        if pages.is_empty() {
+            pages.push(current);
+        }
+        let missing: Vec<u32> = pages
+            .iter()
+            .copied()
+            .filter(|page| !tab.fragments.contains_key(page))
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        for page in missing {
+            match tab.doc.extract_text_fragments(page) {
+                Ok(frags) => {
+                    tab.fragments.insert(page, frags);
+                }
+                Err(err) => {
+                    tracing::warn!(%err, page, "extraction du texte de la page");
+                    tab.fragments.insert(page, Vec::new());
+                }
+            }
+        }
+    }
+
+    /// Ouvre la réécriture du bloc de texte touché.
+    fn edit_text_at(&mut self, page: usize, point: [f32; 2], ctx: &egui::Context) {
+        self.ensure_fragments();
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let found = tab.fragments.get(&(page as u32)).and_then(|frags| {
+            frags
+                .iter()
+                .find(|frag| {
+                    let [x1, y1, x2, y2] = frag.rect;
+                    point[0] >= x1 - 2.0
+                        && point[0] <= x2 + 2.0
+                        && point[1] >= y1 - 2.0
+                        && point[1] <= y2 + 2.0
+                })
+                .cloned()
+        });
+        match found {
+            Some(fragment) => {
+                self.edit_text = Some(EditTextDraft {
+                    // Réécriture sur place : on part du texte existant, le
+                    // curseur à la fin, comme dans un traitement de texte.
+                    buffer: fragment.text.clone(),
+                    fresh: true,
+                    fragment,
+                });
+            }
+            None => self.toast(ctx, "Click inside a text block"),
+        }
+    }
+
+    /// Réécrit le texte du bloc en cours d'édition.
+    fn replace_fragment(&mut self, ctx: &egui::Context) {
+        let Some(draft) = self.edit_text.take() else {
+            return;
+        };
+        if draft.buffer == draft.fragment.text {
+            return;
+        }
+        let replaced = match self.tabs.get_mut(self.active) {
+            Some(tab) => tab.doc.replace_text_fragment(&draft.fragment, &draft.buffer),
+            None => return,
+        };
+        match replaced {
+            Ok(()) => {
+                self.mark_document_changed();
+                self.toast(ctx, "Text replaced");
+            }
+            Err(err) => self.toast(ctx, format!("Replace failed: {err}")),
+        }
+    }
+
+    /// Demande une image puis la pose au point touché.
+    fn insert_image_at(&mut self, page: usize, point: [f32; 2], ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Image", &["png", "jpg", "jpeg"])
+            .pick_file()
+        else {
+            return;
+        };
+        let (pixels, width, height) = match youpdf_core::edit::load_image_rgb(&path) {
+            Ok(decoded) => decoded,
+            Err(err) => {
+                self.toast(ctx, format!("Image failed: {err}"));
+                return;
+            }
+        };
+        // Taille : au plus deux cinquièmes de la page, proportions gardées.
+        let (page_w, page_h) = self
+            .tabs
+            .get(self.active)
+            .map(|tab| tab.doc.page_size(page as u32))
+            .unwrap_or((595.0, 842.0));
+        let scale = (page_w * 0.4 / width as f32).min(page_h * 0.4 / height as f32);
+        let half_w = width as f32 * scale / 2.0;
+        let half_h = height as f32 * scale / 2.0;
+        let rect = [
+            point[0] - half_w,
+            point[1] - half_h,
+            point[0] + half_w,
+            point[1] + half_h,
+        ];
+        let inserted = match self.tabs.get_mut(self.active) {
+            Some(tab) => {
+                tab.doc
+                    .insert_image_bitmap(page, rect, &pixels, width, height)
+            }
+            None => return,
+        };
+        match inserted {
+            Ok(()) => {
+                self.mark_document_changed();
+                self.toast(ctx, "Image inserted");
+            }
+            Err(err) => self.toast(ctx, format!("Image failed: {err}")),
+        }
+    }
+
     fn draft_window(&mut self, ctx: &egui::Context) {
         let Some(draft) = self.text_draft.as_mut() else {
             return;
@@ -1630,6 +1803,7 @@ impl YouPdfApp {
             tab.dirty = true;
             tab.cache.clear();
             tab.annots_loaded = false;
+            tab.fragments.clear();
             tab.structure_loaded = false;
             tab.undo.clear();
             tab.redo.clear();
@@ -3072,6 +3246,17 @@ impl YouPdfApp {
                 }
                 match mode {
                     0 => {}
+                    1 => match idx {
+                        // Texte, Image et Lien agissent sur le canevas :
+                        // rien à faire au moment du clic.
+                        1..=3 => {}
+                        4 => self.toast(
+                            ctx,
+                            "Layout: reflowing a block\u{2019}s text is not available; \
+                             use Text to change its wording",
+                        ),
+                        _ => {}
+                    },
                     3 => match idx {
                         1 => {}
                         2 => {
@@ -3158,7 +3343,8 @@ impl YouPdfApp {
                         .inner_margin(Margin::symmetric(4.0, 4.0))
                         .show(ui, |ui| {
                             for (idx, (label, shortcut)) in TOOLS_MENU.iter().enumerate() {
-                                if menu_row(ui, label, shortcut) {
+                                let c = menu_row(ui, label, shortcut);
+                                if c {
                                     chosen = Some(idx);
                                 }
                             }
@@ -3479,12 +3665,23 @@ impl YouPdfApp {
         let mut jump = self.jump.take();
         let ctx = ui.ctx().clone();
         let ppp = ctx.pixels_per_point();
-        let renderer = &*self.renderer;
-        let action = if self.mode == Some(0) {
+        let action = if matches!(self.mode, Some(0) | Some(1)) {
             self.canvas_action()
         } else {
             ToolAction::None
         };
+        // L'outil Texte a besoin des blocs de la page visible : survol,
+        // choix du bloc, réécriture.
+        if action == ToolAction::EditText {
+            self.ensure_fragments();
+        }
+        // Le bloc en cours de réécriture quitte `self` le temps de la trame :
+        // le canevas emprunte déjà `self.tabs`, et le champ posé sur la page
+        // doit pouvoir modifier son tampon pendant la boucle.
+        let mut draft = self.edit_text.take();
+        let mut edit_commit = false;
+        let mut edit_cancel = false;
+        let renderer = &*self.renderer;
         let status = &mut self.render_status;
         let last_fit = &mut self.last_fit;
         let page_layout = self.page_layout;
@@ -3503,6 +3700,8 @@ impl YouPdfApp {
         let mut pending_ink: Option<(usize, Vec<[f32; 2]>)> = None;
         let mut pending_click: Option<(usize, [f32; 2])> = None;
         let mut pending_hit: Option<(usize, [f32; 2])> = None;
+        let mut pending_edit: Option<(usize, [f32; 2])> = None;
+        let mut pending_image: Option<(usize, [f32; 2])> = None;
         let mut pending_redact: Option<(usize, [f32; 4])> = None;
         let redact_marks = &self.redact_regions;
         let search_rects = &self.search_rects;
@@ -3670,6 +3869,62 @@ impl YouPdfApp {
                             None
                         };
                         draw_annots(ui.painter(), tab, page, page_rect, scale, selected);
+
+                        // Réécriture sur place : le bloc touché devient un
+                        // champ posé sur la page. Entrée valide, Échap annule,
+                        // un clic à côté valide aussi.
+                        if let Some(d) = draft.as_mut() {
+                            if d.fragment.page as u32 == page {
+                                let [x1, y1, x2, y2] = d.fragment.rect;
+                                let block = Rect::from_min_max(
+                                    pos2(
+                                        page_rect.min.x + x1 * scale,
+                                        page_rect.max.y - y2 * scale,
+                                    ),
+                                    pos2(
+                                        page_rect.min.x + x2 * scale,
+                                        page_rect.max.y - y1 * scale,
+                                    ),
+                                );
+                                let height = (d.fragment.font_size * scale * 1.3).max(20.0);
+                                let field = Rect::from_min_size(
+                                    pos2(block.min.x - 3.0, block.center().y - height / 2.0),
+                                    vec2(block.width().max(140.0) + 6.0, height),
+                                );
+                                ui.painter()
+                                    .rect_filled(field, Rounding::same(2.0), Color32::WHITE);
+                                ui.painter().rect_stroke(
+                                    field,
+                                    2.0,
+                                    Stroke::new(1.0_f32, ACCENT),
+                                );
+                                let ink = Color32::from_rgb(
+                                    d.fragment.color[0],
+                                    d.fragment.color[1],
+                                    d.fragment.color[2],
+                                );
+                                let resp = ui.put(
+                                    field.shrink2(vec2(3.0, 0.0)),
+                                    TextEdit::singleline(&mut d.buffer)
+                                        .frame(false)
+                                        .font(FontId::proportional(
+                                            (d.fragment.font_size * scale).clamp(8.0, 96.0),
+                                        ))
+                                        .text_color(ink),
+                                );
+                                if d.fresh {
+                                    resp.request_focus();
+                                    d.fresh = false;
+                                }
+                                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                    edit_cancel = true;
+                                } else if ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                    || resp.lost_focus()
+                                {
+                                    edit_commit = true;
+                                }
+                            }
+                        }
                     }
 
                     // Interaction des outils d'annotation.
@@ -3686,6 +3941,31 @@ impl YouPdfApp {
                                 page_rect.max.y - p[1] * scale,
                             )
                         };
+                        // Outil Texte : chaque bloc est encadré, celui sous le
+                        // curseur plus franchement — c'est ce bloc que le clic
+                        // réécrira.
+                        if action == ToolAction::EditText {
+                            if let Some(frags) = tab.fragments.get(&page) {
+                                let hover = resp.hover_pos();
+                                for frag in frags {
+                                    let [x1, y1, x2, y2] = frag.rect;
+                                    let r = Rect::from_min_max(
+                                        to_screen([x1, y1]),
+                                        to_screen([x2, y2]),
+                                    );
+                                    let lit = hover.map(|p| r.contains(p)).unwrap_or(false);
+                                    let stroke = if lit {
+                                        Stroke::new(1.5_f32, ACCENT)
+                                    } else {
+                                        Stroke::new(
+                                            1.0_f32,
+                                            Color32::from_rgba_unmultiplied(0x7A, 0x7E, 0xF6, 70),
+                                        )
+                                    };
+                                    ui.painter().rect_stroke(r.expand(1.0), 2.0, stroke);
+                                }
+                            }
+                        }
                         match action {
                             ToolAction::DragRect(kind) => {
                                 if resp.dragged() {
@@ -3745,6 +4025,18 @@ impl YouPdfApp {
                                 if resp.clicked() {
                                     if let Some(p) = resp.interact_pointer_pos() {
                                         pending_click = Some((page as usize, to_pdf(p)));
+                                    }
+                                }
+                            }
+                            ToolAction::EditText | ToolAction::InsertImage => {
+                                if resp.clicked() {
+                                    if let Some(p) = resp.interact_pointer_pos() {
+                                        let point = to_pdf(p);
+                                        if action == ToolAction::EditText {
+                                            pending_edit = Some((page as usize, point));
+                                        } else {
+                                            pending_image = Some((page as usize, point));
+                                        }
                                     }
                                 }
                             }
@@ -3817,12 +4109,25 @@ impl YouPdfApp {
                 }
             });
 
+        self.edit_text = draft;
+        if edit_cancel {
+            self.edit_text = None;
+        } else if edit_commit {
+            self.replace_fragment(&ctx);
+        }
+
         if let Some((page, kind, rect)) = pending_rect {
             self.add_rect_annot(page, kind, rect);
         }
         if let Some((page, points)) = pending_ink {
             tracing::info!("ink annot page {page} points {}", points.len());
             self.add_ink_annot(page, points);
+        }
+        if let Some((page, point)) = pending_edit {
+            self.edit_text_at(page, point, &ctx);
+        }
+        if let Some((page, point)) = pending_image {
+            self.insert_image_at(page, point, &ctx);
         }
         if let Some((page, point)) = pending_click {
             self.open_draft(page, point);
