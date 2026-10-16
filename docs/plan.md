@@ -186,3 +186,22 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
      is wanted.
   Out of scope by design: cloud sync, eIDAS signature requests, screen capture, scanner import,
   dictation and emoji — they need a cloud service or OS facilities the brief forbids or excludes.
+
+- 2026-10-16 (audit of the two missing-features passes): an independent review of the ten commits
+  found twelve defects; all twelve are fixed and each fix has its own commit. The frame conversion
+  from the previous entry was incomplete — the two save paths, the search highlight and the
+  redaction marks still mixed the displayed and page frames, and the redaction one meant that on a
+  rotated page the black box landed on the wrong area while the sensitive text survived. The form
+  data exchange lost every accent twice over: the FDF writer passed WinAnsi bytes through
+  `from_utf8_lossy` and the reader did the same for `/V`, `/T`, `/TU` and `/Opt`. The field
+  properties panel wrote an empty `/TU` and cleared the Required and Multiline bits because
+  `FormField` did not carry them. Renaming truncated a top-level name at its last dot. An area
+  measurement was divided by the scale instead of its square. Closing the Measure window left the
+  tool armed, the Extract window kept the previous document's results, and the batch ran inside the
+  egui frame, freezing the window for its whole duration. `export_form_data` and `import_form_data`
+  now work on bytes rather than `String`.
+
+  Also in that window of work, three features the previous list still counted as missing: the header
+  and the footer have their own three slots instead of sharing one set drawn twice, the interface
+  has four themes (Dark, Light, Mint, Starry) read from a runtime palette instead of compile-time
+  constants, and View ▸ Theme switches between them.
