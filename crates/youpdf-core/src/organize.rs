@@ -147,14 +147,14 @@ impl Document {
         }
 
         let root = self.pages_root_id()?;
-        for id in &copied {
-            if let Ok(Object::Dictionary(dict)) = self.inner.get_object_mut(*id) {
-                dict.set("Parent", Object::Reference(root));
-            }
-        }
 
+        // `after >= page_count` veut dire « à la fin ». Viser le début
+        // collait les pages en tête, à l'opposé de la demande.
+        let page_count = self.inner.get_pages().len();
         let anchor = if after == 0 {
             None
+        } else if after >= page_count {
+            self.inner.get_pages().get(&(page_count as u32)).copied()
         } else {
             self.inner.get_pages().get(&(after as u32)).copied()
         };
@@ -190,6 +190,7 @@ impl Document {
                 kids.extend(children);
                 dict.set("Kids", Object::Array(kids));
             }
+            self.set_pages_parent(node_id, new_pages);
             return Ok(new_pages.len());
         }
 
@@ -210,6 +211,7 @@ impl Document {
             {
                 dict.set("Kids", Object::Array(kids));
             }
+            self.set_pages_parent(node_id, new_pages);
             return Ok(new_pages.len());
         }
 
@@ -245,7 +247,21 @@ impl Document {
             kids.extend(new_pages.iter().map(|id| Object::Reference(*id)));
             dict.set("Kids", Object::Array(kids));
         }
+        self.set_pages_parent(node_id, new_pages);
         Ok(new_pages.len())
+    }
+
+    /// Rattache des pages au nœud qui les reçoit.
+    ///
+    /// Un `/Parent` figé sur la racine alors que les pages descendent dans un
+    /// sous-arbre rend l'arbre incohérent : les lecteurs qui suivent
+    /// `/Parent` pour résoudre les boîtes héritées lisent le mauvais nœud.
+    fn set_pages_parent(&mut self, node_id: ObjectId, new_pages: &[ObjectId]) {
+        for id in new_pages {
+            if let Ok(Object::Dictionary(dict)) = self.inner.get_object_mut(*id) {
+                dict.set("Parent", Object::Reference(node_id));
+            }
+        }
     }
 
     /// Copie profonde d'une page étrangère, identifiants remappés.
@@ -361,6 +377,10 @@ impl Document {
     }
 
     /// Retire métadonnées, XMP, JavaScript et actions automatiques.
+    ///
+    /// Les pièces jointes et les destinations nommées ne font pas partie du
+    /// lot : elles vivent elles aussi sous `/Names`, et les supprimer ferait
+    /// disparaître des fichiers joints sans rapport avec le nettoyage.
     pub fn sanitize(&mut self) -> Result<usize> {
         let mut removed = 0usize;
 
@@ -369,10 +389,35 @@ impl Document {
                 b"Metadata".as_slice(),
                 b"OpenAction".as_slice(),
                 b"AA".as_slice(),
-                b"Names".as_slice(),
             ] {
                 if catalog.remove(key).is_some() {
                     removed += 1;
+                }
+            }
+        }
+
+        // Le JavaScript vit sous `/Names`, à côté de ce qu'on garde.
+        let names_id = self
+            .inner
+            .catalog()
+            .ok()
+            .and_then(|catalog| catalog.get(b"Names").ok())
+            .and_then(|names| names.as_reference().ok());
+        match names_id {
+            Some(id) => {
+                if let Ok(names) = self.inner.get_dictionary_mut(id) {
+                    if names.remove(b"JavaScript").is_some() {
+                        removed += 1;
+                    }
+                }
+            }
+            None => {
+                if let Ok(catalog) = self.inner.catalog_mut() {
+                    if let Ok(Object::Dictionary(names)) = catalog.get_mut(b"Names") {
+                        if names.remove(b"JavaScript").is_some() {
+                            removed += 1;
+                        }
+                    }
                 }
             }
         }
