@@ -235,8 +235,10 @@ struct Tab {
     title: String,
     /// Page courante (1-indexée).
     page: usize,
-    /// `None` = ajuster à la largeur.
+    /// `None` = ajustement automatique (voir `zoom_fit_page`).
     zoom: Option<f32>,
+    /// Vrai quand l'ajustement automatique garde toute la page visible.
+    zoom_fit_page: bool,
     /// Bitmaps déjà rendus ; clé `(page, bucket)`, bucket 1 = vignette.
     cache: HashMap<(u32, u32), TextureHandle>,
     /// Modifications non enregistrées.
@@ -312,6 +314,8 @@ pub struct YouPdfApp {
     search_rects: Vec<[f32; 4]>,
     /// Page des rectangles de recherche affichés.
     search_rects_page: Option<u32>,
+    /// Saisie de la page à atteindre (pastille bas-droite).
+    page_entry: String,
     /// Ligne « remplacer » ouverte.
     replace_open: bool,
     /// Texte de remplacement.
@@ -385,6 +389,7 @@ impl YouPdfApp {
             search_active: None,
             search_rects: Vec::new(),
             search_rects_page: None,
+            page_entry: String::new(),
             replace_open: false,
             replace_text: String::new(),
             redact_regions: Vec::new(),
@@ -449,6 +454,7 @@ impl YouPdfApp {
                     title: title.clone(),
                     page: 1,
                     zoom: None,
+                    zoom_fit_page: false,
                     cache: HashMap::new(),
                     dirty: false,
                     annots: Vec::new(),
@@ -1407,6 +1413,29 @@ impl YouPdfApp {
     fn set_zoom(&mut self, zoom: Option<f32>) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             tab.zoom = zoom.map(|z| z.clamp(0.1, 8.0));
+            if zoom.is_none() {
+                tab.zoom_fit_page = false;
+            }
+        }
+    }
+
+    /// Applique un réglage de zoom nommé.
+    fn set_zoom_mode(&mut self, mode: ZoomMode) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            match mode {
+                ZoomMode::FitWidth => {
+                    tab.zoom = None;
+                    tab.zoom_fit_page = false;
+                }
+                ZoomMode::FitPage => {
+                    tab.zoom = None;
+                    tab.zoom_fit_page = true;
+                }
+                ZoomMode::Fixed(scale) => {
+                    tab.zoom = Some(scale.clamp(0.1, 8.0));
+                    tab.zoom_fit_page = false;
+                }
+            }
         }
     }
 
@@ -2861,28 +2890,56 @@ impl YouPdfApp {
 
         ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show_viewport(ui, |ui, viewport| {
+            .show_viewport(ui, |ui, _viewport| {
                 let avail = ui.available_width().max(50.0);
                 let mut first_visible: Option<usize> = None;
                 let mut clicked_page: Option<usize> = None;
 
+                // Hauteur utile : la fenêtre moins deux marges de page.
+                let clip = ui.clip_rect();
+                let view_h = (clip.height() - PAGE_SPACING * 2.0).max(50.0);
                 for page in 1..=total as u32 {
                     let (wp, hp) = tab.doc.page_size(page);
-                    let scale = tab.zoom.unwrap_or(avail / wp.max(1.0)).clamp(0.05, 8.0);
+                    let scale = tab
+                        .zoom
+                        .unwrap_or_else(|| {
+                            let fit_width = avail / wp.max(1.0);
+                            if tab.zoom_fit_page {
+                                fit_width.min(view_h / hp.max(1.0))
+                            } else {
+                                fit_width
+                            }
+                        })
+                        .clamp(0.05, 8.0);
                     if tab.zoom.is_none() {
                         *last_fit = scale;
                     }
                     let size = vec2(wp * scale, hp * scale);
-                    let (rect, resp) =
-                        ui.allocate_exact_size(size + vec2(0.0, PAGE_SPACING), sense);
-                    let page_rect = Rect::from_min_size(rect.min, size);
+                    // La ligne occupe toute la largeur disponible : la page est
+                    // centrée dedans, comme dans la référence. Sans cela, une
+                    // page plus étroite que le canevas (zoom < ajustement)
+                    // resterait collée à gauche.
+                    let (rect, row) = ui.allocate_exact_size(
+                        vec2(avail, size.y + PAGE_SPACING),
+                        Sense::hover(),
+                    );
+                    let page_rect = Rect::from_min_size(
+                        pos2(rect.min.x + ((avail - size.x) * 0.5).max(0.0), rect.min.y),
+                        size,
+                    );
+                    let resp = ui.interact(page_rect, row.id.with(page), sense);
 
                     if jump == Some(page as usize) {
-                        ui.scroll_to_rect(rect, Some(Align::Min));
+                        ui.scroll_to_rect(Rect::from_min_size(page_rect.min, size), Some(Align::Min));
                         jump = None;
                     }
 
-                    if viewport.intersects(rect) {
+                    // `viewport` est exprimé dans le repère du *contenu*
+                    // (min = défilement courant) alors que `rect` est en
+                    // coordonnées écran : les comparer directement saute
+                    // des pages dès que l'on fait défiler. Le rectangle de
+                    // découpe, lui, est bien en coordonnées écran.
+                    if clip.intersects(rect) {
                         if first_visible.is_none() {
                             first_visible = Some(page as usize);
                         }
@@ -3179,7 +3236,12 @@ impl YouPdfApp {
                 .unwrap_or_else(|| "Fit".to_owned()),
         );
         let engine = self.renderer_label;
+        let current_zoom = tab.zoom;
+        let tab_zoom_fit_page = tab.zoom_fit_page;
         let mut delta = 0.0_f32;
+        let mut goto: Option<usize> = None;
+        let mut zoom_choice: Option<ZoomMode> = None;
+        let mut page_text = std::mem::take(&mut self.page_entry);
 
         Area::new(Id::new("zoombar"))
             .anchor(Align2::RIGHT_BOTTOM, vec2(-14.0, -12.0))
@@ -3208,13 +3270,109 @@ impl YouPdfApp {
                             if minus.clicked() {
                                 delta = -1.0;
                             }
-                            ui.label(
-                                RichText::new(format!("{page} / {total}"))
-                                    .size(11.0)
-                                    .color(MUTED),
+
+                            // Numéro de page : clic = saut direct.
+                            let (rect, page_resp) =
+                                ui.allocate_exact_size(vec2(46.0, 20.0), Sense::click());
+                            if page_resp.hovered() {
+                                ui.painter().rect_filled(rect, Rounding::same(5.0), HOVER_BG);
+                            }
+                            ui.painter().text(
+                                rect.center(),
+                                Align2::CENTER_CENTER,
+                                format!("{page} / {total}"),
+                                FontId::proportional(11.0),
+                                if page_resp.hovered() { ICON_BRIGHT } else { MUTED },
                             );
+                            let just_opened = page_resp.clicked();
+                            if just_opened {
+                                page_text.clear();
+                                ui.memory_mut(|m| m.toggle_popup(Id::new("page_jump")));
+                            }
+                            egui::popup_above_or_below_widget(
+                                ui,
+                                Id::new("page_jump"),
+                                &page_resp,
+                                egui::AboveOrBelow::Above,
+                                egui::PopupCloseBehavior::CloseOnClickOutside,
+                                |ui| {
+                                    ui.set_min_width(130.0);
+                                    ui.label(
+                                        RichText::new("Go to page").size(11.0).color(MUTED),
+                                    );
+                                    ui.add_space(4.0);
+                                    let field = ui.add(
+                                        TextEdit::singleline(&mut page_text)
+                                            .desired_width(90.0)
+                                            .hint_text("1"),
+                                    );
+                                    // Le champ prend le focus à l'ouverture
+                                    // seulement : le redemander à chaque
+                                    // trame empêcherait `lost_focus` de
+                                    // signaler la validation par Entrée.
+                                    if just_opened {
+                                        field.request_focus();
+                                    }
+                                    if field.lost_focus()
+                                        && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                    {
+                                        goto = page_text.trim().parse::<usize>().ok();
+                                    }
+                                },
+                            );
+
                             ui.add_space(6.0);
-                            ui.label(RichText::new(&zoom_label).size(11.0).color(MUTED));
+                            // Étiquette de zoom : clic = réglages prédéfinis.
+                            let text = if tab_zoom_fit_page {
+                                format!("{zoom_label} · page")
+                            } else {
+                                zoom_label.clone()
+                            };
+                            let (rect, zoom_resp) = ui.allocate_exact_size(
+                                vec2(
+                                    ui.painter()
+                                        .layout_no_wrap(
+                                            text.clone(),
+                                            FontId::proportional(11.0),
+                                            MUTED,
+                                        )
+                                        .size()
+                                        .x
+                                        + 12.0,
+                                    20.0,
+                                ),
+                                Sense::click(),
+                            );
+                            if zoom_resp.hovered() {
+                                ui.painter().rect_filled(rect, Rounding::same(5.0), HOVER_BG);
+                            }
+                            ui.painter().text(
+                                rect.center(),
+                                Align2::CENTER_CENTER,
+                                &text,
+                                FontId::proportional(11.0),
+                                if zoom_resp.hovered() { ICON_BRIGHT } else { MUTED },
+                            );
+                            if zoom_resp.clicked() {
+                                ui.memory_mut(|m| m.toggle_popup(Id::new("zoom_menu")));
+                            }
+                            egui::popup_above_or_below_widget(
+                                ui,
+                                Id::new("zoom_menu"),
+                                &zoom_resp,
+                                egui::AboveOrBelow::Above,
+                                egui::PopupCloseBehavior::CloseOnClick,
+                                |ui| {
+                                    ui.set_min_width(150.0);
+                                    for (label, mode) in ZoomMode::CHOICES {
+                                        let selected = zoom_choice_matches(*mode, current_zoom, tab_zoom_fit_page);
+                                        if menu_row(ui, label, if selected { "✓" } else { "" }) {
+                                            zoom_choice = Some(*mode);
+                                        }
+                                    }
+                                },
+                            );
+
                             ui.add_space(6.0);
                             ui.label(RichText::new(engine).size(10.0).color(MUTED));
                             let (rect, plus) = ui
@@ -3234,6 +3392,19 @@ impl YouPdfApp {
                     });
             });
 
+        self.page_entry = page_text;
+        if let Some(choice) = zoom_choice {
+            self.set_zoom_mode(choice);
+        }
+        if let Some(target) = goto {
+            // La fenêtre de saisie a rempli son rôle : on la referme.
+            ctx.memory_mut(|m| m.toggle_popup(Id::new("page_jump")));
+            if (1..=total).contains(&target) {
+                self.jump = Some(target);
+            } else {
+                self.toast(ctx, format!("Page out of range (1–{total})"));
+            }
+        }
         if delta < 0.0 {
             self.zoom_by(1.0 / 1.1);
         } else if delta > 0.0 {
@@ -3785,6 +3956,41 @@ fn replace_occurrences(text: &str, needle: &str, replacement: &str) -> String {
     }
     out.push_str(&text[cursor..]);
     out
+}
+
+/// Réglages de zoom proposés par la pastille bas-droite.
+#[derive(Clone, Copy, PartialEq)]
+enum ZoomMode {
+    /// Ajuster à la largeur du canevas.
+    FitWidth,
+    /// Garder la page entière visible.
+    FitPage,
+    /// Échelle fixe (1.0 = 100 %).
+    Fixed(f32),
+}
+
+impl ZoomMode {
+    /// Menu de la pastille, dans l'ordre d'affichage.
+    const CHOICES: &'static [(&'static str, ZoomMode)] = &[
+        ("Fit width", ZoomMode::FitWidth),
+        ("Fit page", ZoomMode::FitPage),
+        ("Actual size", ZoomMode::Fixed(1.0)),
+        ("50 %", ZoomMode::Fixed(0.5)),
+        ("75 %", ZoomMode::Fixed(0.75)),
+        ("125 %", ZoomMode::Fixed(1.25)),
+        ("150 %", ZoomMode::Fixed(1.5)),
+        ("200 %", ZoomMode::Fixed(2.0)),
+        ("400 %", ZoomMode::Fixed(4.0)),
+    ];
+}
+
+/// Vrai si le réglage `mode` correspond au zoom courant de l'onglet.
+fn zoom_choice_matches(mode: ZoomMode, zoom: Option<f32>, fit_page: bool) -> bool {
+    match mode {
+        ZoomMode::FitWidth => zoom.is_none() && !fit_page,
+        ZoomMode::FitPage => zoom.is_none() && fit_page,
+        ZoomMode::Fixed(scale) => zoom.is_some_and(|z| (z - scale).abs() < 0.001),
+    }
 }
 
 /// Taille lisible : octets sous 1 Ko, puis Ko et Mo.
