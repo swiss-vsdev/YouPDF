@@ -124,18 +124,27 @@ impl Document {
             return files;
         };
         let mut nodes = vec![tree.clone()];
-        let mut guard = 0usize;
+        // Un `/Kids` cyclique re-listerait les mêmes pièces jointes jusqu'à
+        // la limite de garde : chaque nœud n'est visité qu'une fois.
+        let mut seen: std::collections::HashSet<ObjectId> = std::collections::HashSet::new();
+        let mut listed: std::collections::HashSet<ObjectId> = std::collections::HashSet::new();
         while let Some(node) = nodes.pop() {
-            guard += 1;
-            if guard > 1_000 {
-                break;
-            }
             if let Ok(entries) = node.get(b"Names").and_then(Object::as_array) {
+                // Un tableau impair (fichier abîmé ou hostile) n'a pas de
+                // seconde moitié : la paire est simplement ignorée.
                 for pair in entries.chunks(2) {
-                    let Some(spec) = self.dict_object(&pair[1]) else {
+                    let Some(spec_id) = pair.get(1).and_then(|obj| self.resolve_id(obj)) else {
                         continue;
                     };
-                    if let Some(info) = self.describe_attachment(&spec) {
+                    // Le même nœud atteint par deux chemins ne liste pas
+                    // deux fois la même pièce jointe.
+                    if !listed.insert(spec_id) {
+                        continue;
+                    }
+                    let Ok(spec) = self.inner.get_dictionary(spec_id) else {
+                        continue;
+                    };
+                    if let Some(info) = self.describe_attachment(spec) {
                         files.push(info);
                     }
                 }
@@ -143,6 +152,9 @@ impl Document {
             if let Ok(kids) = node.get(b"Kids").and_then(Object::as_array) {
                 for kid in kids {
                     if let Some(id) = self.resolve_id(kid) {
+                        if !seen.insert(id) {
+                            continue;
+                        }
                         if let Ok(child) = self.inner.get_dictionary(id) {
                             nodes.push(child.clone());
                         }
@@ -216,10 +228,13 @@ impl Document {
 
         let mut streams: Vec<ObjectId> = Vec::new();
         let mut nodes = vec![tree.clone()];
+        // Un `/Kids` cyclique ferait tourner la boucle sans fin : chaque
+        // nœud n'est visité qu'une fois.
+        let mut seen: std::collections::HashSet<ObjectId> = std::collections::HashSet::new();
         while let Some(node) = nodes.pop() {
             if let Ok(entries) = node.get(b"Names").and_then(Object::as_array) {
                 for pair in entries.chunks(2) {
-                    let Some(spec) = self.dict_object(&pair[1]) else {
+                    let Some(spec) = pair.get(1).and_then(|obj| self.dict_object(obj)) else {
                         continue;
                     };
                     if let Some(id) = self
@@ -227,13 +242,18 @@ impl Document {
                         .and_then(|ef| ef.get(b"UF").or_else(|_| ef.get(b"F")).ok())
                         .and_then(|obj| self.resolve_id(obj))
                     {
-                        streams.push(id);
+                        if !streams.contains(&id) {
+                            streams.push(id);
+                        }
                     }
                 }
             }
             if let Ok(kids) = node.get(b"Kids").and_then(Object::as_array) {
                 for kid in kids {
                     if let Some(id) = self.resolve_id(kid) {
+                        if !seen.insert(id) {
+                            continue;
+                        }
                         if let Ok(child) = self.inner.get_dictionary(id) {
                             nodes.push(child.clone());
                         }

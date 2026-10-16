@@ -231,3 +231,64 @@ fn page_ids_are_in_order() {
     assert_eq!(ids.len(), 3);
     assert!(ids[&1].0 < ids[&3].0, "identifiants croissants");
 }
+
+/// Un arbre `/Names` abîmé ne doit ni paniquer ni boucler.
+///
+/// Les producteurs réels écrivent parfois un tableau impair (nom sans sa
+/// référence) et un `/Kids` qui se référence lui-même.
+#[test]
+fn pieces_jointes_arbre_abime() {
+    use lopdf::{dictionary, Document as LopdfDoc, Object, Stream};
+
+    let mut doc = LopdfDoc::with_version("1.7");
+    let content = doc.add_object(Stream::new(dictionary! {}, b" ".to_vec()));
+    let page = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+        "Contents" => content,
+    });
+    let pages = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![page.into()]),
+        "Count" => 1,
+    });
+    let body = doc.add_object(Stream::new(dictionary! {}, b"corps".to_vec()));
+    let spec = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Filespec".to_vec()),
+        "F" => Object::string_literal(b"orphelin.txt".to_vec()),
+        "EF" => dictionary! { "F" => body },
+    });
+    let tree = doc.add_object(dictionary! {
+        "Names" => Object::Array(vec![
+            Object::string_literal(b"orphelin.txt".to_vec()),
+            Object::Reference(spec),
+            Object::string_literal(b"paire_manquante".to_vec()),
+        ]),
+        "Kids" => Object::Array(vec![]),
+    });
+    // Cycle : le nœud se déclare son propre enfant.
+    doc.get_object_mut(tree)
+        .expect("nœud")
+        .as_dict_mut()
+        .expect("dictionnaire")
+        .set("Kids", Object::Array(vec![Object::Reference(tree)]));
+    let names = doc.add_object(dictionary! { "EmbeddedFiles" => tree });
+    let catalog = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => pages,
+        "Names" => names,
+    });
+    doc.trailer.set("Root", Object::Reference(catalog));
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).expect("écriture du PDF de test");
+
+    let doc = Document::from_bytes(&bytes).expect("ouverture");
+    let attachments = doc.attachments();
+    assert_eq!(attachments.len(), 1, "la paire complète reste lisible");
+    assert_eq!(attachments[0].name, "orphelin.txt");
+    assert_eq!(
+        doc.attachment_bytes(0).expect("contenu joint"),
+        b"corps".to_vec()
+    );
+    assert!(doc.attachment_bytes(1).is_err(), "index hors limites");
+}
