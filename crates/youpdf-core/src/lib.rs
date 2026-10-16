@@ -51,7 +51,7 @@ pub use compress::CompressionReport;
 pub use document::{Document, PageView};
 pub use edit::{ImageInfo, TextFragment, TextSpan, encode_pdf_literal};
 pub use extract::{ExtractedTable, KeyValue};
-pub use forms::{FormField, FormFieldKind, NewFormField};
+pub use forms::{FieldProperties, FormDataFormat, FormField, FormFieldKind, NewFormField};
 pub use measure::{MeasureKind, Measurement};
 pub use metadata::DocumentMetadata;
 pub use ocr::{OcrEngine, OcrMode, OcrResult, TesseractEngine, validate_language};
