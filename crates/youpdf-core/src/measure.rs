@@ -103,11 +103,18 @@ fn measure_value(kind: MeasureKind, points: &[[f32; 2]]) -> f32 {
     }
 }
 
-/// Libellé affiché : valeur réelle (dessin / échelle), un chiffre après la
-/// virgule, suivi de l'unité. Exemple : `12.3 mm`.
+/// Libellé affiché : valeur réelle (dessin / échelle, dessin / échelle² pour
+/// une aire), un chiffre après la virgule, suivi de l'unité. Exemple : `12.3 mm`.
 fn measure_label(m: &Measurement) -> String {
     let scale = if m.scale > 0.0 { m.scale } else { 1.0 };
-    let value = measure_value(m.kind, &m.points) / scale;
+    // Une aire est en unités de dessin au carré : elle se convertit par le
+    // carré de l'échelle, sans quoi elle est annoncée `scale` fois trop grande.
+    let divisor = if m.kind == MeasureKind::Area {
+        scale * scale
+    } else {
+        scale
+    };
+    let value = measure_value(m.kind, &m.points) / divisor;
     format!("{value:.1} {}", m.unit)
 }
 
