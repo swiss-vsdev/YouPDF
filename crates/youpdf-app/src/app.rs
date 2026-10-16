@@ -1335,6 +1335,8 @@ impl YouPdfApp {
                         entry.value = Some(buffer.clone());
                     }
                     tab.dirty = true;
+                    // La page est déjà rendue avec l'ancienne valeur.
+                    tab.cache.clear();
                     self.toast(ctx, format!("Field {} updated", field.name));
                 }
                 Err(err) => self.toast(ctx, format!("Field update failed: {err}")),
@@ -4312,6 +4314,26 @@ impl YouPdfApp {
         }
     }
 
+    /// Exécute une écriture qui part du document lui-même (copie compressée,
+    /// copie chiffrée) en y appliquant d'abord les annotations en attente.
+    ///
+    /// Sans cela la copie écrite ne contiendrait pas les annotations de la
+    /// session. Elles sont retirées du document juste après : l'affichage les
+    /// dessine lui-même, et les garder dans le document les dessinerait deux
+    /// fois.
+    fn with_annotations_applied<T>(
+        &mut self,
+        write: impl FnOnce(&mut Tab) -> T,
+    ) -> Option<T> {
+        let tab = self.tabs.get_mut(self.active)?;
+        if tab.doc.apply_annotations(&tab.annots).is_err() {
+            return None;
+        }
+        let outcome = write(tab);
+        let _ = tab.doc.clear_youpdf_annotations();
+        Some(outcome)
+    }
+
     /// Écrit une copie compressée du document, et retient le bilan.
     fn compress_active(&mut self, ctx: &egui::Context) {
         let name = self
@@ -4325,10 +4347,7 @@ impl YouPdfApp {
         else {
             return;
         };
-        let result = self
-            .tabs
-            .get_mut(self.active)
-            .map(|tab| tab.doc.compress(&path));
+        let result = self.with_annotations_applied(|tab| tab.doc.compress(&path));
         match result {
             Some(Ok(report)) => {
                 let before = report.before_bytes as f64 / 1024.0;
@@ -4453,10 +4472,7 @@ impl YouPdfApp {
             return;
         };
         let options = self.protect.clone();
-        let result = self
-            .tabs
-            .get(self.active)
-            .map(|tab| tab.doc.save_protected(&path, &options));
+        let result = self.with_annotations_applied(|tab| tab.doc.save_protected(&path, &options));
         match result {
             Some(Ok(())) => {
                 let saved = path
