@@ -26,7 +26,7 @@ use lopdf::{Dictionary, Document as LopdfDoc, Object, ObjectId};
 use md5::{Digest as Md5Digest, Md5};
 use sha2::{Sha256, Sha384, Sha512};
 
-use youpdf_shared::Result;
+use youpdf_shared::{Error, Result};
 
 use crate::document::Document;
 
@@ -180,6 +180,44 @@ impl Document {
     ) -> Result<()> {
         let mut copie = Document::from_lopdf(self.inner.clone());
         copie.encrypt(opts)?;
+        copie.save(path)
+    }
+
+    /// Vrai si le fichier porte un dictionnaire `/Encrypt`.
+    ///
+    /// Un fichier illisible renvoie `false` : l'appelant enchaînera sur une
+    /// ouverture normale, qui remontera l'erreur de lecture.
+    pub fn file_is_encrypted(path: impl AsRef<Path>) -> bool {
+        lopdf::Document::load(path.as_ref())
+            .map(|doc| doc.is_encrypted())
+            .unwrap_or(false)
+    }
+
+    /// Ouvre un PDF en le déchiffrant quand il est protégé.
+    ///
+    /// Le mot de passe peut être le mot de passe utilisateur ou celui du
+    /// propriétaire : `lopdf` accepte les deux.
+    pub fn open_protected(path: impl AsRef<Path>, password: &str) -> Result<Self> {
+        let path = path.as_ref();
+        let mut inner = lopdf::Document::load(path)
+            .map_err(|e| Error::Pdf(format!("{} : {e}", path.display())))?;
+        if inner.is_encrypted() {
+            inner
+                .decrypt(password.as_bytes())
+                .map_err(|e| Error::Pdf(format!("mot de passe refusé : {e}")))?;
+        }
+        let mut doc = Document::from_lopdf(inner);
+        doc.path = Some(path.to_path_buf());
+        Ok(doc)
+    }
+
+    /// Écrit une copie en clair du document, sans `/Encrypt`.
+    ///
+    /// Sert à « Enlever la protection » : la copie reste modifiable et
+    /// n'exige plus de mot de passe. L'original n'est jamais réécrit.
+    pub fn save_decrypted(&self, path: impl AsRef<Path>) -> Result<()> {
+        let mut copie = Document::from_lopdf(self.inner.clone());
+        copie.inner_mut().trailer.remove(b"Encrypt");
         copie.save(path)
     }
 }
