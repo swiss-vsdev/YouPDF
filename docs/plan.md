@@ -98,3 +98,19 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
   Dev helper: `YOUPDF_MODE=0..3` opens the app with that mode active.
 
 
+- 2026-10-16 (document tools pass): form fields can be created (widget + `/AcroForm` + appearance);
+  the canvas tool lookup now runs for every mode, which had kept prepare-form and redaction drags from
+  ever reaching the canvas; watermarks, headers and footers, page numbers, compression and password
+  protection each have a window in the actions menu. Reference-app behaviour notes are in
+  `docs/updf-behaviour.md` (labels, option sets, flows, and what could not be confirmed).
+
+  Open questions from that pass:
+  1. Header and footer share one set of slots and the band is drawn both at the top and at the bottom;
+     the number joins the footer centre. The reference app has separate header and footer slots. Either
+     extend `HeaderFooter` with a second set of slots, or make the position selectable.
+  2. Compression offers no quality grades because the engine only deflates streams and prunes objects;
+     image resampling and font subsetting are what the reference `Reduce File Size` grades actually do.
+  3. Protection writes a copy only. The reference app also reopens protected files and asks for the
+     password; the engine has no decrypt/password-check path yet.
+  4. The form panel lists fields and fills them, but no properties editor exists yet (name, tooltip,
+     required, read-only, options), and field names are auto-generated (`Field1`, `Field2`).
