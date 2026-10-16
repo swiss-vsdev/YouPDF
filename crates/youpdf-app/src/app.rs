@@ -3773,11 +3773,9 @@ impl YouPdfApp {
         let mut jump = self.jump.take();
         let ctx = ui.ctx().clone();
         let ppp = ctx.pixels_per_point();
-        let action = if matches!(self.mode, Some(0) | Some(1)) {
-            self.canvas_action()
-        } else {
-            ToolAction::None
-        };
+        // Tous les modes passent par le même aiguillage : l'outil courant
+        // décide, et un mode sans outil de canevas répond « rien ».
+        let action = self.canvas_action();
         // L'outil Texte a besoin des blocs de la page visible : survol,
         // choix du bloc, réécriture.
         if action == ToolAction::EditText {
