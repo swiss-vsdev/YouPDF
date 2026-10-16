@@ -1188,7 +1188,8 @@ impl YouPdfApp {
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };
-        match tab.doc.save_with_annotations(&path, &tab.annots) {
+        let annots = annots_to_page(&tab.doc, &tab.annots);
+        match tab.doc.save_with_annotations(&path, &annots) {
             Ok(()) => {
                 tab.dirty = false;
                 self.toast(ctx, format!("Saved {}", path.display()));
@@ -1214,7 +1215,8 @@ impl YouPdfApp {
         else {
             return;
         };
-        match tab.doc.save_with_annotations(&path, &tab.annots) {
+        let annots = annots_to_page(&tab.doc, &tab.annots);
+        match tab.doc.save_with_annotations(&path, &annots) {
             Ok(()) => {
                 tab.dirty = false;
                 tab.path = Some(path.clone());
@@ -2843,8 +2845,11 @@ impl YouPdfApp {
             return;
         };
         for fragment in fragments {
+            // Les fragments sortent du moteur en repère page ; les surlignages
+            // se dessinent en repère affiché.
+            let rect = rect_to_display(&tab.doc, page, fragment.rect);
             self.search_rects
-                .extend(match_rects(&fragment.text, fragment.rect, &needle));
+                .extend(match_rects(&fragment.text, rect, &needle));
         }
     }
 
@@ -2913,7 +2918,8 @@ impl YouPdfApp {
                     continue;
                 };
                 for fragment in fragments {
-                    for rect in match_rects(&fragment.text, fragment.rect, &needle) {
+                    let rect = rect_to_display(&tab.doc, page, fragment.rect);
+                    for rect in match_rects(&fragment.text, rect, &needle) {
                         // Ne pas empiler deux fois la même marque : le bouton
                         // corbeille et le bouton surlignage peuvent se suivre.
                         let region = RedactionRegion { page, rect };
