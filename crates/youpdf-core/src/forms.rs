@@ -84,6 +84,12 @@ pub struct FormField {
     pub options: Vec<String>,
     /// Vrai si le champ est en lecture seule.
     pub read_only: bool,
+    /// Aide affichée au survol (`/TU`).
+    pub tooltip: String,
+    /// Champ obligatoire (bit 2 de `/Ff`).
+    pub required: bool,
+    /// Champ multiligne (bit 13 de `/Ff`, champs texte).
+    pub multiline: bool,
     /// Numéro de page (1-indexé), si le champ en a une.
     pub page: Option<usize>,
 }
@@ -205,12 +211,13 @@ impl Document {
             return;
         };
 
-        // Nom local du champ.
+        // Nom local du champ. Les noms sont encodés comme le reste : WinAnsi
+        // ou UTF-16BE, pas forcément de l'UTF-8.
         let local_name = dict
             .get(b"T")
             .ok()
             .and_then(|o| o.as_str().ok())
-            .map(|s| String::from_utf8_lossy(s).to_string());
+            .map(crate::structure::decode_pdf_text);
 
         let full_name = match (parent_name, &local_name) {
             (Some(p), Some(n)) => format!("{p}.{n}"),
@@ -255,12 +262,13 @@ impl Document {
 
             // Valeur actuelle. Les valeurs des champs sont encodées en
             // **WinAnsi** (la page de codes de la police standard) : un
-            // `String::from_utf8_lossy` re-encodait chaque octet ≥ 0x80
-            // en deux octets UTF-8, et le lecteur affichait « cafÃ© »
-            // au lieu de « café ». On lit donc les octets tels quels.
+            // `String::from_utf8_lossy` remplaçait chaque octet ≥ 0x80 par le
+            // caractère de remplacement, et un accent ressortait en point
+            // d'interrogation. On décode donc comme le reste du texte PDF :
+            // UTF-16BE, sinon UTF-8, sinon Latin-1.
             let value = dict.get(b"V").ok().and_then(|o| match o {
-                Object::String(bytes, _) => Some(String::from_utf8_lossy(bytes).to_string()),
-                Object::Name(n) => Some(String::from_utf8_lossy(n).to_string()),
+                Object::String(bytes, _) => Some(crate::structure::decode_pdf_text(bytes)),
+                Object::Name(n) => Some(crate::structure::decode_pdf_text(n)),
                 _ => None,
             });
 
@@ -273,7 +281,7 @@ impl Document {
                     arr.iter()
                         .filter_map(|opt| match opt {
                             Object::String(bytes, _) => {
-                                Some(String::from_utf8_lossy(bytes).to_string())
+                                Some(crate::structure::decode_pdf_text(bytes))
                             }
                             _ => None,
                         })
@@ -281,13 +289,24 @@ impl Document {
                 })
                 .unwrap_or_default();
 
-            // Flags lecture seule (bit 1).
+            // Flags lecture seule (bit 1), obligatoire (bit 2), multiligne
+            // (bit 13).
             let flags = dict
                 .get(b"Ff")
                 .ok()
                 .and_then(|o| o.as_i64().ok())
                 .unwrap_or(0);
             let read_only = flags & 1 != 0;
+            let required = flags & 2 != 0;
+            let multiline = flags & 4096 != 0;
+
+            // Aide au survol.
+            let tooltip = dict
+                .get(b"TU")
+                .ok()
+                .and_then(|o| o.as_str().ok())
+                .map(crate::structure::decode_pdf_text)
+                .unwrap_or_default();
 
             // Page du champ (via /P si présent).
             let page = dict
@@ -304,6 +323,9 @@ impl Document {
                     value,
                     options,
                     read_only,
+                    tooltip,
+                    required,
+                    multiline,
                     page,
                 });
             }
@@ -492,6 +514,9 @@ impl Document {
             value: field.value.clone(),
             options: field.options.clone(),
             read_only: field.read_only,
+            tooltip: String::new(),
+            required: false,
+            multiline: false,
             page: Some(field.page as usize),
         })
     }
@@ -702,8 +727,17 @@ impl Document {
             .ok_or_else(|| Error::InvalidInput(format!("champ « {} » introuvable", field.name)))?;
 
         // Le nom complet peut être hiérarchique : on n'écrit que le segment
-        // local, le `/T` du parent reste donc intact.
-        let local = props.name.rsplit('.').next().unwrap_or(&props.name);
+        // local, et seulement quand le préfixe du parent est bien celui du nom
+        // demandé. Un champ de premier niveau garde le nom saisi tel quel —
+        // le tronquer au dernier point renommerait « a.b » en « b ».
+        let local = match field.name.rsplit_once('.') {
+            Some((prefix, _)) => props
+                .name
+                .strip_prefix(&format!("{prefix}."))
+                .or_else(|| props.name.rsplit('.').next())
+                .unwrap_or(&props.name),
+            None => props.name.as_str(),
+        };
         let is_choice = matches!(
             field.kind,
             FormFieldKind::Choice | FormFieldKind::MultiChoice
@@ -756,7 +790,10 @@ impl Document {
     }
 
     /// Sérialise chaque couple nom/valeur de champ.
-    pub fn export_form_data(&self, format: FormDataFormat) -> Result<String> {
+    ///
+    /// Le résultat est en octets : le FDF est un conteneur d'octets dont les
+    /// littéraux sont en WinAnsi, une chaîne UTF-8 n'y suffit pas.
+    pub fn export_form_data(&self, format: FormDataFormat) -> Result<Vec<u8>> {
         let pairs: Vec<(String, String)> = self
             .read_form_fields()
             .into_iter()
@@ -764,9 +801,9 @@ impl Document {
             .collect();
 
         let out = match format {
-            FormDataFormat::Csv => export_csv(&pairs),
-            FormDataFormat::Json => export_json(&pairs),
-            FormDataFormat::Xfdf => export_xfdf(&pairs),
+            FormDataFormat::Csv => export_csv(&pairs).into_bytes(),
+            FormDataFormat::Json => export_json(&pairs).into_bytes(),
+            FormDataFormat::Xfdf => export_xfdf(&pairs).into_bytes(),
             FormDataFormat::Fdf => export_fdf(&pairs),
         };
         Ok(out)
@@ -774,12 +811,12 @@ impl Document {
 
     /// Lit des couples nom/valeur et les écrit dans les champs. Renvoie le
     /// nombre de valeurs réellement appliquées.
-    pub fn import_form_data(&mut self, format: FormDataFormat, data: &str) -> Result<usize> {
+    pub fn import_form_data(&mut self, format: FormDataFormat, data: &[u8]) -> Result<usize> {
         let pairs = match format {
-            FormDataFormat::Csv => parse_csv(data),
-            FormDataFormat::Json => parse_json(data),
-            FormDataFormat::Xfdf => parse_xfdf(data),
-            FormDataFormat::Fdf => parse_fdf(data.as_bytes()),
+            FormDataFormat::Csv => parse_csv(&String::from_utf8_lossy(data)),
+            FormDataFormat::Json => parse_json(&String::from_utf8_lossy(data)),
+            FormDataFormat::Xfdf => parse_xfdf(&String::from_utf8_lossy(data)),
+            FormDataFormat::Fdf => parse_fdf(data),
         };
 
         let mut applied = 0usize;
@@ -942,21 +979,27 @@ fn export_xfdf(pairs: &[(String, String)]) -> String {
 }
 
 /// Encode une valeur en littéral PDF `(…)`, prêt à insérer.
-fn pdf_literal(s: &str) -> String {
-    let bytes = crate::edit::encode_pdf_literal(s);
-    format!("({})", String::from_utf8_lossy(&bytes))
+///
+/// Le résultat reste en octets : les littéraux FDF sont en WinAnsi, et passer
+/// par une `String` remplaçait chaque octet ≥ 0x80 par U+FFFD.
+fn pdf_literal(s: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len() + 2);
+    out.push(b'(');
+    out.extend_from_slice(&crate::edit::encode_pdf_literal(s));
+    out.push(b')');
+    out
 }
 
-fn export_fdf(pairs: &[(String, String)]) -> String {
-    let mut out = String::from("%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [\n");
+fn export_fdf(pairs: &[(String, String)]) -> Vec<u8> {
+    let mut out = Vec::from(&b"%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [\n"[..]);
     for (name, value) in pairs {
-        out.push_str("<< /T ");
-        out.push_str(&pdf_literal(name));
-        out.push_str(" /V ");
-        out.push_str(&pdf_literal(value));
-        out.push_str(" >>\n");
+        out.extend_from_slice(b"<< /T ");
+        out.extend_from_slice(&pdf_literal(name));
+        out.extend_from_slice(b" /V ");
+        out.extend_from_slice(&pdf_literal(value));
+        out.extend_from_slice(b" >>\n");
     }
-    out.push_str("] >>\n>>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    out.extend_from_slice(b"] >>\n>>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
     out
 }
 

@@ -7,6 +7,12 @@
 use youpdf_core::forms::{FieldProperties, FormDataFormat, NewFormField};
 use youpdf_core::{Document, FormFieldKind};
 
+/// Les formats texte sortent en octets (le FDF est un conteneur d'octets) ;
+/// les tests les relisent en texte.
+fn as_text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 /// Une page blanche 612×792.
 fn page_blanche() -> Vec<u8> {
     use lopdf::{dictionary, Document as LopdfDoc, Object, Stream};
@@ -130,6 +136,20 @@ fn renommer_champ_absent_echoue() {
     assert!(doc.update_form_field(&absent, &props).is_err());
 }
 
+/// Un champ de premier niveau garde le nom saisi, point compris : le tronquer
+/// au dernier point renommerait « groupe.nom » en « nom ».
+#[test]
+fn renommer_premier_niveau_garde_le_point() {
+    let mut doc = doc_avec_champs(&["Nom"]);
+    let field = doc.read_form_fields().remove(0);
+    let props = FieldProperties {
+        name: "groupe.nom".to_string(),
+        ..FieldProperties::default()
+    };
+    doc.update_form_field(&field, &props).expect("mise à jour");
+    assert_eq!(doc.read_form_fields()[0].name, "groupe.nom");
+}
+
 /// Poser `Required` ne touche pas au bit de type déjà présent.
 #[test]
 fn drapeau_obligatoire_sans_ecraser() {
@@ -199,7 +219,7 @@ fn export_csv_cite() {
     ]))
     .expect("ouverture");
 
-    let csv = doc.export_form_data(FormDataFormat::Csv).expect("export");
+    let csv = as_text(&doc.export_form_data(FormDataFormat::Csv).expect("export"));
     assert!(csv.starts_with("name,value\n"), "en-tête absent : {csv}");
     assert!(csv.contains("champ1,\"a,b\"\n"), "virgule non citée : {csv}");
     assert!(
@@ -222,7 +242,7 @@ fn export_json_echappe() {
     ]))
     .expect("ouverture");
 
-    let json = doc.export_form_data(FormDataFormat::Json).expect("export");
+    let json = as_text(&doc.export_form_data(FormDataFormat::Json).expect("export"));
     assert!(json.starts_with("{\"fields\":["), "forme inattendue : {json}");
     assert!(json.contains("quote\\\" back\\\\ slash"), "échappement : {json}");
     assert!(json.contains("tab\\there"), "tabulation : {json}");
@@ -235,7 +255,7 @@ fn export_xfdf_echappe() {
     let doc = Document::from_bytes(&pdf_avec_valeurs(&[("a", b"a&b<c>d\"e'f")]))
         .expect("ouverture");
 
-    let xfdf = doc.export_form_data(FormDataFormat::Xfdf).expect("export");
+    let xfdf = as_text(&doc.export_form_data(FormDataFormat::Xfdf).expect("export"));
     assert!(
         xfdf.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"),
         "prologue absent : {xfdf}"
@@ -253,7 +273,7 @@ fn export_fdf_conteneur() {
     let field = doc.read_form_fields().remove(0);
     doc.fill_form_field(&field, "Ada").expect("remplissage");
 
-    let fdf = doc.export_form_data(FormDataFormat::Fdf).expect("export");
+    let fdf = as_text(&doc.export_form_data(FormDataFormat::Fdf).expect("export"));
     assert!(fdf.starts_with("%FDF-1.2"), "en-tête FDF : {fdf}");
     assert!(fdf.contains("/FDF << /Fields ["), "corps FDF : {fdf}");
     assert!(fdf.contains("<< /T (Nom) /V (Ada) >>"), "champ FDF : {fdf}");
@@ -294,12 +314,37 @@ fn aller_retour_quatre_formats() {
     }
 }
 
+/// Le FDF est un conteneur d'octets : un accent doit survivre à l'aller-retour.
+///
+/// Le passer par une chaîne UTF-8 remplaçait chaque octet ≥ 0x80 par U+FFFD.
+#[test]
+fn fdf_conserve_les_accents() {
+    let mut source = doc_avec_champs(&["Nom"]);
+    let field = source.read_form_fields().remove(0);
+    source.fill_form_field(&field, "Café").expect("remplissage");
+
+    let fdf = source.export_form_data(FormDataFormat::Fdf).expect("export");
+    assert!(
+        fdf.contains(&0xE9),
+        "l'octet WinAnsi du « é » a disparu : {fdf:?}"
+    );
+
+    let mut cible = doc_avec_champs(&["Nom"]);
+    let applied = cible.import_form_data(FormDataFormat::Fdf, &fdf).expect("import");
+    assert_eq!(applied, 1);
+    assert_eq!(
+        cible.read_form_fields()[0].value.as_deref(),
+        Some("Café"),
+        "accent perdu"
+    );
+}
+
 /// Un nom inconnu est ignoré, les autres valeurs s'appliquent.
 #[test]
 fn import_ignore_nom_inconnu() {
     let mut doc = doc_avec_champs(&["Nom"]);
     let applied = doc
-        .import_form_data(FormDataFormat::Csv, "name,value\nInconnu,x\nNom,Ada\n")
+        .import_form_data(FormDataFormat::Csv, b"name,value\nInconnu,x\nNom,Ada\n")
         .expect("import");
     assert_eq!(applied, 1, "seul le champ connu doit s'appliquer");
     assert_eq!(doc.read_form_fields()[0].value.as_deref(), Some("Ada"));
