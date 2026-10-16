@@ -58,6 +58,80 @@ const PAGE_SPACING: f32 = 16.0;
 const THUMB_HEIGHT: f32 = 118.0;
 
 // --------------------------------------------------------------------------
+// Disposition des pages
+// --------------------------------------------------------------------------
+
+/// Disposition des pages dans le canevas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum PageLayout {
+    /// Une seule page : la page courante, sans défilement continu.
+    Single,
+    /// Défilement continu, une page par ligne.
+    #[default]
+    Continuous,
+    /// Deux pages côte à côte.
+    TwoPages,
+    /// Première page seule, puis deux par deux, comme un livre ouvert.
+    Cover,
+}
+
+impl PageLayout {
+    fn label(self) -> &'static str {
+        match self {
+            PageLayout::Single => "Single page",
+            PageLayout::Continuous => "Continuous scroll",
+            PageLayout::TwoPages => "Two pages",
+            PageLayout::Cover => "Cover (book)",
+        }
+    }
+}
+
+/// Entrée choisie dans le menu `…`.
+enum MenuAction {
+    Save,
+    SaveAs,
+    ExportText,
+    Properties,
+    Close,
+    /// Change la disposition des pages du canevas.
+    Layout(PageLayout),
+    /// Bascule le plein écran.
+    Fullscreen,
+}
+
+/// Répartit les pages en rangées selon la disposition choisie. Chaque rangée
+/// occupe une ligne du canevas et contient une ou deux pages.
+fn page_layout_rows(layout: PageLayout, total: u32, current: u32) -> Vec<Vec<u32>> {
+    if total == 0 {
+        return Vec::new();
+    }
+    // Deux pages par rangée à partir de `first`.
+    let pairs = |first: u32| -> Vec<Vec<u32>> {
+        let mut rows = Vec::new();
+        let mut page = first;
+        while page <= total {
+            rows.push(if page < total {
+                vec![page, page + 1]
+            } else {
+                vec![page]
+            });
+            page += 2;
+        }
+        rows
+    };
+    match layout {
+        PageLayout::Single => vec![vec![current.clamp(1, total)]],
+        PageLayout::Continuous => (1..=total).map(|page| vec![page]).collect(),
+        PageLayout::TwoPages => pairs(1),
+        PageLayout::Cover => {
+            let mut rows = vec![vec![1]];
+            rows.extend(pairs(2));
+            rows
+        }
+    }
+}
+
+// --------------------------------------------------------------------------
 // Outils du rail
 // --------------------------------------------------------------------------
 
@@ -322,6 +396,13 @@ pub struct YouPdfApp {
     page_entry: String,
     /// Surface d'accueil (fichiers récents) affichée à la place du canevas.
     home_open: bool,
+    /// Disposition des pages du canevas (une, continue, deux, couverture).
+    page_layout: PageLayout,
+    /// Plein écran natif demandé par le menu `…`.
+    fullscreen: bool,
+    /// Le menu `…` vient d'être ouvert dans cette trame (le clic qui l'ouvre
+    /// ne doit pas le refermer aussitôt).
+    actions_opened: bool,
     /// Journal d'activité : messages récents et leur horodatage.
     activity: Vec<(String, f64)>,
     /// Fenêtre « Activity » ouverte.
@@ -411,6 +492,9 @@ impl YouPdfApp {
             search_word: false,
             page_entry: String::new(),
             home_open: initial.is_none(),
+            page_layout: PageLayout::default(),
+            fullscreen: false,
+            actions_opened: false,
             activity: Vec::new(),
             activity_open: false,
             recents: load_recents(),
@@ -3087,6 +3171,7 @@ impl YouPdfApp {
                             };
                             if more.clicked() {
                                 self.actions_open = !self.actions_open;
+                                self.actions_opened = true;
                             }
                         });
                     });
@@ -3095,7 +3180,7 @@ impl YouPdfApp {
         // Menu `…` : enregistrer, exporter, propriétés.
         if self.actions_open {
             let mut action = None;
-            Area::new(Id::new("actions-menu"))
+            let area = Area::new(Id::new("actions-menu"))
                 .anchor(Align2::RIGHT_TOP, vec2(-14.0, top + 38.0))
                 .order(Order::Foreground)
                 .show(ctx, |ui| {
@@ -3106,13 +3191,38 @@ impl YouPdfApp {
                         .inner_margin(Margin::symmetric(4.0, 4.0))
                         .show(ui, |ui| {
                             if menu_row(ui, "Save", "⌘S") {
-                                action = Some(0);
+                                action = Some(MenuAction::Save);
                             }
-                            if menu_row(ui, "Save as…", "⇧⌘S") {
-                                action = Some(1);
+                            if menu_row(ui, "Save as…", "Shift+⌘S") {
+                                action = Some(MenuAction::SaveAs);
                             }
                             if menu_row(ui, "Export text…", "") {
-                                action = Some(2);
+                                action = Some(MenuAction::ExportText);
+                            }
+                            ui.add_space(4.0);
+                            let sep = ui.cursor().top();
+                            ui.painter().hline(
+                                ui.max_rect().x_range(),
+                                sep,
+                                Stroke::new(1.0_f32, SEPARATOR),
+                            );
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                ui.add_space(10.0);
+                                ui.label(RichText::new("View").size(10.0).color(MUTED));
+                            });
+                            for (mark, layout) in [
+                                ("Single page", PageLayout::Single),
+                                ("Continuous scroll", PageLayout::Continuous),
+                                ("Two pages", PageLayout::TwoPages),
+                                ("Cover (book)", PageLayout::Cover),
+                            ] {
+                                if menu_row_checked(ui, mark, self.page_layout == layout) {
+                                    action = Some(MenuAction::Layout(layout));
+                                }
+                            }
+                            if menu_row_checked(ui, "Fullscreen", self.fullscreen) {
+                                action = Some(MenuAction::Fullscreen);
                             }
                             ui.add_space(4.0);
                             let sep = ui.cursor().top();
@@ -3123,28 +3233,58 @@ impl YouPdfApp {
                             );
                             ui.add_space(4.0);
                             if menu_row(ui, "Properties…", "⌘D") {
-                                action = Some(3);
+                                action = Some(MenuAction::Properties);
                             }
                             if menu_row(ui, "Close tab", "⌘W") {
-                                action = Some(4);
+                                action = Some(MenuAction::Close);
                             }
                         });
                 });
+            // Fermeture au clic hors du menu, comme les menus natifs. Le clic
+            // qui a ouvert le menu dans cette même trame ne compte pas.
+            if !self.actions_opened {
+                let (clicked, pointer) =
+                    ctx.input(|i| (i.pointer.any_click(), i.pointer.interact_pos()));
+                let inside = pointer.is_some_and(|p| area.response.rect.contains(p));
+                if clicked && !inside {
+                    self.actions_open = false;
+                }
+            }
+            self.actions_opened = false;
             if let Some(action) = action {
                 self.actions_open = false;
                 match action {
-                    0 => self.save_active(ctx),
-                    1 => self.save_as(ctx),
-                    2 => self.export_text(ctx),
-                    3 => self.props_open = true,
-                    4 => {
+                    MenuAction::Save => self.save_active(ctx),
+                    MenuAction::SaveAs => self.save_as(ctx),
+                    MenuAction::ExportText => self.export_text(ctx),
+                    MenuAction::Properties => self.props_open = true,
+                    MenuAction::Close => {
                         let idx = self.active;
                         self.close_tab(idx);
                     }
-                    _ => {}
+                    MenuAction::Layout(layout) => self.set_page_layout(ctx, layout),
+                    MenuAction::Fullscreen => self.toggle_fullscreen(ctx),
                 }
             }
         }
+    }
+
+    /// Change la disposition des pages et ramène la page courante sous les
+    /// yeux : dans une autre grille, la position de défilement n'a plus de
+    /// sens.
+    fn set_page_layout(&mut self, ctx: &egui::Context, layout: PageLayout) {
+        if self.page_layout == layout {
+            return;
+        }
+        self.page_layout = layout;
+        self.jump = Some(self.tabs.get(self.active).map_or(1, |tab| tab.page));
+        self.toast(ctx, format!("Layout: {}", layout.label()));
+    }
+
+    /// Bascule le plein écran natif (le chrome maison reste visible).
+    fn toggle_fullscreen(&mut self, ctx: &egui::Context) {
+        self.fullscreen = !self.fullscreen;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
     }
 
     // -- Propriétés --------------------------------------------------------
@@ -3227,6 +3367,7 @@ impl YouPdfApp {
         };
         let status = &mut self.render_status;
         let last_fit = &mut self.last_fit;
+        let page_layout = self.page_layout;
         let tab = &mut self.tabs[active];
         let total = tab.total();
         let sense = if action == ToolAction::None {
@@ -3260,14 +3401,29 @@ impl YouPdfApp {
                 // Hauteur utile : la fenêtre moins deux marges de page.
                 let clip = ui.clip_rect();
                 let view_h = (clip.height() - PAGE_SPACING * 2.0).max(50.0);
-                for page in 1..=total as u32 {
-                    let (wp, hp) = tab.doc.page_size(page);
+                // Géométrie : on répartit les pages en rangées, on alloue une
+                // ligne par rangée, puis on place les pages dedans. La
+                // disposition choisie décide combien de pages partagent une
+                // ligne ; « Une page » n'en garde que la page courante.
+                let mut placed: Vec<(u32, Rect, Rect, Id, f32)> = Vec::new();
+                for row_pages in &page_layout_rows(page_layout, total as u32, tab.page as u32) {
+                    // Toutes les pages d'une rangée partagent la même échelle :
+                    // sinon deux pages côte à côte n'auraient pas la même
+                    // hauteur, et la lecture perdrait ses repères.
+                    let sizes: Vec<(f32, f32)> = row_pages
+                        .iter()
+                        .map(|page| tab.doc.page_size(*page))
+                        .collect();
+                    let total_w: f32 = sizes.iter().map(|(w, _)| *w).sum();
+                    let max_h = sizes.iter().map(|(_, h)| *h).fold(1.0_f32, f32::max);
+                    let slots = row_pages.len() as f32;
                     let scale = tab
                         .zoom
                         .unwrap_or_else(|| {
-                            let fit_width = avail / wp.max(1.0);
+                            let fit_width =
+                                (avail - PAGE_SPACING * (slots - 1.0)) / total_w.max(1.0);
                             if tab.zoom_fit_page {
-                                fit_width.min(view_h / hp.max(1.0))
+                                fit_width.min(view_h / max_h)
                             } else {
                                 fit_width
                             }
@@ -3276,20 +3432,36 @@ impl YouPdfApp {
                     if tab.zoom.is_none() {
                         *last_fit = scale;
                     }
-                    let size = vec2(wp * scale, hp * scale);
-                    // La ligne occupe toute la largeur disponible : la page est
-                    // centrée dedans, comme dans la référence. Sans cela, une
-                    // page plus étroite que le canevas (zoom < ajustement)
+                    let row_h = max_h * scale;
+                    // La ligne occupe toute la largeur disponible : les pages
+                    // sont centrées dedans, comme dans la référence. Sans cela,
+                    // une page plus étroite que le canevas (zoom < ajustement)
                     // resterait collée à gauche.
-                    let (rect, row) = ui.allocate_exact_size(
-                        vec2(avail, size.y + PAGE_SPACING),
-                        Sense::hover(),
-                    );
-                    let page_rect = Rect::from_min_size(
-                        pos2(rect.min.x + ((avail - size.x) * 0.5).max(0.0), rect.min.y),
-                        size,
-                    );
-                    let resp = ui.interact(page_rect, row.id.with(page), sense);
+                    let (row_rect, row) =
+                        ui.allocate_exact_size(vec2(avail, row_h + PAGE_SPACING), Sense::hover());
+                    let row_w = total_w * scale + PAGE_SPACING * (slots - 1.0);
+                    let mut cursor_x = row_rect.min.x + ((avail - row_w) * 0.5).max(0.0);
+
+                    for (slot, page) in row_pages.iter().enumerate() {
+                        let (wp, hp) = sizes[slot];
+                        let size = vec2(wp * scale, hp * scale);
+                        let page_rect = Rect::from_min_size(
+                            pos2(cursor_x, row_rect.min.y + (row_h - size.y) * 0.5),
+                            size,
+                        );
+                        cursor_x += size.x + PAGE_SPACING;
+                        // La zone de clic descend jusqu'au bas de la rangée :
+                        // entre deux pages empilées, la bande d'espacement
+                        // répond donc encore au clic.
+                        let hit =
+                            Rect::from_min_size(page_rect.min, vec2(size.x, size.y + PAGE_SPACING));
+                        placed.push((*page, hit, page_rect, row.id, scale));
+                    }
+                }
+
+                for (page, rect, page_rect, row_id, scale) in placed {
+                    let size = page_rect.size();
+                    let resp = ui.interact(rect, row_id.with(page), sense);
 
                     if jump == Some(page as usize) {
                         ui.scroll_to_rect(Rect::from_min_size(page_rect.min, size), Some(Align::Min));
@@ -3998,7 +4170,7 @@ impl YouPdfApp {
             self.toast(ctx, "Annotation removed");
             return;
         }
-        let (cmd, shift, open, close, plus, minus, zero, save, find) = ctx.input(|i| {
+        let (cmd, shift, open, close, plus, minus, zero, save, find, full) = ctx.input(|i| {
             (
                 i.modifiers.command,
                 i.modifiers.shift,
@@ -4009,6 +4181,7 @@ impl YouPdfApp {
                 i.key_pressed(egui::Key::Num0),
                 i.key_pressed(egui::Key::S),
                 i.key_pressed(egui::Key::G),
+                i.key_pressed(egui::Key::F),
             )
         });
         if cmd && find {
@@ -4017,6 +4190,9 @@ impl YouPdfApp {
         }
         if !cmd {
             return;
+        }
+        if full {
+            self.toggle_fullscreen(ctx);
         }
         if save {
             if shift {
@@ -4213,6 +4389,32 @@ fn icon_pill(
         icon_chevron(ui.painter(), ch_rect, MUTED);
     }
     resp
+}
+
+/// Ligne de menu cochable : la place de la coche est réservée même quand
+/// l'entrée ne l'est pas, sinon les libellés d'un même groupe danseraient
+/// d'une ligne à l'autre.
+fn menu_row_checked(ui: &mut egui::Ui, label: &str, checked: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(210.0, 26.0), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, Rounding::same(5.0), HOVER_BG);
+    }
+    if checked {
+        glyph(
+            ui.painter(),
+            Rect::from_center_size(pos2(rect.min.x + 18.0, rect.center().y), vec2(15.0, 15.0)),
+            ACCENT,
+            ph::CHECK,
+        );
+    }
+    ui.painter().text(
+        pos2(rect.min.x + 32.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(12.5),
+        ICON_BRIGHT,
+    );
+    resp.clicked()
 }
 
 /// Ligne de menu `Outils` : libellé à gauche, raccourci à droite.
@@ -4804,5 +5006,70 @@ fn draw_annots(
         if selected == Some(idx) {
             painter.rect_stroke(r.expand(3.0), 2.0, Stroke::new(1.5_f32, ACCENT));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn cachet(rows: &[Vec<u32>]) -> HashSet<u32> {
+        rows.iter().flatten().copied().collect()
+    }
+
+    /// Chaque disposition doit couvrir exactement les pages, une fois chacune.
+    #[test]
+    fn layouts_cover_every_page_once() {
+        for total in 1..=7u32 {
+            for layout in [
+                PageLayout::Single,
+                PageLayout::Continuous,
+                PageLayout::TwoPages,
+                PageLayout::Cover,
+            ] {
+                let rows = page_layout_rows(layout, total, 3);
+                let pages = cachet(&rows);
+                assert_eq!(
+                    pages.len(),
+                    if layout == PageLayout::Single { 1 } else { total as usize },
+                    "{layout:?} sur {total} pages : {rows:?}"
+                );
+                assert!(pages.iter().all(|p| *p >= 1 && *p <= total), "{rows:?}");
+                for row in &rows {
+                    let expected = match layout {
+                        PageLayout::Single | PageLayout::Continuous => 1,
+                        PageLayout::TwoPages | PageLayout::Cover => 2,
+                    };
+                    assert!(
+                        row.len() <= expected,
+                        "{layout:?} : rangée trop longue {row:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// La couverture laisse la première page seule, puis apparie 2-3, 4-5…
+    #[test]
+    fn cover_pairs_pages_after_the_first() {
+        assert_eq!(
+            page_layout_rows(PageLayout::Cover, 5, 1),
+            vec![vec![1], vec![2, 3], vec![4, 5]]
+        );
+        assert_eq!(
+            page_layout_rows(PageLayout::TwoPages, 5, 1),
+            vec![vec![1, 2], vec![3, 4], vec![5]]
+        );
+        assert_eq!(
+            page_layout_rows(PageLayout::Continuous, 3, 2),
+            vec![vec![1], vec![2], vec![3]]
+        );
+        assert_eq!(
+            page_layout_rows(PageLayout::Single, 3, 9),
+            vec![vec![3]],
+            "la page courante est ramenée dans les bornes"
+        );
+        assert!(page_layout_rows(PageLayout::Continuous, 0, 1).is_empty());
     }
 }
