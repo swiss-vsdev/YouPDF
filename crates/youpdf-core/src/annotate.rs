@@ -231,6 +231,11 @@ pub struct Annotation {
     pub created_at: String,
 }
 
+/// Date PDF (`D:AAAAMMJJHHmmSSZ`) pour l'entrée `/M`.
+fn pdf_date(now: chrono::DateTime<chrono::Utc>) -> String {
+    now.format("D:%Y%m%d%H%M%SZ").to_string()
+}
+
 /// Nom de la police des apparences (Helvetica standard).
 pub const APPEARANCE_FONT_NAME: &str = "YouPdfF1";
 
@@ -582,7 +587,12 @@ impl Annotation {
         );
         d.set("NM", Object::string_literal(self.id.as_str()));
         d.set("T", Object::string_literal(self.author.as_str()));
-        d.set("M", Object::string_literal(self.created_at.as_str()));
+        // `/M` suit le format de date du PDF, pas celui de l'horloge interne :
+        // une chaîne RFC 3339 n'est pas lisible par les autres lecteurs.
+        let modified = chrono::DateTime::parse_from_rfc3339(&self.created_at)
+            .map(|date| date.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now());
+        d.set("M", Object::string_literal(pdf_date(modified)));
         d.set("C", Object::Array(self.style.pdf_color()));
         d.set("CA", Object::Real(self.style.opacity));
         // F = 4 (Print) : l'annotation doit apparaître à l'impression.
@@ -1363,7 +1373,13 @@ fn parse_annotation(dict: &Dictionary, id: &str, page: usize) -> Option<Annotati
         .get(b"M")
         .ok()
         .and_then(|o| o.as_str().ok())
-        .map(|s| String::from_utf8_lossy(s).to_string())
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        // Une date PDF redevient une date lisible ; une chaîne illisible est
+        // gardée telle quelle plutôt que remplacée par l'heure courante.
+        .map(|raw| match crate::metadata::parse_pdf_date(&raw) {
+            Some(date) => date.to_rfc3339(),
+            None => raw,
+        })
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
     let color = dict
