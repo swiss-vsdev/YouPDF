@@ -20,8 +20,9 @@ use egui_phosphor::regular as ph;
 use youpdf_core::render::NullRenderer;
 use youpdf_core::{
     fold_case, Annotation, AnnotationKind, AnnotationStyle, AttachmentInfo, Document,
-    FormField, FormFieldKind, OutlineItem, PdfiumRenderer, RedactionRegion, RenderOptions,
-    Renderer, SearchIndex, SearchOptions, SearchResult, TextFragment, STAMP_NAMES,
+    EncryptionOptions, EncryptionStrength, FormField, FormFieldKind, HeaderFooter, NumberStyle,
+    OutlineItem, PageRange, PdfiumRenderer, RedactionRegion, RenderOptions, Renderer, SearchIndex,
+    SearchOptions, SearchResult, TextFragment, Watermark, STAMP_NAMES,
 };
 
 // --------------------------------------------------------------------------
@@ -99,6 +100,16 @@ enum MenuAction {
     Layout(PageLayout),
     /// Bascule le plein écran.
     Fullscreen,
+    /// Ouvre la fenêtre de filigrane.
+    Watermark,
+    /// Ouvre la fenêtre d'en-tête et pied de page.
+    HeaderFooter,
+    /// Même fenêtre, préremplie pour des numéros de page.
+    PageNumbers,
+    /// Ouvre la fenêtre de compression.
+    Compress,
+    /// Ouvre la fenêtre de protection par mot de passe.
+    Protect,
 }
 
 /// Répartit les pages en rangées selon la disposition choisie. Chaque rangée
@@ -406,6 +417,21 @@ pub struct YouPdfApp {
     actions_open: bool,
     /// Fenêtre « Propriétés du document ».
     props_open: bool,
+    /// Fenêtre « Filigrane » et son brouillon.
+    watermark_open: bool,
+    watermark: Watermark,
+    /// Première page décorée ; `None` = toutes.
+    watermark_from: Option<u32>,
+    /// Fenêtre « En-tête et pied de page » et son brouillon.
+    header_footer_open: bool,
+    header_footer: HeaderFooter,
+    header_footer_from: Option<u32>,
+    /// Fenêtre « Compresser » : dernier bilan affiché.
+    compress_open: bool,
+    compress_report: Option<String>,
+    /// Fenêtre « Protéger » et ses réglages.
+    protect_open: bool,
+    protect: EncryptionOptions,
     /// Outil d'annotation actif (index dans la barre du mode Comment).
     annot_tool: Option<usize>,
     /// Type de marque du surligneur (surlignage, soulignage, barré, ondulé).
@@ -526,6 +552,16 @@ impl YouPdfApp {
             tools_open: false,
             actions_open: false,
             props_open: false,
+            watermark_open: false,
+            watermark: Watermark::default(),
+            watermark_from: None,
+            header_footer_open: false,
+            header_footer: HeaderFooter::default(),
+            header_footer_from: None,
+            compress_open: false,
+            compress_report: None,
+            protect_open: false,
+            protect: EncryptionOptions::default(),
             annot_tool: None,
             marker: AnnotationKind::Highlight,
             shape: AnnotationKind::Square,
@@ -3584,6 +3620,33 @@ impl YouPdfApp {
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(10.0);
+                                ui.label(RichText::new("Document").size(10.0).color(MUTED));
+                            });
+                            if menu_row(ui, "Watermark…", "") {
+                                action = Some(MenuAction::Watermark);
+                            }
+                            if menu_row(ui, "Header & footer…", "") {
+                                action = Some(MenuAction::HeaderFooter);
+                            }
+                            if menu_row(ui, "Page numbers…", "") {
+                                action = Some(MenuAction::PageNumbers);
+                            }
+                            if menu_row(ui, "Compress…", "") {
+                                action = Some(MenuAction::Compress);
+                            }
+                            if menu_row(ui, "Protect…", "") {
+                                action = Some(MenuAction::Protect);
+                            }
+                            ui.add_space(4.0);
+                            let sep = ui.cursor().top();
+                            ui.painter().hline(
+                                ui.max_rect().x_range(),
+                                sep,
+                                Stroke::new(1.0_f32, SEPARATOR),
+                            );
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                ui.add_space(10.0);
                                 ui.label(RichText::new("View").size(10.0).color(MUTED));
                             });
                             for (mark, layout) in [
@@ -3640,6 +3703,17 @@ impl YouPdfApp {
                     }
                     MenuAction::Layout(layout) => self.set_page_layout(ctx, layout),
                     MenuAction::Fullscreen => self.toggle_fullscreen(ctx),
+                    MenuAction::Watermark => self.watermark_open = true,
+                    MenuAction::HeaderFooter => self.header_footer_open = true,
+                    MenuAction::PageNumbers => {
+                        // Même fenêtre : on préremplit la numérotation.
+                        if self.header_footer.page_numbers.is_none() {
+                            self.header_footer.page_numbers = Some(NumberStyle::Numeric);
+                        }
+                        self.header_footer_open = true;
+                    }
+                    MenuAction::Compress => self.compress_open = true,
+                    MenuAction::Protect => self.protect_open = true,
                 }
             }
         }
@@ -3752,6 +3826,465 @@ impl YouPdfApp {
 
         if !open {
             self.props_open = false;
+        }
+    }
+
+    // -- Filigrane, en-tête, compression, protection -----------------------
+
+    /// Nom de fichier sans extension de l'onglet actif, pour proposer un
+    /// nom de sortie (« rapport-protected.pdf »).
+    fn active_stem(&self) -> Option<String> {
+        self.tabs
+            .get(self.active)
+            .and_then(|tab| tab.path.as_ref())
+            .and_then(|path| path.file_stem())
+            .map(|stem| stem.to_string_lossy().into_owned())
+    }
+
+    /// « Toutes les pages » ou « à partir de N » donnent une plage.
+    fn page_range_from(from: Option<u32>) -> PageRange {
+        match from {
+            Some(page) => PageRange::From(page.max(1)),
+            None => PageRange::All,
+        }
+    }
+
+    /// Nombre de pages de l'onglet actif, au moins une.
+    fn active_total(&self) -> u32 {
+        self.tabs
+            .get(self.active)
+            .map(|tab| tab.total())
+            .unwrap_or(0)
+            .max(1) as u32
+    }
+
+    /// Fenêtre « Filigrane ».
+    fn watermark_window(&mut self, ctx: &egui::Context) {
+        if !self.watermark_open {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        let mut clear = false;
+        let total = self.active_total();
+        egui::Window::new("Watermark")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(360.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Text").size(12.0).color(MUTED));
+                    ui.add(TextEdit::singleline(&mut self.watermark.text).desired_width(230.0));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Size").size(12.0).color(MUTED));
+                    ui.add(
+                        egui::DragValue::new(&mut self.watermark.font_size).range(6.0..=200.0),
+                    );
+                    ui.label(RichText::new("Angle").size(12.0).color(MUTED));
+                    ui.add(
+                        egui::DragValue::new(&mut self.watermark.rotation_deg).range(-90.0..=90.0),
+                    );
+                    ui.checkbox(&mut self.watermark.tiled, "Tiled");
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Opacity").size(12.0).color(MUTED));
+                    ui.add(
+                        egui::Slider::new(&mut self.watermark.opacity, 0.05..=1.0).show_value(false),
+                    );
+                    ui.label(
+                        RichText::new(format!("{:.0} %", self.watermark.opacity * 100.0))
+                            .size(12.0)
+                            .color(ICON_BRIGHT),
+                    );
+                    ui.label(RichText::new("Grey").size(12.0).color(MUTED));
+                    let mut grey = self.watermark.color[0];
+                    if ui
+                        .add(egui::Slider::new(&mut grey, 0..=255).show_value(false))
+                        .changed()
+                    {
+                        self.watermark.color = [grey, grey, grey];
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Pages").size(12.0).color(MUTED));
+                    let mut all = self.watermark_from.is_none();
+                    if ui.checkbox(&mut all, format!("All ({total})")).changed() {
+                        self.watermark_from = if all { None } else { Some(1) };
+                    }
+                    if let Some(from) = self.watermark_from.as_mut() {
+                        ui.label(RichText::new("then from").size(12.0).color(MUTED));
+                        ui.add(egui::DragValue::new(from).range(1..=total));
+                    }
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Apply").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Remove from the document").clicked() {
+                        clear = true;
+                    }
+                });
+            });
+
+        if apply {
+            self.watermark.pages = Self::page_range_from(self.watermark_from);
+            let wm = self.watermark.clone();
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.add_text_watermark(&wm));
+            match result {
+                Some(Ok(pages)) => {
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("Watermark applied to {pages} page(s)"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Watermark failed: {err}")),
+                None => {}
+            }
+        }
+        if clear {
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.clear_watermarks());
+            match result {
+                Some(Ok(removed)) => {
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("Removed {removed} decoration(s)"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Remove failed: {err}")),
+                None => {}
+            }
+        }
+        if !open {
+            self.watermark_open = false;
+        }
+    }
+
+    /// Fenêtre « En-tête et pied de page ».
+    fn header_footer_window(&mut self, ctx: &egui::Context) {
+        if !self.header_footer_open {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        let mut clear = false;
+        let total = self.active_total();
+        egui::Window::new("Header & footer")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(460.0);
+                ui.label(
+                    RichText::new(
+                        "The band is drawn at the top and at the bottom of the page;                          the page number joins the footer centre.",
+                    )
+                    .size(11.0)
+                    .color(MUTED),
+                );
+                ui.add_space(4.0);
+                egui::Grid::new("hf-grid")
+                    .num_columns(3)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("Left").size(11.0).color(MUTED));
+                        ui.label(RichText::new("Centre").size(11.0).color(MUTED));
+                        ui.label(RichText::new("Right").size(11.0).color(MUTED));
+                        ui.end_row();
+                        ui.add(
+                            TextEdit::singleline(&mut self.header_footer.left).desired_width(140.0),
+                        );
+                        ui.add(
+                            TextEdit::singleline(&mut self.header_footer.center)
+                                .desired_width(140.0),
+                        );
+                        ui.add(
+                            TextEdit::singleline(&mut self.header_footer.right)
+                                .desired_width(140.0),
+                        );
+                        ui.end_row();
+                    });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Page numbers").size(12.0).color(MUTED));
+                    for (text, style) in [
+                        ("None", None),
+                        ("1", Some(NumberStyle::Numeric)),
+                        ("1 / n", Some(NumberStyle::NumericTotal)),
+                        ("i", Some(NumberStyle::Roman)),
+                    ] {
+                        if ui
+                            .selectable_label(self.header_footer.page_numbers == style, text)
+                            .clicked()
+                        {
+                            self.header_footer.page_numbers = style;
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Start at").size(12.0).color(MUTED));
+                    ui.add(egui::DragValue::new(&mut self.header_footer.start_page).range(1..=total));
+                    ui.checkbox(&mut self.header_footer.skip_first_page, "Skip first page");
+                    ui.label(RichText::new("Size").size(12.0).color(MUTED));
+                    ui.add(egui::DragValue::new(&mut self.header_footer.font_size).range(4.0..=36.0));
+                    ui.label(RichText::new("Margin").size(12.0).color(MUTED));
+                    ui.add(egui::DragValue::new(&mut self.header_footer.margin).range(0.0..=120.0));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Pages").size(12.0).color(MUTED));
+                    let mut all = self.header_footer_from.is_none();
+                    if ui.checkbox(&mut all, format!("All ({total})")).changed() {
+                        self.header_footer_from = if all { None } else { Some(1) };
+                    }
+                    if let Some(from) = self.header_footer_from.as_mut() {
+                        ui.label(RichText::new("then from").size(12.0).color(MUTED));
+                        ui.add(egui::DragValue::new(from).range(1..=total));
+                    }
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Apply").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Remove from the document").clicked() {
+                        clear = true;
+                    }
+                });
+            });
+
+        if apply {
+            self.header_footer.pages = Self::page_range_from(self.header_footer_from);
+            let hf = self.header_footer.clone();
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.add_header_footer(&hf));
+            match result {
+                Some(Ok(pages)) => {
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("Band applied to {pages} page(s)"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Header and footer failed: {err}")),
+                None => {}
+            }
+        }
+        if clear {
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.clear_watermarks());
+            match result {
+                Some(Ok(removed)) => {
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("Removed {removed} decoration(s)"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Remove failed: {err}")),
+                None => {}
+            }
+        }
+        if !open {
+            self.header_footer_open = false;
+        }
+    }
+
+    /// Fenêtre « Compresser ».
+    fn compress_window(&mut self, ctx: &egui::Context) {
+        if !self.compress_open {
+            return;
+        }
+        let mut open = true;
+        let mut run = false;
+        egui::Window::new("Compress")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(380.0);
+                ui.label(
+                    RichText::new(
+                        "Streams are deflated and unreachable objects are dropped.                          Images are not resampled and fonts are not subset, so a file                          made of scans barely shrinks.",
+                    )
+                    .size(12.0)
+                    .color(MUTED),
+                );
+                if let Some(report) = self.compress_report.clone() {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(report).size(12.0).color(ICON_BRIGHT));
+                }
+                ui.add_space(8.0);
+                if ui.button("Save compressed copy…").clicked() {
+                    run = true;
+                }
+            });
+        if run {
+            self.compress_active(ctx);
+        }
+        if !open {
+            self.compress_open = false;
+        }
+    }
+
+    /// Écrit une copie compressée du document, et retient le bilan.
+    fn compress_active(&mut self, ctx: &egui::Context) {
+        let name = self
+            .active_stem()
+            .map(|stem| format!("{stem}-compressed.pdf"))
+            .unwrap_or_else(|| "compressed.pdf".to_owned());
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("PDF", &["pdf"])
+            .set_file_name(&name)
+            .save_file()
+        else {
+            return;
+        };
+        let result = self
+            .tabs
+            .get_mut(self.active)
+            .map(|tab| tab.doc.compress(&path));
+        match result {
+            Some(Ok(report)) => {
+                let before = report.before_bytes as f64 / 1024.0;
+                let after = report.after_bytes as f64 / 1024.0;
+                self.compress_report = Some(format!(
+                    "{before:.0} KB → {after:.0} KB ({} byte(s) saved)",
+                    report.saved_bytes()
+                ));
+                self.mark_document_changed();
+                let saved = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "the copy".to_owned());
+                self.toast(ctx, format!("Compressed copy saved: {saved}"));
+            }
+            Some(Err(err)) => self.toast(ctx, format!("Compress failed: {err}")),
+            None => {}
+        }
+    }
+
+    /// Fenêtre « Protéger ».
+    fn protect_window(&mut self, ctx: &egui::Context) {
+        if !self.protect_open {
+            return;
+        }
+        let mut open = true;
+        let mut run = false;
+        egui::Window::new("Protect")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(420.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Encryption").size(12.0).color(MUTED));
+                    for strength in [EncryptionStrength::Aes256, EncryptionStrength::Rc4_128] {
+                        if ui
+                            .selectable_label(
+                                self.protect.strength == strength,
+                                strength.display_name(),
+                            )
+                            .clicked()
+                        {
+                            self.protect.strength = strength;
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Open password").size(12.0).color(MUTED));
+                    ui.add(
+                        TextEdit::singleline(&mut self.protect.user_password)
+                            .password(true)
+                            .desired_width(190.0),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Permissions password").size(12.0).color(MUTED));
+                    ui.add(
+                        TextEdit::singleline(&mut self.protect.owner_password)
+                            .password(true)
+                            .desired_width(150.0),
+                    );
+                });
+                ui.add_space(6.0);
+                ui.label(RichText::new("Allowed actions").size(12.0).color(MUTED));
+                egui::Grid::new("protect-perms")
+                    .num_columns(3)
+                    .spacing([14.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.checkbox(&mut self.protect.permissions.print, "Print");
+                        ui.checkbox(
+                            &mut self.protect.permissions.print_high_quality,
+                            "High-quality print",
+                        );
+                        ui.checkbox(&mut self.protect.permissions.copy, "Copy text");
+                        ui.end_row();
+                        ui.checkbox(&mut self.protect.permissions.modify, "Modify");
+                        ui.checkbox(&mut self.protect.permissions.annotate, "Comment");
+                        ui.checkbox(&mut self.protect.permissions.fill_forms, "Fill forms");
+                        ui.end_row();
+                        ui.checkbox(&mut self.protect.permissions.assemble, "Assemble");
+                        ui.checkbox(&mut self.protect.permissions.accessibility, "Accessibility");
+                        ui.end_row();
+                    });
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(
+                        "The copy is encrypted on disk; the document in the window stays open                          and unencrypted.",
+                    )
+                    .size(11.0)
+                    .color(MUTED),
+                );
+                ui.add_space(6.0);
+                if ui.button("Save encrypted copy…").clicked() {
+                    run = true;
+                }
+            });
+        if run {
+            self.protect_active(ctx);
+        }
+        if !open {
+            self.protect_open = false;
+        }
+    }
+
+    /// Écrit une copie chiffrée du document.
+    fn protect_active(&mut self, ctx: &egui::Context) {
+        if self.protect.user_password.is_empty() {
+            self.toast(ctx, "Set an open password first");
+            return;
+        }
+        let name = self
+            .active_stem()
+            .map(|stem| format!("{stem}-protected.pdf"))
+            .unwrap_or_else(|| "protected.pdf".to_owned());
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("PDF", &["pdf"])
+            .set_file_name(&name)
+            .save_file()
+        else {
+            return;
+        };
+        let options = self.protect.clone();
+        let result = self
+            .tabs
+            .get(self.active)
+            .map(|tab| tab.doc.save_protected(&path, &options));
+        match result {
+            Some(Ok(())) => {
+                let saved = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "the copy".to_owned());
+                self.toast(ctx, format!("Encrypted copy saved: {saved}"));
+            }
+            Some(Err(err)) => self.toast(ctx, format!("Protect failed: {err}")),
+            None => {}
         }
     }
 
@@ -4823,6 +5356,10 @@ impl eframe::App for YouPdfApp {
         self.toolbar(ctx);
         self.zoom_overlay(ctx);
         self.properties_window(ctx);
+        self.watermark_window(ctx);
+        self.header_footer_window(ctx);
+        self.compress_window(ctx);
+        self.protect_window(ctx);
         self.draft_window(ctx);
         self.redact_window(ctx);
         self.organize_window(ctx);
