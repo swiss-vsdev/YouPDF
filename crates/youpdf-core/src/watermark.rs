@@ -266,8 +266,19 @@ fn watermark_ops(wm: &Watermark, width: f32, height: f32) -> Vec<u8> {
     }
 
     if wm.tiled {
-        let step_x = text_width(&wm.text, size) + 120.0;
-        let step_y = size + 120.0;
+        let mut step_x = text_width(&wm.text, size) + 120.0;
+        let mut step_y = size + 120.0;
+        // Une page démesurée — affiche, plan de ville, ou boîte héritée d'un
+        // fichier hostile — demanderait des centaines de milliers
+        // d'opérations. L'espacement s'élargit plutôt que d'abandonner la
+        // trame, qui doit continuer à couvrir la page.
+        const MAX_TILES: f32 = 400.0;
+        let estimated = (width / step_x + 1.0) * (height / step_y + 1.0);
+        if estimated > MAX_TILES {
+            let factor = (estimated / MAX_TILES).sqrt();
+            step_x *= factor;
+            step_y *= factor;
+        }
         let mut y = size;
         while y < height + step_y {
             let mut x = 0.0_f32;
