@@ -21,12 +21,12 @@ use youpdf_core::render::NullRenderer;
 use youpdf_core::ocr::{make_searchable, TesseractEngine};
 use youpdf_core::{
     blank_document, document_from_images, fold_case, Annotation, AnnotationKind, AnnotationStyle,
-    AttachmentInfo, Background, Bates, BatesPosition, ComparisonReport, CropMargins, DifferenceKind,
-    Document, EncryptionOptions, EncryptionStrength, ExtractedTable, FieldProperties,
-    FormDataFormat, FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, MeasureKind,
-    Measurement, NumberStyle, OcrEngine, OcrMode, OutlineItem, PageRange, PdfiumRenderer,
-    RedactionRegion, RenderOptions, Renderer, SearchIndex, SearchOptions, SearchResult, TextFormat,
-    TextFragment, Watermark, STAMP_NAMES,
+    AttachmentInfo, Background, Bates, BatesPosition, ComparisonReport, Conformance, CropMargins,
+    DifferenceKind, Document, EncryptionOptions, EncryptionStrength, ExtractedTable,
+    FieldProperties, FormDataFormat, FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue,
+    MeasureKind, Measurement, NumberStyle, OcrEngine, OcrMode, OutlineItem, OutlineStyle, PageRange,
+    PdfiumRenderer, RedactionRegion, RenderOptions, Renderer, SearchIndex, SearchOptions,
+    SearchResult, TextFormat, TextFragment, Watermark, STAMP_NAMES,
 };
 
 // --------------------------------------------------------------------------
@@ -145,6 +145,14 @@ enum MenuAction {
     Batch,
     /// Ouvre la fenêtre d'extraction de données.
     Extract,
+    /// Écrit une copie déclarée conforme à un niveau.
+    Conformance(Conformance),
+    /// Écrit un PDF dont chaque page est une image.
+    ImagePdf,
+    /// Reconstruit les signets à partir du texte.
+    GenerateOutline,
+    /// Retire tous les signets.
+    ClearOutline,
 }
 
 /// Répartit les pages en rangées selon la disposition choisie. Chaque rangée
@@ -4392,6 +4400,29 @@ impl YouPdfApp {
                             if menu_row(ui, "Extract data…", "") {
                                 action = Some(MenuAction::Extract);
                             }
+                            if menu_row(ui, "Generate bookmarks", "") {
+                                action = Some(MenuAction::GenerateOutline);
+                            }
+                            if menu_row(ui, "Clear bookmarks", "") {
+                                action = Some(MenuAction::ClearOutline);
+                            }
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.add_space(10.0);
+                                ui.label(RichText::new("Save as").size(10.0).color(MUTED));
+                            });
+                            for level in [
+                                Conformance::PdfA2b,
+                                Conformance::PdfX4,
+                                Conformance::PdfE1,
+                            ] {
+                                if menu_row(ui, level.display_name(), "") {
+                                    action = Some(MenuAction::Conformance(level));
+                                }
+                            }
+                            if menu_row(ui, "Image PDF…", "") {
+                                action = Some(MenuAction::ImagePdf);
+                            }
                             ui.add_space(4.0);
                             let sep = ui.cursor().top();
                             ui.painter().hline(
@@ -4490,6 +4521,10 @@ impl YouPdfApp {
                     MenuAction::Slideshow => self.enter_slideshow(ctx),
                     MenuAction::Batch => self.batch_open = true,
                     MenuAction::Extract => self.extract_open = true,
+                    MenuAction::Conformance(level) => self.conformance_save(ctx, level),
+                    MenuAction::ImagePdf => self.image_pdf_save(ctx),
+                    MenuAction::GenerateOutline => self.generate_bookmarks(ctx),
+                    MenuAction::ClearOutline => self.clear_bookmarks(ctx),
                 }
             }
         }
@@ -6162,6 +6197,97 @@ impl YouPdfApp {
         }
         if !open {
             self.measure_open = false;
+        }
+    }
+
+    /// Enregistre une copie déclarée conforme (PDF/A, PDF/X, PDF/E).
+    fn conformance_save(&mut self, ctx: &egui::Context, level: Conformance) {
+        let name = self
+            .active_stem()
+            .map(|stem| format!("{stem}-{}.pdf", level.display_name().replace('/', "-")))
+            .unwrap_or_else(|| "conformant.pdf".to_owned());
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("PDF", &["pdf"])
+            .set_file_name(&name)
+            .save_file()
+        else {
+            return;
+        };
+        let result =
+            self.with_annotations_applied(|tab| tab.doc.save_with_conformance(&path, level));
+        match result {
+            Some(Ok(())) => {
+                self.toast(
+                    ctx,
+                    format!(
+                        "{} copy written (markers only — validate it externally)",
+                        level.display_name()
+                    ),
+                );
+            }
+            Some(Err(err)) => self.toast(ctx, format!("Save failed: {err}")),
+            None => {}
+        }
+    }
+
+    /// Enregistre un PDF dont chaque page est l'image rendue de la page.
+    fn image_pdf_save(&mut self, ctx: &egui::Context) {
+        let name = self
+            .active_stem()
+            .map(|stem| format!("{stem}-images.pdf"))
+            .unwrap_or_else(|| "images.pdf".to_owned());
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("PDF", &["pdf"])
+            .set_file_name(&name)
+            .save_file()
+        else {
+            return;
+        };
+        let renderer = &*self.renderer;
+        let result = self.tabs.get_mut(self.active).map(|tab| {
+            // Les annotations en attente font partie de l'image produite.
+            let _ = tab.doc.apply_annotations(&tab.annots);
+            let outcome = tab.doc.save_image_pdf(&path, renderer, 150.0);
+            let _ = tab.doc.clear_youpdf_annotations();
+            outcome
+        });
+        match result {
+            Some(Ok(())) => self.toast(ctx, "Image PDF written"),
+            Some(Err(err)) => self.toast(ctx, format!("Save failed: {err}")),
+            None => {}
+        }
+    }
+
+    /// Reconstruit les signets à partir des titres du document.
+    fn generate_bookmarks(&mut self, ctx: &egui::Context) {
+        let style = OutlineStyle::default();
+        let result = self
+            .tabs
+            .get_mut(self.active)
+            .map(|tab| tab.doc.generate_outline(&style));
+        match result {
+            Some(Ok(count)) => {
+                self.mark_document_changed();
+                self.toast(ctx, format!("{count} bookmark(s) created"));
+            }
+            Some(Err(err)) => self.toast(ctx, format!("Bookmarks failed: {err}")),
+            None => {}
+        }
+    }
+
+    /// Retire tous les signets du document.
+    fn clear_bookmarks(&mut self, ctx: &egui::Context) {
+        let result = self
+            .tabs
+            .get_mut(self.active)
+            .map(|tab| tab.doc.clear_outline());
+        match result {
+            Some(Ok(count)) => {
+                self.mark_document_changed();
+                self.toast(ctx, format!("{count} bookmark(s) removed"));
+            }
+            Some(Err(err)) => self.toast(ctx, format!("Remove failed: {err}")),
+            None => {}
         }
     }
 
