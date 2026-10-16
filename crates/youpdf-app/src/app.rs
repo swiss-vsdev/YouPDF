@@ -19,8 +19,9 @@ use egui::{
 use egui_phosphor::regular as ph;
 use youpdf_core::render::NullRenderer;
 use youpdf_core::{
-    Annotation, AnnotationKind, AnnotationStyle, Document, PdfiumRenderer,
-    RenderOptions, Renderer, SearchIndex, SearchResult, STAMP_NAMES,
+    Annotation, AnnotationKind, AnnotationStyle, AttachmentInfo, Document, FormField,
+    FormFieldKind, OutlineItem, PdfiumRenderer, RenderOptions, Renderer, SearchIndex,
+    SearchResult, STAMP_NAMES,
 };
 
 // --------------------------------------------------------------------------
@@ -28,6 +29,13 @@ use youpdf_core::{
 // --------------------------------------------------------------------------
 
 const CANVAS_BG: Color32 = Color32::from_rgb(0x30, 0x30, 0x30);
+/// Fonds proposés dans le panneau Aspect.
+const CANVAS_STYLES: [Color32; 4] = [
+    Color32::from_rgb(0x30, 0x30, 0x30),
+    Color32::from_rgb(0x1E, 0x1E, 0x1E),
+    Color32::from_rgb(0x4A, 0x4A, 0x4A),
+    Color32::from_rgb(0xD8, 0xD8, 0xD8),
+];
 const CHROME_BG: Color32 = Color32::from_rgb(0x28, 0x28, 0x28);
 const WIDGET_BG: Color32 = Color32::from_rgb(0x38, 0x38, 0x38);
 const HOVER_BG: Color32 = Color32::from_rgb(0x48, 0x48, 0x48);
@@ -232,6 +240,14 @@ struct Tab {
     /// Piles d'annulation/rétablissement (instantanés des annotations).
     undo: Vec<Vec<Annotation>>,
     redo: Vec<Vec<Annotation>>,
+    /// Plan du document (signets).
+    outline: Vec<OutlineItem>,
+    /// Champs de formulaire du document.
+    forms: Vec<FormField>,
+    /// Pièces jointes du document.
+    attachments: Vec<AttachmentInfo>,
+    /// Vrai quand plan, formulaires et pièces jointes ont été lus.
+    structure_loaded: bool,
 }
 
 impl Tab {
@@ -283,6 +299,14 @@ pub struct YouPdfApp {
     stamp_choice: usize,
     /// Type d'annotation créé par le brouillon courant.
     draft_annot_kind: AnnotationKind,
+    /// Champ de formulaire sélectionné et saisie en cours.
+    form_edit: Option<(usize, String)>,
+    /// Fond du canevas choisi dans Aspect.
+    canvas_style: usize,
+    /// Ombre portée sous les pages.
+    page_shadow: bool,
+    /// Échelle des vignettes du panneau Pages.
+    thumb_scale: f32,
 
     search_query: String,
     search_index: Option<(usize, SearchIndex)>,
@@ -335,6 +359,10 @@ impl YouPdfApp {
             drag_to: None,
             stamp_choice: 0,
             draft_annot_kind: AnnotationKind::FreeText,
+            form_edit: None,
+            canvas_style: 0,
+            page_shadow: true,
+            thumb_scale: 1.0,
             search_query: String::new(),
             search_index: None,
             results: Vec::new(),
@@ -396,6 +424,10 @@ impl YouPdfApp {
                     annots_loaded: false,
                     undo: Vec::new(),
                     redo: Vec::new(),
+                    outline: Vec::new(),
+                    forms: Vec::new(),
+                    attachments: Vec::new(),
+                    structure_loaded: false,
                 });
                 self.active = self.tabs.len() - 1;
                 self.panel = Some(Panel::Thumbnails);
@@ -619,6 +651,416 @@ impl YouPdfApp {
         tab.doc
             .apply_annotations(&tab.annots)
             .map_err(|err| err.to_string())
+    }
+
+    // -- Structure du document ---------------------------------------------
+
+    /// Lit le plan, les formulaires et les pièces jointes à la demande.
+    fn ensure_structure(&mut self) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            if !tab.structure_loaded {
+                tab.outline = tab.doc.outline();
+                tab.forms = tab.doc.read_form_fields();
+                tab.attachments = tab.doc.attachments();
+                tab.structure_loaded = true;
+            }
+        }
+    }
+
+    /// Panneau Signets : plan du document.
+    fn bookmarks_panel(&mut self, ui: &mut egui::Ui) {
+        self.ensure_structure();
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        if tab.outline.is_empty() {
+            panel_hint(ui, "No bookmarks", "The document has no outline");
+            return;
+        }
+        let entries: Vec<(String, Option<usize>, usize)> = tab
+            .outline
+            .iter()
+            .map(|item| (item.title.clone(), item.page, item.level))
+            .collect();
+
+        let mut jump = None;
+        ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(6.0);
+                for (title, page, level) in &entries {
+                    let indent = 12.0 + (*level as f32 * 12.0).min(48.0);
+                    let (rect, resp) = ui.allocate_exact_size(
+                        vec2(PANEL_W - 24.0, 26.0),
+                        Sense::click(),
+                    );
+                    if resp.hovered() {
+                        ui.painter()
+                            .rect_filled(rect, Rounding::same(6.0), WIDGET_BG);
+                    }
+                    ui.painter().text(
+                        pos2(rect.min.x + indent, rect.center().y),
+                        Align2::LEFT_CENTER,
+                        shorten(title, 30),
+                        FontId::proportional(12.0),
+                        ICON_BRIGHT,
+                    );
+                    if let Some(page) = page {
+                        ui.painter().text(
+                            pos2(rect.max.x - 10.0, rect.center().y),
+                            Align2::RIGHT_CENTER,
+                            format!("p.{page}"),
+                            FontId::proportional(10.5),
+                            MUTED,
+                        );
+                    }
+                    if resp.clicked() {
+                        jump = *page;
+                    }
+                    ui.add_space(2.0);
+                }
+            });
+        if let Some(page) = jump {
+            self.jump = Some(page);
+        }
+    }
+
+    /// Panneau Formulaires : lecture et remplissage des champs.
+    fn forms_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        self.ensure_structure();
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        if tab.forms.is_empty() {
+            panel_hint(ui, "No form fields", "This PDF has no AcroForm fields");
+            return;
+        }
+        let rows: Vec<(String, String, Option<usize>, bool, String)> = tab
+            .forms
+            .iter()
+            .map(|field| {
+                (
+                    field.name.clone(),
+                    form_kind_label(&field.kind),
+                    field.page,
+                    field.read_only,
+                    field.value.clone().unwrap_or_default(),
+                )
+            })
+            .collect();
+
+        let mut jump = None;
+        let mut select = None;
+        ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(6.0);
+                for (idx, (name, kind, page, read_only, value)) in rows.iter().enumerate() {
+                    let (rect, resp) = ui
+                        .allocate_exact_size(vec2(PANEL_W - 24.0, 40.0), Sense::click());
+                    if resp.hovered() {
+                        ui.painter()
+                            .rect_filled(rect, Rounding::same(6.0), WIDGET_BG);
+                    }
+                    ui.painter().text(
+                        pos2(rect.min.x + 10.0, rect.min.y + 12.0),
+                        Align2::LEFT_CENTER,
+                        shorten(name, 26),
+                        FontId::proportional(12.0),
+                        ICON_BRIGHT,
+                    );
+                    let detail = if value.is_empty() {
+                        format!("{kind} · empty")
+                    } else {
+                        format!("{kind} · {}", shorten(value, 20))
+                    };
+                    ui.painter().text(
+                        pos2(rect.min.x + 10.0, rect.min.y + 28.0),
+                        Align2::LEFT_CENTER,
+                        if *read_only { format!("{detail} · read-only") } else { detail },
+                        FontId::proportional(10.5),
+                        MUTED,
+                    );
+                    if let Some(page) = page {
+                        ui.painter().text(
+                            pos2(rect.max.x - 10.0, rect.min.y + 12.0),
+                            Align2::RIGHT_CENTER,
+                            format!("p.{page}"),
+                            FontId::proportional(10.0),
+                            MUTED,
+                        );
+                    }
+                    if resp.clicked() {
+                        if *read_only {
+                            jump = *page;
+                        } else {
+                            select = Some(idx);
+                        }
+                    }
+                    ui.add_space(4.0);
+                }
+            });
+
+        if let Some(idx) = select {
+            let current = rows
+                .get(idx)
+                .map(|row| row.4.clone())
+                .unwrap_or_default();
+            self.form_edit = Some((idx, current));
+            if let Some(page) = rows.get(idx).and_then(|row| row.2) {
+                self.jump = Some(page);
+            }
+        } else if let Some(page) = jump {
+            self.jump = Some(page);
+        }
+
+        // Éditeur du champ sélectionné.
+        let Some((idx, mut buffer)) = self.form_edit.take() else {
+            return;
+        };
+        let field = self
+            .tabs
+            .get(self.active)
+            .and_then(|tab| tab.forms.get(idx))
+            .cloned();
+        let Some(field) = field else {
+            return;
+        };
+        let mut apply = false;
+        let mut close = false;
+        Frame::none()
+            .fill(WIDGET_BG)
+            .rounding(Rounding::same(8.0))
+            .inner_margin(Margin::symmetric(10.0, 8.0))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(format!("{}  ({})", field.name, form_kind_label(&field.kind)))
+                        .size(11.5)
+                        .color(ICON_BRIGHT),
+                );
+                ui.add_space(4.0);
+                match field.kind {
+                    FormFieldKind::Checkbox | FormFieldKind::Radio => {
+                        ui.horizontal(|ui| {
+                            if ui.button("On").clicked() {
+                                buffer = "On".to_owned();
+                                apply = true;
+                            }
+                            if ui.button("Off").clicked() {
+                                buffer = "Off".to_owned();
+                                apply = true;
+                            }
+                        });
+                    }
+                    _ => {
+                        ui.add_sized(
+                            vec2(PANEL_W - 46.0, 24.0),
+                            TextEdit::singleline(&mut buffer).hint_text("Value"),
+                        );
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Apply").clicked() {
+                                apply = true;
+                            }
+                            if ui.button("Close").clicked() {
+                                close = true;
+                            }
+                        });
+                    }
+                }
+            });
+        ui.add_space(6.0);
+
+        if apply {
+            let Some(tab) = self.tabs.get_mut(self.active) else {
+                return;
+            };
+            let Some(field) = tab.forms.get(idx).cloned() else {
+                return;
+            };
+            let result = tab.doc.fill_form_field(&field, &buffer);
+            match result {
+                Ok(()) => {
+                    if let Some(entry) = tab.forms.get_mut(idx) {
+                        entry.value = Some(buffer.clone());
+                    }
+                    tab.dirty = true;
+                    self.toast(ctx, format!("Field {} updated", field.name));
+                }
+                Err(err) => self.toast(ctx, format!("Field update failed: {err}")),
+            }
+        } else if !close {
+            self.form_edit = Some((idx, buffer));
+        }
+    }
+
+    /// Panneau Pièces jointes : liste et extraction.
+    fn attachments_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        self.ensure_structure();
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        if tab.attachments.is_empty() {
+            panel_hint(ui, "No attachments", "Use Insert to attach a file");
+            return;
+        }
+        let rows: Vec<(String, Option<usize>, Option<String>)> = tab
+            .attachments
+            .iter()
+            .map(|item| (item.name.clone(), item.size, item.description.clone()))
+            .collect();
+
+        let mut save = None;
+        ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(6.0);
+                for (idx, (name, size, description)) in rows.iter().enumerate() {
+                    let (rect, resp) =
+                        ui.allocate_exact_size(vec2(PANEL_W - 24.0, 44.0), Sense::click());
+                    if resp.hovered() {
+                        ui.painter()
+                            .rect_filled(rect, Rounding::same(6.0), WIDGET_BG);
+                    }
+                    let icon_rect = Rect::from_center_size(
+                        pos2(rect.min.x + 16.0, rect.center().y),
+                        vec2(15.0, 15.0),
+                    );
+                    icon_attach(ui.painter(), icon_rect, ICON_BRIGHT);
+                    ui.painter().text(
+                        pos2(rect.min.x + 30.0, rect.min.y + 13.0),
+                        Align2::LEFT_CENTER,
+                        shorten(name, 24),
+                        FontId::proportional(12.0),
+                        ICON_BRIGHT,
+                    );
+                    let mut detail = size
+                        .map(format_size)
+                        .unwrap_or_else(|| "size unknown".to_owned());
+                    if let Some(description) = description {
+                        detail = format!("{detail} · {}", shorten(description, 16));
+                    }
+                    ui.painter().text(
+                        pos2(rect.min.x + 30.0, rect.min.y + 30.0),
+                        Align2::LEFT_CENTER,
+                        detail,
+                        FontId::proportional(10.5),
+                        MUTED,
+                    );
+                    let save_rect = Rect::from_center_size(
+                        pos2(rect.max.x - 18.0, rect.center().y),
+                        vec2(22.0, 22.0),
+                    );
+                    let save_resp =
+                        ui.interact(save_rect, Id::new(("attach-save", idx)), Sense::click());
+                    icon_save(
+                        ui.painter(),
+                        save_rect.shrink(3.0),
+                        if save_resp.hovered() { ICON_BRIGHT } else { ICON },
+                    );
+                    if save_resp.clicked() {
+                        save = Some(idx);
+                    }
+                    ui.add_space(4.0);
+                }
+            });
+
+        let Some(idx) = save else {
+            return;
+        };
+        let Some((tab, name)) = self
+            .tabs
+            .get(self.active)
+            .zip(rows.get(idx).map(|row| row.0.clone()))
+        else {
+            return;
+        };
+        let bytes = match tab.doc.attachment_bytes(idx) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                self.toast(ctx, format!("Attachment failed: {err}"));
+                return;
+            }
+        };
+        let Some(target) = rfd::FileDialog::new().set_file_name(&name).save_file() else {
+            return;
+        };
+        match std::fs::write(&target, bytes) {
+            Ok(()) => self.toast(ctx, format!("Saved {}", target.display())),
+            Err(err) => self.toast(ctx, format!("Write failed: {err}")),
+        }
+    }
+
+    /// Panneau Aspect : fond du canevas, ombre, taille des vignettes.
+    fn aspect_panel(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            ui.label(RichText::new("Background").size(11.5).color(MUTED));
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            for (idx, color) in CANVAS_STYLES.iter().enumerate() {
+                let selected = self.canvas_style == idx;
+                let (rect, resp) =
+                    ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+                ui.painter().rect_filled(rect, Rounding::same(6.0), *color);
+                if selected {
+                    ui.painter().rect_stroke(
+                        rect.expand(2.0),
+                        7.0,
+                        Stroke::new(1.5_f32, ACCENT),
+                    );
+                }
+                if resp.clicked() {
+                    self.canvas_style = idx;
+                }
+            }
+        });
+
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            let mut shadow = self.page_shadow;
+            if ui.checkbox(&mut shadow, "Page shadow").changed() {
+                self.page_shadow = shadow;
+            }
+        });
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            ui.label(RichText::new("Thumbnails").size(11.5).color(MUTED));
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            ui.add_sized(
+                vec2(PANEL_W - 40.0, 18.0),
+                egui::Slider::new(&mut self.thumb_scale, 0.6..=1.6)
+                    .show_value(false),
+            );
+        });
+
+        ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            ui.label(
+                RichText::new("Notation")
+                    .size(11.0)
+                    .color(MUTED),
+            );
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            ui.label(
+                RichText::new("Colours come from the current tool presets.")
+                    .size(10.5)
+                    .color(MUTED),
+            );
+        });
     }
 
     // -- Outils d'annotation ------------------------------------------------
@@ -1343,6 +1785,11 @@ impl YouPdfApp {
                     Panel::Thumbnails => self.thumbnails(ui),
                     Panel::Search => self.search_ui(ctx, ui),
                     Panel::Comments => self.comments_panel(ctx, ui),
+                    Panel::Bookmarks => self.bookmarks_panel(ui),
+                    Panel::Forms => self.forms_panel(ctx, ui),
+                    Panel::Attachments => self.attachments_panel(ctx, ui),
+                    Panel::Aspect => self.aspect_panel(ui),
+                    #[allow(unreachable_patterns)]
                     other => {
                         ui.add_space(14.0);
                         ui.vertical_centered(|ui| {
@@ -1368,6 +1815,7 @@ impl YouPdfApp {
         let status = &mut self.render_status;
         let tab = &mut self.tabs[active];
         let total = tab.total();
+        let thumb_scale = self.thumb_scale;
         let mut jump = None;
 
         ScrollArea::vertical()
@@ -1376,7 +1824,7 @@ impl YouPdfApp {
                 let tile_width = ui.available_width().max(80.0);
                 for page in 1..=total as u32 {
                     let (wp, hp) = tab.doc.page_size(page);
-                    let scale = THUMB_HEIGHT / hp.max(1.0);
+                    let scale = (THUMB_HEIGHT * thumb_scale) / hp.max(1.0);
                     let size = vec2(wp * scale, hp * scale);
                     let (rect, resp) =
                         ui.allocate_exact_size(vec2(tile_width, size.y + 28.0), Sense::click());
@@ -2006,6 +2454,7 @@ impl YouPdfApp {
         let mut pending_hit: Option<(usize, [f32; 2])> = None;
         let selected_annot = self.selected_annot;
         let has_selection = self.has_annot_selection;
+        let show_shadow = self.page_shadow;
 
         ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -2036,11 +2485,13 @@ impl YouPdfApp {
                         }
 
                         // Ombre douce sous la page.
-                        ui.painter().rect_filled(
-                            page_rect.translate(vec2(0.0, 2.0)).expand(1.0),
-                            Rounding::same(3.0),
-                            Color32::from_black_alpha(70),
-                        );
+                        if show_shadow {
+                            ui.painter().rect_filled(
+                                page_rect.translate(vec2(0.0, 2.0)).expand(1.0),
+                                Rounding::same(3.0),
+                                Color32::from_black_alpha(70),
+                            );
+                        }
 
                         let bucket = (scale * ppp * 100.0).round() as u32;
                         if let Some(tex) = Self::page_texture(
@@ -2401,7 +2852,7 @@ impl eframe::App for YouPdfApp {
         self.rail(ctx);
         self.side_panel(ctx);
         CentralPanel::default()
-            .frame(Frame::none().fill(CANVAS_BG))
+            .frame(Frame::none().fill(CANVAS_STYLES[self.canvas_style.min(CANVAS_STYLES.len() - 1)]))
             .show(ctx, |ui| {
                 self.canvas(ui);
             });
@@ -2778,6 +3229,44 @@ fn icon_layout(p: &Painter, r: Rect, c: Color32) {
 // Icônes d'application (fichiers, zoom, gestion de pages).
 fn icon_minus(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::MINUS);
+}
+
+/// Taille lisible : octets sous 1 Ko, puis Ko et Mo.
+fn format_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// Message centré d'un panneau vide.
+fn panel_hint(ui: &mut egui::Ui, title: &str, detail: &str) {
+    ui.add_space(14.0);
+    ui.vertical_centered(|ui| {
+        ui.label(RichText::new(title).size(12.0).color(MUTED));
+        ui.add_space(4.0);
+        ui.label(RichText::new(detail).size(11.0).color(MUTED));
+    });
+}
+
+/// Libellé anglais d'un type de champ de formulaire.
+fn form_kind_label(kind: &FormFieldKind) -> String {
+    match kind {
+        FormFieldKind::Text => "Text field".to_owned(),
+        FormFieldKind::Checkbox => "Checkbox".to_owned(),
+        FormFieldKind::Radio => "Radio".to_owned(),
+        FormFieldKind::Choice => "Dropdown".to_owned(),
+        FormFieldKind::MultiChoice => "List".to_owned(),
+        FormFieldKind::Signature => "Signature".to_owned(),
+        FormFieldKind::Other(name) => format!("Field ({name})"),
+    }
+}
+
+fn icon_save(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::FLOPPY_DISK);
 }
 
 /// Libellé anglais d'un type d'annotation (le cœur est en français).
