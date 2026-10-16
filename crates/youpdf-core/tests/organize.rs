@@ -88,11 +88,15 @@ fn structured_pdf() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         ]),
     });
 
+    let script = doc.add_object(dictionary! {
+        "S" => Object::Name(b"JavaScript".to_vec()),
+        "JS" => Object::string_literal("app.alert('coucou')"),
+    });
     let catalog_id = doc.add_object(dictionary! {
         "Type" => Object::Name(b"Catalog".to_vec()),
         "Pages" => pages_id,
         "Outlines" => outline_root,
-        "Names" => dictionary! { "EmbeddedFiles" => embedded },
+        "Names" => dictionary! { "EmbeddedFiles" => embedded, "JavaScript" => script },
     });
     doc.trailer.set("Root", catalog_id);
     let mut buf = Vec::new();
@@ -213,14 +217,34 @@ fn outline_and_attachments() {
 }
 
 #[test]
-fn sanitize_removes_metadata_and_names() {
+fn sanitize_removes_scripts_and_keeps_attachments() {
     let bytes = structured_pdf().expect("PDF structuré");
     let mut doc = Document::from_bytes(&bytes).expect("ouverture");
     assert!(!doc.attachments().is_empty());
 
     let removed = doc.sanitize().expect("nettoyage");
     assert!(removed >= 1, "au moins une entrée retirée");
-    assert!(doc.attachments().is_empty(), "pièces jointes retirées");
+
+    // Le JavaScript est parti…
+    let out = doc.to_bytes().expect("sérialisation");
+    let reopened = lopdf::Document::load_mem(&out).expect("réouverture");
+    let names = reopened
+        .catalog()
+        .expect("catalogue")
+        .get(b"Names")
+        .expect("entrée Names")
+        .as_dict()
+        .expect("dictionnaire Names");
+    assert!(
+        names.get(b"JavaScript").is_err(),
+        "le script est resté sous /Names"
+    );
+    // …mais la pièce jointe, qui vit sous le même `/Names`, est restée.
+    assert!(
+        !doc.attachments().is_empty(),
+        "le nettoyage a emporté les pièces jointes"
+    );
+    assert_eq!(doc.attachment_bytes(0).expect("contenu joint"), b"contenu joint");
 }
 
 #[test]
@@ -291,4 +315,124 @@ fn pieces_jointes_arbre_abime() {
         b"corps".to_vec()
     );
     assert!(doc.attachment_bytes(1).is_err(), "index hors limites");
+}
+
+/// PDF de `pages` pages vides, de la taille demandée.
+fn pdf_of_size(pages: usize, width: i64, height: i64) -> Vec<u8> {
+    let mut doc = LopdfDoc::with_version("1.7");
+    let mut kids: Vec<Object> = Vec::new();
+    for _ in 0..pages {
+        let page_id = doc.add_object(dictionary! {
+            "Type" => Object::Name(b"Page".to_vec()),
+            "MediaBox" => Object::Array(vec![0.into(), 0.into(), width.into(), height.into()]),
+        });
+        kids.push(page_id.into());
+    }
+    let pages_id = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(kids),
+        "Count" => pages as i64,
+    });
+    let catalog_id = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => pages_id,
+    });
+    doc.trailer.set("Root", catalog_id);
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf).expect("écriture");
+    buf
+}
+
+/// « Insérer après la page N », avec N au-delà de la dernière, ajoute à la
+/// fin. L'ancien code traitait ce cas comme « en tête ».
+#[test]
+fn insert_after_the_last_page_appends() {
+    let mut doc = Document::from_bytes(&pdf_of_size(2, 612, 792)).expect("ouverture");
+    let source = temp_path("append.pdf");
+    std::fs::write(&source, pdf_of_size(3, 300, 400)).expect("écriture du source");
+
+    doc.insert_pages_after(99, &source).expect("insertion");
+    assert_eq!(doc.page_count(), 5);
+    assert_eq!(doc.page_size(1), (612.0, 792.0), "la page 1 a bougé");
+    assert_eq!(
+        doc.page_size(5),
+        (300.0, 400.0),
+        "les pages ajoutées ne sont pas à la fin"
+    );
+    let _ = std::fs::remove_file(source);
+}
+
+/// Les pages insérées dans un sous-arbre s'y rattachent par `/Parent`.
+///
+/// Les figer sur la racine alors qu'elles vivent plus bas rend l'arbre
+/// incohérent pour tout lecteur qui suit `/Parent`.
+#[test]
+fn inserted_pages_point_to_the_node_that_holds_them() {
+    // Arbre imbriqué : racine -> sous-arbre -> deux pages.
+    let mut builder = LopdfDoc::with_version("1.7");
+    let p1 = builder.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+    });
+    let p2 = builder.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+    });
+    let sub = builder.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![p1.into(), p2.into()]),
+        "Count" => 2,
+    });
+    let root = builder.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![sub.into()]),
+        "Count" => 2,
+    });
+    if let Ok(Object::Dictionary(dict)) = builder.get_object_mut(p1) {
+        dict.set("Parent", Object::Reference(sub));
+    }
+    if let Ok(Object::Dictionary(dict)) = builder.get_object_mut(p2) {
+        dict.set("Parent", Object::Reference(sub));
+    }
+    if let Ok(Object::Dictionary(dict)) = builder.get_object_mut(sub) {
+        dict.set("Parent", Object::Reference(root));
+    }
+    let catalog = builder.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => root,
+    });
+    builder.trailer.set("Root", Object::Reference(catalog));
+    let mut base = Vec::new();
+    builder.save_to(&mut base).expect("écriture");
+
+    let mut doc = Document::from_bytes(&base).expect("ouverture");
+    let source = temp_path("nested.pdf");
+    std::fs::write(&source, pdf_of_size(1, 200, 200)).expect("écriture du source");
+
+    // Après la page 1, qui vit dans le sous-arbre.
+    doc.insert_pages_after(1, &source).expect("insertion");
+    assert_eq!(doc.page_count(), 3);
+
+    let out = doc.to_bytes().expect("sérialisation");
+    let reopened = lopdf::Document::load_mem(&out).expect("réouverture");
+    let pages = reopened.get_pages();
+    let inserted = *pages.get(&2).expect("page insérée");
+    let parent = reopened
+        .get_dictionary(inserted)
+        .expect("page")
+        .get(b"Parent")
+        .expect("Parent")
+        .as_reference()
+        .expect("référence");
+    let parent_dict = reopened.get_dictionary(parent).expect("parent");
+    let kids = parent_dict
+        .get(b"Kids")
+        .expect("Kids")
+        .as_array()
+        .expect("tableau");
+    assert!(
+        kids.iter().any(|kid| kid.as_reference().ok() == Some(inserted)),
+        "la page insérée n'est pas dans le /Kids de son /Parent"
+    );
+    let _ = std::fs::remove_file(source);
 }
