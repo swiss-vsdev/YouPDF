@@ -320,6 +320,14 @@ pub struct YouPdfApp {
     search_word: bool,
     /// Saisie de la page à atteindre (pastille bas-droite).
     page_entry: String,
+    /// Surface d'accueil (fichiers récents) affichée à la place du canevas.
+    home_open: bool,
+    /// Journal d'activité : messages récents et leur horodatage.
+    activity: Vec<(String, f64)>,
+    /// Fenêtre « Activity » ouverte.
+    activity_open: bool,
+    /// Derniers fichiers ouverts, du plus récent au plus ancien.
+    recents: Vec<PathBuf>,
     /// Fenêtre « Organiser les pages » ouverte.
     organize_open: bool,
     /// Pages cochées dans cette fenêtre (vide = document entier).
@@ -378,7 +386,7 @@ impl YouPdfApp {
             renderer_label,
             tabs: Vec::new(),
             active: 0,
-            panel: Some(Panel::Thumbnails),
+            panel: None,
             mode: None,
             tools_open: false,
             actions_open: false,
@@ -402,6 +410,10 @@ impl YouPdfApp {
             search_case: false,
             search_word: false,
             page_entry: String::new(),
+            home_open: initial.is_none(),
+            activity: Vec::new(),
+            activity_open: false,
+            recents: load_recents(),
             organize_open: false,
             organize_selected: BTreeSet::new(),
             organize_split: 1,
@@ -436,7 +448,18 @@ impl YouPdfApp {
     }
 
     fn toast(&mut self, ctx: &egui::Context, text: impl Into<String>) {
-        self.toast = (text.into(), ctx.input(|i| i.time));
+        let now = ctx.input(|i| i.time);
+        self.record(text.into(), now);
+    }
+
+    /// Ajoute un message au bandeau et au journal d'activité.
+    fn record(&mut self, text: String, now: f64) {
+        self.toast = (text.clone(), now);
+        let duplicate = matches!(self.activity.first(), Some((last, _)) if *last == text);
+        if !duplicate {
+            self.activity.insert(0, (text, now));
+            self.activity.truncate(40);
+        }
     }
 
     // -- Fichiers ----------------------------------------------------------
@@ -483,6 +506,12 @@ impl YouPdfApp {
                 });
                 self.active = self.tabs.len() - 1;
                 self.panel = Some(Panel::Thumbnails);
+                self.home_open = false;
+                let path = self.tabs[self.active].path.clone().unwrap_or_default();
+                self.recents.retain(|old| old != &path);
+                self.recents.insert(0, path);
+                self.recents.truncate(8);
+                save_recents(&self.recents);
                 self.search_index = None;
                 self.results.clear();
                 self.jump = Some(1);
@@ -500,8 +529,16 @@ impl YouPdfApp {
     }
 
     /// Pose un message sans disposer du contexte.
+    /// Variante sans `Context` (utilisable avant la première trame) : le
+    /// message est horodaté au prochain rendu, comme dans le journal.
     fn toast_owned(&mut self, text: impl Into<String>) {
-        self.toast = (text.into(), f64::NAN); // horodaté au prochain rendu
+        let text = text.into();
+        self.toast = (text.clone(), f64::NAN);
+        let duplicate = matches!(self.activity.first(), Some((last, _)) if *last == text);
+        if !duplicate {
+            self.activity.insert(0, (text, f64::NAN));
+            self.activity.truncate(40);
+        }
     }
 
     fn close_tab(&mut self, idx: usize) {
@@ -1763,9 +1800,9 @@ impl YouPdfApp {
                 ui.horizontal_centered(|ui| {
                     ui.add_space(76.0); // place des feux de circulation natifs
 
-                    let home = icon_button(ui, 30.0, 28.0, false, icon_home);
+                    let home = icon_button(ui, 30.0, 28.0, self.home_open, icon_home);
                     if home.clicked() {
-                        self.toast(ctx, "Home (recent files) — planned");
+                        self.home_open = !self.home_open;
                     }
                     ui.add_space(12.0);
 
@@ -1859,7 +1896,7 @@ impl YouPdfApp {
                         ui.add_space(6.0);
                         let bell = icon_button(ui, 26.0, 26.0, false, icon_bell);
                         if bell.clicked() {
-                            self.toast(ctx, "Notifications — planned");
+                            self.activity_open = !self.activity_open;
                         }
                     });
 
@@ -1885,12 +1922,14 @@ impl YouPdfApp {
                 ui.vertical_centered(|ui| {
                     for tool in RAIL {
                         let selected = tool.panel.is_some() && self.panel == tool.panel;
-                        if rail_button(ui, selected, tool.draw).clicked() {
+                        let hit = rail_button(ui, selected, tool.draw)
+                            .on_hover_text(tool.label);
+                        if hit.clicked() {
                             match tool.panel {
                                 Some(p) => {
                                     self.panel = if self.panel == Some(p) { None } else { Some(p) }
                                 }
-                                None => self.toast(ctx, format!("{} — planned", tool.label)),
+                                None => self.organize_open = true,
                             }
                         }
                         ui.add_space(10.0);
@@ -2776,6 +2815,11 @@ impl YouPdfApp {
     // -- Barre d'outils flottante ------------------------------------------
 
     fn toolbar(&mut self, ctx: &egui::Context) {
+        // Sur l'accueil (aucun document, ou accueil affiché), pas de barres
+        // flottantes : elles n'auraient aucun document sur quoi agir.
+        if self.home_open || self.tabs.is_empty() {
+            return;
+        }
         let top = TITLE_H + 8.0;
         // Les barres flottantes sont ancrées au canevas, pas à la fenêtre :
         // le panneau latéral les décale (comme dans la référence).
@@ -3516,33 +3560,215 @@ impl YouPdfApp {
         }
     }
 
+    /// Surface d'accueil : accès direct aux fichiers récents.
     fn empty_state(&mut self, ui: &mut egui::Ui) {
-        ui.vertical_centered(|ui| {
-            ui.add_space(160.0);
-            ui.label(RichText::new("YouPDF").size(34.0).strong());
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new("Free, local-first PDF editing")
-                    .size(13.0)
-                    .color(MUTED),
-            );
-            ui.add_space(24.0);
-            let open = ui.add_sized(
-                vec2(160.0, 32.0),
-                Button::new(RichText::new("Open PDF").size(14.0)).fill(ACCENT),
-            );
-            if open.clicked() {
-                self.open_dialog();
+        let mut open: Option<PathBuf> = None;
+        let mut forget: Option<PathBuf> = None;
+        let mut clear = false;
+
+        ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(90.0);
+                    ui.label(RichText::new("YouPDF").size(34.0).strong());
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("Free, local-first PDF editing")
+                            .size(13.0)
+                            .color(MUTED),
+                    );
+                    ui.add_space(22.0);
+                    let button = ui.add_sized(
+                        vec2(160.0, 32.0),
+                        Button::new(RichText::new("Open PDF").size(14.0)).fill(ACCENT),
+                    );
+                    if button.clicked() {
+                        self.open_dialog();
+                    }
+                    ui.add_space(10.0);
+                    ui.label(
+                        RichText::new("or drop a file anywhere")
+                            .size(11.0)
+                            .color(MUTED),
+                    );
+
+                    if self.recents.is_empty() {
+                        return;
+                    }
+                    ui.add_space(34.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space((ui.available_width() * 0.5 - 220.0).max(0.0));
+                        ui.allocate_ui_with_layout(
+                            vec2(440.0, 20.0),
+                            Layout::left_to_right(Align::Center),
+                            |ui| {
+                                ui.label(RichText::new("Recent files").size(13.0).strong());
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if ui.small_button("Clear").clicked() {
+                                        clear = true;
+                                    }
+                                });
+                            },
+                        );
+                    });
+                    ui.add_space(8.0);
+
+                    for path in self.recents.clone() {
+                        let exists = path.is_file();
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                        let parent = path
+                            .parent()
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+
+                        ui.horizontal(|ui| {
+                            ui.add_space((ui.available_width() * 0.5 - 220.0).max(0.0));
+                            let (rect, resp) =
+                                ui.allocate_exact_size(vec2(440.0, 46.0), Sense::click());
+                            if resp.hovered() {
+                                ui.painter().rect_filled(
+                                    rect,
+                                    Rounding::same(8.0),
+                                    Color32::from_rgb(0x38, 0x38, 0x38),
+                                );
+                            }
+                            ui.painter().text(
+                                pos2(rect.min.x + 14.0, rect.min.y + 15.0),
+                                Align2::LEFT_CENTER,
+                                shorten(&name, 46),
+                                FontId::proportional(12.5),
+                                if exists { ICON_BRIGHT } else { MUTED },
+                            );
+                            ui.painter().text(
+                                pos2(rect.min.x + 14.0, rect.min.y + 32.0),
+                                Align2::LEFT_CENTER,
+                                if exists {
+                                    shorten(&parent, 60)
+                                } else {
+                                    "File not found".to_owned()
+                                },
+                                FontId::proportional(10.5),
+                                MUTED,
+                            );
+
+                            let forget_rect = Rect::from_center_size(
+                                pos2(rect.max.x - 20.0, rect.center().y),
+                                vec2(20.0, 20.0),
+                            );
+                            let forget_resp =
+                                ui.interact(forget_rect, resp.id.with("forget"), Sense::click());
+                            ui.painter().text(
+                                forget_rect.center(),
+                                Align2::CENTER_CENTER,
+                                if forget_resp.hovered() { "✕" } else { "" },
+                                FontId::proportional(12.0),
+                                ICON,
+                            );
+                            if forget_resp.clicked() {
+                                forget = Some(path.clone());
+                            } else if resp.clicked() {
+                                open = Some(path.clone());
+                            }
+                        });
+                        ui.add_space(4.0);
+                    }
+                    ui.add_space(30.0);
+                });
+            });
+
+        if clear {
+            self.recents.clear();
+            save_recents(&self.recents);
+        }
+        if let Some(path) = forget {
+            self.recents.retain(|old| old != &path);
+            save_recents(&self.recents);
+        }
+        if let Some(path) = open {
+            if path.is_file() {
+                self.open_path(path);
+            } else {
+                self.toast(ui.ctx(), "File not found");
             }
-            ui.add_space(10.0);
-            ui.label(RichText::new("or drop a file anywhere").size(11.0).color(MUTED));
-        });
+        }
+    }
+
+    /// Journal d'activité (cloche de la barre de titre) : les derniers
+    /// messages affichés, du plus récent au plus ancien.
+    fn activity_window(&mut self, ctx: &egui::Context) {
+        if !self.activity_open {
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        let mut open = true;
+        let mut clear = false;
+
+        egui::Window::new("Activity")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(320.0)
+            .anchor(Align2::RIGHT_TOP, vec2(-14.0, TITLE_H + 10.0))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("What YouPDF just did")
+                            .size(11.0)
+                            .color(MUTED),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.small_button("Clear").clicked() {
+                            clear = true;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                if self.activity.is_empty() {
+                    ui.label(
+                        RichText::new("Nothing yet.")
+                            .size(11.5)
+                            .color(MUTED),
+                    );
+                    return;
+                }
+                ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                    for (text, stamp) in &self.activity {
+                        let age = (now - stamp).max(0.0);
+                        let when = if stamp.is_nan() || age < 60.0 {
+                            "just now".to_owned()
+                        } else if age < 3600.0 {
+                            format!("{:.0} min ago", age / 60.0)
+                        } else {
+                            format!("{:.0} h ago", age / 3600.0)
+                        };
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(text).size(11.5));
+                            ui.label(RichText::new(when).size(10.0).color(MUTED));
+                        });
+                        ui.add_space(2.0);
+                    }
+                });
+            });
+
+        if clear {
+            self.activity.clear();
+        }
+        if !open {
+            self.activity_open = false;
+        }
     }
 
     // -- Superpositions ----------------------------------------------------
 
     /// Pastille bas-droite : page · zoom, façon « organize » de la référence.
     fn zoom_overlay(&mut self, ctx: &egui::Context) {
+        if self.home_open {
+            return;
+        }
         let Some(tab) = self.active_tab() else {
             return;
         };
@@ -3842,7 +4068,11 @@ impl eframe::App for YouPdfApp {
         CentralPanel::default()
             .frame(Frame::none().fill(CANVAS_STYLES[self.canvas_style.min(CANVAS_STYLES.len() - 1)]))
             .show(ctx, |ui| {
-                self.canvas(ui);
+                if self.home_open || self.tabs.is_empty() {
+                    self.empty_state(ui);
+                } else {
+                    self.canvas(ui);
+                }
             });
         self.toolbar(ctx);
         self.zoom_overlay(ctx);
@@ -3850,6 +4080,7 @@ impl eframe::App for YouPdfApp {
         self.draft_window(ctx);
         self.redact_window(ctx);
         self.organize_window(ctx);
+        self.activity_window(ctx);
         if !self.render_status.is_empty() {
             let message = std::mem::take(&mut self.render_status);
             self.toast(ctx, message);
@@ -4067,6 +4298,44 @@ fn panel_action(
 }
 
 /// Tronque avec ellipse si nécessaire.
+/// Fichier des fichiers récents (`~/.youpdf/recents.txt`, un chemin par ligne).
+fn recents_file() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join(".youpdf").join("recents.txt"))
+}
+
+/// Lit la liste des fichiers récents ; liste vide si le fichier manque.
+fn load_recents() -> Vec<PathBuf> {
+    let Some(path) = recents_file() else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| PathBuf::from(line.trim()))
+        .take(8)
+        .collect()
+}
+
+/// Écrit la liste des fichiers récents. Une erreur d'écriture est ignorée :
+/// la liste est un confort, pas une donnée du document.
+fn save_recents(recents: &[PathBuf]) {
+    let Some(path) = recents_file() else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let mut text = String::new();
+    for entry in recents {
+        text.push_str(&entry.to_string_lossy());
+        text.push('\n');
+    }
+    let _ = std::fs::write(path, text);
+}
+
 fn shorten(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         text.to_owned()
