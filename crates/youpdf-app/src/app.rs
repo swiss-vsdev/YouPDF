@@ -749,6 +749,10 @@ pub struct YouPdfApp {
     batch_protect: bool,
     batch_flatten: bool,
     batch_report: String,
+    /// Lignes du lot en cours, envoyées par le fil de travail.
+    batch_rx: Option<std::sync::mpsc::Receiver<String>>,
+    /// Vrai tant qu'un lot tourne.
+    batch_running: bool,
     /// Outil d'annotation actif (index dans la barre du mode Comment).
     annot_tool: Option<usize>,
     /// Type de marque du surligneur (surlignage, soulignage, barré, ondulé).
@@ -933,6 +937,8 @@ impl YouPdfApp {
             batch_protect: false,
             batch_flatten: false,
             batch_report: String::new(),
+            batch_rx: None,
+            batch_running: false,
             annot_tool: None,
             marker: AnnotationKind::Highlight,
             shape: AnnotationKind::Square,
@@ -6626,6 +6632,12 @@ impl YouPdfApp {
         if !self.batch_open {
             return;
         }
+        // Le lot tourne dans un fil de travail : on relève ses lignes, et on
+        // redemande une trame tant qu'il tourne pour voir la liste avancer.
+        self.pump_batch();
+        if self.batch_running {
+            ctx.request_repaint();
+        }
         let mut open = true;
         let mut add_files = false;
         let mut choose_dir = false;
@@ -6695,8 +6707,12 @@ impl YouPdfApp {
                 ui.add_space(8.0);
                 if ui
                     .add_enabled(
-                        files > 0 && self.batch_dir.is_some(),
-                        egui::Button::new("Run"),
+                        files > 0 && self.batch_dir.is_some() && !self.batch_running,
+                        egui::Button::new(if self.batch_running {
+                            "Running…"
+                        } else {
+                            "Run"
+                        }),
                     )
                     .clicked()
                 {
@@ -6743,11 +6759,17 @@ impl YouPdfApp {
         }
     }
 
-    /// Applique les opérations cochées à chaque fichier de la liste.
+    /// Lance le lot dans un fil de travail.
     ///
     /// Chaque fichier est traité en séquence : les opérations écrivent des
-    /// copies dans le dossier de sortie, l'original n'est jamais touché.
+    /// copies dans le dossier de sortie, l'original n'est jamais touché. Le lot
+    /// ouvre et réécrit des documents entiers ; le faire dans la trame d'egui
+    /// gelait l'interface pour toute sa durée. Le fil envoie une ligne par
+    /// fichier, que la fenêtre consomme au fil de l'eau.
     fn run_batch(&mut self, ctx: &egui::Context) {
+        if self.batch_running {
+            return;
+        }
         let Some(dir) = self.batch_dir.clone() else {
             return;
         };
@@ -6755,90 +6777,42 @@ impl YouPdfApp {
             self.toast(ctx, format!("Batch failed: {err}"));
             return;
         }
-        let files = self.batch_files.clone();
-        let text = self.batch_text;
-        let images = self.batch_images;
-        let compress = self.batch_compress;
-        let protect = self.batch_protect;
-        let flatten = self.batch_flatten;
-        let protect_opts = self.protect.clone();
-        let mut report = String::new();
-        let mut done = 0usize;
-        let mut failed = 0usize;
-        for path in &files {
-            let stem = path
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "document".to_owned());
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let mut doc = match Document::open(path) {
-                Ok(doc) => doc,
-                Err(err) => {
-                    failed += 1;
-                    report.push_str(&format!("{name}: open failed — {err}\n"));
-                    continue;
+        let job = BatchJob {
+            files: self.batch_files.clone(),
+            dir,
+            text: self.batch_text,
+            images: self.batch_images,
+            compress: self.batch_compress,
+            protect: self.batch_protect,
+            flatten: self.batch_flatten,
+            protect_options: self.protect.clone(),
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || job.run(&tx));
+        self.batch_rx = Some(rx);
+        self.batch_running = true;
+        self.batch_report.clear();
+    }
+
+    /// Consomme les lignes arrivées du fil de travail.
+    fn pump_batch(&mut self) {
+        let Some(rx) = self.batch_rx.as_ref() else {
+            return;
+        };
+        loop {
+            match rx.try_recv() {
+                Ok(line) => {
+                    self.batch_report.push_str(&line);
+                    self.batch_report.push('\n');
                 }
-            };
-            let mut errors: Vec<String> = Vec::new();
-            if text {
-                let out = dir.join(format!("{stem}.txt"));
-                match doc.export_text(TextFormat::Plain) {
-                    Ok(body) => {
-                        if let Err(err) = std::fs::write(&out, body) {
-                            errors.push(format!("text: {err}"));
-                        }
-                    }
-                    Err(err) => errors.push(format!("text: {err}")),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.batch_rx = None;
+                    self.batch_running = false;
+                    break;
                 }
-            }
-            if images {
-                let out = dir.join(format!("{stem}-pages"));
-                match std::fs::create_dir_all(&out) {
-                    Ok(()) => {
-                        if let Err(err) = doc.export_images(&out, ImageFormat::Png, 150.0) {
-                            errors.push(format!("images: {err}"));
-                        }
-                    }
-                    Err(err) => errors.push(format!("images: {err}")),
-                }
-            }
-            if compress {
-                let out = dir.join(format!("{stem}-compressed.pdf"));
-                if let Err(err) = doc.compress(&out) {
-                    errors.push(format!("compress: {err}"));
-                }
-            }
-            if protect {
-                let out = dir.join(format!("{stem}-protected.pdf"));
-                if let Err(err) = doc.save_protected(&out, &protect_opts) {
-                    errors.push(format!("protect: {err}"));
-                }
-            }
-            if flatten {
-                let out = dir.join(format!("{stem}-flat.pdf"));
-                match doc.flatten_annotations() {
-                    Ok(_) => {
-                        if let Err(err) = doc.save(&out) {
-                            errors.push(format!("flatten: {err}"));
-                        }
-                    }
-                    Err(err) => errors.push(format!("flatten: {err}")),
-                }
-            }
-            if errors.is_empty() {
-                done += 1;
-                report.push_str(&format!("{name}: ok\n"));
-            } else {
-                failed += 1;
-                report.push_str(&format!("{name}: {}\n", errors.join("; ")));
             }
         }
-        report.push_str(&format!("\n{done} done, {failed} failed"));
-        self.batch_report = report;
-        self.toast(ctx, format!("Batch finished: {done} done, {failed} failed"));
     }
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
@@ -8232,6 +8206,102 @@ fn csv_cell(value: &str) -> String {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value.to_owned()
+    }
+}
+
+/// Un lot à traiter : les fichiers, le dossier de sortie et les opérations
+/// cochées.
+struct BatchJob {
+    files: Vec<PathBuf>,
+    dir: PathBuf,
+    text: bool,
+    images: bool,
+    compress: bool,
+    protect: bool,
+    flatten: bool,
+    protect_options: EncryptionOptions,
+}
+
+impl BatchJob {
+    /// Traite chaque fichier et envoie une ligne par fichier, puis un bilan.
+    ///
+    /// Tourne dans un fil de travail : `Document` n'est pas `Send`, il est donc
+    /// créé et détruit ici, et seules des `String` repartent vers l'interface.
+    fn run(self, tx: &std::sync::mpsc::Sender<String>) {
+        let mut done = 0usize;
+        let mut failed = 0usize;
+        for path in &self.files {
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "document".to_owned());
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let mut doc = match Document::open(path) {
+                Ok(doc) => doc,
+                Err(err) => {
+                    failed += 1;
+                    let _ = tx.send(format!("{name}: open failed — {err}"));
+                    continue;
+                }
+            };
+            let mut errors: Vec<String> = Vec::new();
+            if self.text {
+                let out = self.dir.join(format!("{stem}.txt"));
+                match doc.export_text(TextFormat::Plain) {
+                    Ok(body) => {
+                        if let Err(err) = std::fs::write(&out, body) {
+                            errors.push(format!("text: {err}"));
+                        }
+                    }
+                    Err(err) => errors.push(format!("text: {err}")),
+                }
+            }
+            if self.images {
+                let out = self.dir.join(format!("{stem}-pages"));
+                match std::fs::create_dir_all(&out) {
+                    Ok(()) => {
+                        if let Err(err) = doc.export_images(&out, ImageFormat::Png, 150.0) {
+                            errors.push(format!("images: {err}"));
+                        }
+                    }
+                    Err(err) => errors.push(format!("images: {err}")),
+                }
+            }
+            if self.compress {
+                let out = self.dir.join(format!("{stem}-compressed.pdf"));
+                if let Err(err) = doc.compress(&out) {
+                    errors.push(format!("compress: {err}"));
+                }
+            }
+            if self.protect {
+                let out = self.dir.join(format!("{stem}-protected.pdf"));
+                if let Err(err) = doc.save_protected(&out, &self.protect_options) {
+                    errors.push(format!("protect: {err}"));
+                }
+            }
+            if self.flatten {
+                let out = self.dir.join(format!("{stem}-flat.pdf"));
+                match doc.flatten_annotations() {
+                    Ok(_) => {
+                        if let Err(err) = doc.save(&out) {
+                            errors.push(format!("flatten: {err}"));
+                        }
+                    }
+                    Err(err) => errors.push(format!("flatten: {err}")),
+                }
+            }
+            if errors.is_empty() {
+                done += 1;
+                let _ = tx.send(format!("{name}: ok"));
+            } else {
+                failed += 1;
+                let _ = tx.send(format!("{name}: {}", errors.join("; ")));
+            }
+        }
+        let _ = tx.send(format!("\n{done} done, {failed} failed"));
     }
 }
 
