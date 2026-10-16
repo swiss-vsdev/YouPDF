@@ -40,7 +40,7 @@ use lopdf::{dictionary, Object, Stream};
 
 use youpdf_shared::{Error, Result};
 
-use crate::document::Document;
+use crate::document::{Document, PageView};
 use crate::render::{RenderOptions, Renderer};
 
 /// Une région à caviarder sur une page.
@@ -48,7 +48,10 @@ use crate::render::{RenderOptions, Renderer};
 pub struct RedactionRegion {
     /// Page (1-indexée).
     pub page: usize,
-    /// Rectangle en coordonnées PDF : `[x1, y1, x2, y2]`.
+    /// Rectangle `[x1, y1, x2, y2]` dans le repère **affiché** de la page :
+    /// origine au coin inférieur gauche de la boîte visible, rotation
+    /// appliquée. C'est le repère de ce que l'utilisateur voit, donc celui
+    /// qu'il désigne à la souris.
     pub rect: [f32; 4],
 }
 
@@ -103,24 +106,26 @@ impl Document {
             };
             let bitmap = renderer.render_page(self, page_num as u32, &opts)?;
 
-            // 2. Noir sur les régions.
-            let (w_pt, h_pt) = self.page_size(page_num as u32);
+            // 2. Noir sur les régions. Le rendu couvre la boîte visible
+            //    avec la rotation appliquée : c'est la géométrie de référence.
+            let view = self.page_view(page_num as u32);
+            let (display_w, display_h) = view.display_size();
             let mut pixels = bitmap.pixels.clone();
             for region in &page_regions {
                 paint_black_rect(
                     &mut pixels,
                     bitmap.width,
                     bitmap.height,
-                    w_pt,
-                    h_pt,
-                    SCALE,
+                    display_w,
+                    display_h,
                     region.rect,
                 );
             }
 
             // 3. Tri des annotations : celles qui touchent une zone
             // caviardée sont détruites, les autres survivent.
-            let (kept, dropped) = self.classify_annots_for_redaction(page_id, &page_regions)?;
+            let (kept, dropped) =
+                self.classify_annots_for_redaction(page_id, &page_regions, &view)?;
 
             // 4. Remplacer le contenu de la page par l'image.
             self.replace_page_with_image(
@@ -129,6 +134,7 @@ impl Document {
                 bitmap.width,
                 bitmap.height,
                 &kept,
+                &view,
             )?;
 
             if dropped > 0 {
@@ -170,6 +176,7 @@ impl Document {
         &self,
         page_id: lopdf::ObjectId,
         regions: &[&RedactionRegion],
+        view: &PageView,
     ) -> Result<(Vec<lopdf::ObjectId>, usize)> {
         let page = self
             .inner()
@@ -202,7 +209,15 @@ impl Document {
         let mut kept: Vec<lopdf::ObjectId> = Vec::new();
         for id in ids {
             let overlaps = match self.annot_rect(id) {
-                Some(rect) => regions.iter().any(|r| rects_overlap(rect, r.rect)),
+                // Un `/Rect` est dans le repère page, une région dans le
+                // repère affiché. Comparer l'un à l'autre sans conversion
+                // laissait passer, sur une page tournée, une annotation qui
+                // recouvre la zone à effacer — donc un mot sensible affiché
+                // par-dessus le rectangle noir.
+                Some(rect) => {
+                    let rect = view.display_rect(rect);
+                    regions.iter().any(|r| rects_overlap(rect, r.rect))
+                }
                 // Sans zone connue, impossible de garantir l'innocuité.
                 None => true,
             };
@@ -257,14 +272,8 @@ impl Document {
         width: u32,
         height: u32,
         kept_annots: &[lopdf::ObjectId],
+        view: &PageView,
     ) -> Result<()> {
-        // Dimensions de la page en points.
-        let page_dict = self
-            .inner()
-            .get_dictionary(page_id)
-            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
-        let (w_pt, h_pt) = read_mediabox(page_dict).unwrap_or((595.0, 842.0));
-
         // Conversion RGBA → RGB.
         let mut rgb = Vec::with_capacity((width * height * 3) as usize);
         for chunk in rgba.chunks_exact(4) {
@@ -299,8 +308,11 @@ impl Document {
         let image_stream = Stream::new(image_dict, jpeg);
         let image_id = self.inner_mut().add_object(image_stream);
 
-        // Flux de contenu : dessine l'image pour couvrir toute la page.
-        let content = format!("q\n{} 0 0 {} 0 0 cm\n/Im0 Do\nQ\n", w_pt, h_pt);
+        // Flux de contenu : l'image couvre la boîte visible, rotation
+        // comprise. `/Rotate` reste sur la page : les annotations conservées
+        // gardent ainsi leur repère, et la page n'est pas déformée.
+        let [a, b, c, d, e, f] = view.image_matrix();
+        let content = format!("q\n{a} {b} {c} {d} {e} {f} cm\n/Im0 Do\nQ\n");
         let content_stream = Stream::new(dictionary! {}, content.into_bytes());
         let content_id = self.inner_mut().add_object(content_stream);
 
@@ -375,27 +387,6 @@ fn rects_overlap(a: [f32; 4], b: [f32; 4]) -> bool {
     inter_w > 0.0 && inter_h > 0.0
 }
 
-/// Lit le MediaBox d'une page.
-fn read_mediabox(dict: &lopdf::Dictionary) -> Option<(f32, f32)> {
-    let arr = dict.get(b"MediaBox").ok()?.as_array().ok()?;
-    if arr.len() < 4 {
-        return None;
-    }
-    let num = |i: usize| -> f32 {
-        arr[i]
-            .as_float()
-            .or_else(|_| arr[i].as_i64().map(|v| v as f32))
-            .unwrap_or(0.0)
-    };
-    let w = (num(2) - num(0)).abs();
-    let h = (num(3) - num(1)).abs();
-    if w > 0.0 && h > 0.0 {
-        Some((w, h))
-    } else {
-        None
-    }
-}
-
 /// Remplit un rectangle en noir dans un bitmap RGBA.
 ///
 /// Le rectangle est fourni en coordonnées PDF (origine bas-gauche).
@@ -404,21 +395,37 @@ fn paint_black_rect(
     pixels: &mut [u8],
     width: u32,
     height: u32,
-    page_w_pt: f32,
-    page_h_pt: f32,
-    scale: f32,
+    display_w: f32,
+    display_h: f32,
     rect: [f32; 4],
 ) {
     let [x1, y1, x2, y2] = rect;
     let (rx1, rx2) = (x1.min(x2), x1.max(x2));
     let (ry1, ry2) = (y1.min(y2), y1.max(y2));
 
-    // Conversion PDF → pixel.
-    let px1 = (rx1 * scale).clamp(0.0, width as f32) as u32;
-    let px2 = (rx2 * scale).clamp(0.0, width as f32) as u32;
+    // Le rectangle est dans le repère affiché : on le ramène en fractions de
+    // la page, puis en pixels de l'image réellement rendue (dont la taille
+    // peut différer d'un pixel de `taille × échelle`).
+    let fx = |x: f32| -> f32 {
+        if display_w > 0.0 {
+            x / display_w
+        } else {
+            0.0
+        }
+    };
+    let fy = |y: f32| -> f32 {
+        if display_h > 0.0 {
+            y / display_h
+        } else {
+            0.0
+        }
+    };
+
+    let px1 = (fx(rx1) * width as f32).clamp(0.0, width as f32) as u32;
+    let px2 = (fx(rx2) * width as f32).clamp(0.0, width as f32) as u32;
     // L'axe y est inversé : PDF bas-gauche, pixels haut-gauche.
-    let py1 = ((page_h_pt - ry2) * scale).clamp(0.0, height as f32) as u32;
-    let py2 = ((page_h_pt - ry1) * scale).clamp(0.0, height as f32) as u32;
+    let py1 = ((1.0 - fy(ry2)) * height as f32).clamp(0.0, height as f32) as u32;
+    let py2 = ((1.0 - fy(ry1)) * height as f32).clamp(0.0, height as f32) as u32;
 
     let (py1, py2) = (py1.min(py2), py1.max(py2));
 
@@ -433,9 +440,4 @@ fn paint_black_rect(
             }
         }
     }
-
-    // Note : on ne touche pas à `page_w_pt`, mais on le garde dans la
-    // signature pour d'éventuelles vérifications futures.
-    let _ = page_w_pt;
-    let _ = Error::Pdf; // évite un avertissement d'import inutilisé
 }

@@ -33,6 +33,114 @@ pub struct Document {
     snapshot: RefCell<Option<(u64, Rc<Vec<u8>>)>>,
 }
 
+/// Rotation ramenée à un multiple de 90 degrés, dans `0..360`.
+fn normalize_rotation(degrees: i64) -> i32 {
+    let quarters = (degrees as f32 / 90.0).round() as i64;
+    (quarters.rem_euclid(4) * 90) as i32
+}
+
+/// Géométrie d'affichage d'une page.
+///
+/// Deux repères coexistent dans un PDF : celui de la page (origine en bas à
+/// gauche de la boîte, `/Rotate` non appliqué), où sont écrits le contenu et
+/// les `/Rect` des annotations, et celui que voit l'utilisateur (rotation
+/// appliquée, boîte visible seule). Une copie du contenu de la page se fait
+/// dans le second : sans passer par cette structure, les zones noires et
+/// l'image se placent dans deux repères différents.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageView {
+    /// Coin inférieur gauche de la boîte visible, en points.
+    pub x: f32,
+    /// Coin inférieur gauche de la boîte visible, en points.
+    pub y: f32,
+    /// Largeur de la boîte visible, rotation non appliquée.
+    pub width: f32,
+    /// Hauteur de la boîte visible, rotation non appliquée.
+    pub height: f32,
+    /// Rotation d'affichage, en degrés : 0, 90, 180 ou 270.
+    pub rotation: i32,
+}
+
+impl Default for PageView {
+    fn default() -> Self {
+        PageView {
+            x: 0.0,
+            y: 0.0,
+            width: 595.0,
+            height: 842.0,
+            rotation: 0,
+        }
+    }
+}
+
+impl PageView {
+    /// Taille affichée, rotation appliquée.
+    pub fn display_size(&self) -> (f32, f32) {
+        if matches!(self.rotation, 90 | 270) {
+            (self.height, self.width)
+        } else {
+            (self.width, self.height)
+        }
+    }
+
+    /// Position d'un point du repère page dans la boîte visible, exprimée en
+    /// fractions `0..1` de cette boîte (origine en bas à gauche).
+    fn box_fraction(&self, x: f32, y: f32) -> (f32, f32) {
+        let u = if self.width > 0.0 {
+            (x - self.x) / self.width
+        } else {
+            0.0
+        };
+        let v = if self.height > 0.0 {
+            (y - self.y) / self.height
+        } else {
+            0.0
+        };
+        (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0))
+    }
+
+    /// Applique la rotation à une fraction de la boîte visible.
+    fn rotate_fraction(&self, u: f32, v: f32) -> (f32, f32) {
+        match self.rotation {
+            90 => (v, 1.0 - u),
+            180 => (1.0 - u, 1.0 - v),
+            270 => (1.0 - v, u),
+            _ => (u, v),
+        }
+    }
+
+    /// Convertit un rectangle du repère page vers le repère affiché : origine
+    /// en bas à gauche de la boîte visible, rotation appliquée.
+    pub fn display_rect(&self, rect: [f32; 4]) -> [f32; 4] {
+        let (u1, v1) = self.box_fraction(rect[0], rect[1]);
+        let (u2, v2) = self.box_fraction(rect[2], rect[3]);
+        let (du1, dv1) = self.rotate_fraction(u1, v1);
+        let (du2, dv2) = self.rotate_fraction(u2, v2);
+        let (width, height) = self.display_size();
+        [
+            du1.min(du2) * width,
+            dv1.min(dv2) * height,
+            du1.max(du2) * width,
+            dv1.max(dv2) * height,
+        ]
+    }
+
+    /// Matrice `cm` qui place une image plein cadre sur la page affichée.
+    ///
+    /// La rotation est incluse dans la matrice : `/Rotate` peut rester sur la
+    /// page, donc les annotations conservées gardent leur repère.
+    pub fn image_matrix(&self) -> [f32; 6] {
+        let (width, height) = (self.width, self.height);
+        let (x, y) = (self.x, self.y);
+        match self.rotation {
+            90 => [0.0, height, -width, 0.0, x + width, y],
+            180 => [-width, 0.0, 0.0, -height, x + width, y + height],
+            270 => [0.0, -height, width, 0.0, x, y + height],
+            _ => [width, 0.0, 0.0, height, x, y],
+        }
+    }
+}
+
 impl Document {
     /// Ouvre un PDF depuis le disque.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -193,8 +301,18 @@ impl Document {
     /// boîtes) est appliqué, donc une page A4 tournée à 90° mesure 842×595.
     /// C'est ce que produit aussi le rendu pdfium, qui applique la rotation.
     pub fn page_size(&self, page_number: u32) -> (f32, f32) {
+        self.page_view(page_number).display_size()
+    }
+
+    /// Géométrie d'affichage d'une page : boîte visible et rotation.
+    ///
+    /// La boîte visible est le `/CropBox`, sinon le `/MediaBox`, hérité de
+    /// l'arbre des pages si besoin ; elle ne part pas forcément de `(0, 0)`.
+    /// La rotation reste séparée de la boîte : c'est ce que fait un lecteur,
+    /// et c'est ce qui permet de replacer une image sans déformer la page.
+    pub fn page_view(&self, page_number: u32) -> PageView {
         let Ok(page_id) = self.page_id(page_number) else {
-            return (595.0, 842.0);
+            return PageView::default();
         };
 
         let mut rotation = 0_i64;
@@ -208,7 +326,7 @@ impl Document {
 
             if !rotation_known {
                 if let Ok(object) = dict.get_deref(b"Rotate", &self.inner) {
-                    rotation = object.as_i64().unwrap_or(0).rem_euclid(360);
+                    rotation = object.as_i64().unwrap_or(0);
                     rotation_known = true;
                 }
             }
@@ -217,12 +335,22 @@ impl Document {
                 if let Ok(object) = dict.get_deref(key, &self.inner) {
                     if let Ok(array) = object.as_array() {
                         if array.len() >= 4 {
-                            let num =
-                                |i: usize| -> f32 { array[i].as_float().unwrap_or(0.0) };
-                            let w = (num(2) - num(0)).abs();
-                            let h = (num(3) - num(1)).abs();
-                            if w > 0.0 && h > 0.0 {
-                                return if matches!(rotation, 90 | 270) { (h, w) } else { (w, h) };
+                            let num = |i: usize| -> f32 {
+                                array[i]
+                                    .as_float()
+                                    .or_else(|_| array[i].as_i64().map(|v| v as f32))
+                                    .unwrap_or(0.0)
+                            };
+                            let (x, y) = (num(0), num(1));
+                            let (width, height) = ((num(2) - x).abs(), (num(3) - y).abs());
+                            if width > 0.0 && height > 0.0 {
+                                return PageView {
+                                    x: x.min(num(2)),
+                                    y: y.min(num(3)),
+                                    width,
+                                    height,
+                                    rotation: normalize_rotation(rotation),
+                                };
                             }
                         }
                     }
@@ -235,10 +363,18 @@ impl Document {
                 .and_then(|parent| parent.as_reference().ok());
         }
 
-        if matches!(rotation, 90 | 270) {
+        let rotation = normalize_rotation(rotation);
+        let (width, height) = if matches!(rotation, 90 | 270) {
             (842.0, 595.0)
         } else {
             (595.0, 842.0)
+        };
+        PageView {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+            rotation,
         }
     }
 

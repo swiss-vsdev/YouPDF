@@ -2,7 +2,7 @@
 //!
 //! Chaque test échouait sur le code d'origine.
 use lopdf::{Dictionary, Object, Stream, dictionary};
-use youpdf_core::{Document, RedactionRegion, fold_case, validate_language};
+use youpdf_core::{Document, RedactionRegion, Renderer, fold_case, validate_language};
 
 /// PDF à une page, avec des annotations : une dans la zone à caviarder,
 /// une loin de celle-ci, et un volet de commentaires accroché à la première.
@@ -297,4 +297,94 @@ fn ocr_language_must_be_a_language_code() {
     ] {
         assert!(validate_language(bad).is_err(), "{bad:?} devrait être refusé");
     }
+}
+
+/// PDF à une page en paysage par rotation : le `/MediaBox` est portrait,
+/// `/Rotate 90` l'affiche couché.
+fn rotated_page() -> Vec<u8> {
+    let mut doc = lopdf::Document::with_version("1.7");
+    let font = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Font".to_vec()),
+        "Subtype" => Object::Name(b"Type1".to_vec()),
+        "BaseFont" => Object::Name(b"Helvetica".to_vec()),
+    });
+    let cid = doc.add_object(Stream::new(
+        Dictionary::new(),
+        b"BT /F1 18 Tf 100 700 Td (TEXTE-EN-HAUT) Tj ET".to_vec(),
+    ));
+    let pid = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+        "Rotate" => Object::Integer(90),
+        "Contents" => cid,
+        "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+    });
+    let pages = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![pid.into()]),
+        "Count" => 1,
+    });
+    let cat = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()), "Pages" => pages });
+    doc.trailer.set("Root", Object::Reference(cat));
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf).unwrap();
+    buf
+}
+
+/// Sur une page tournée, la zone noire se peint là où l'utilisateur l'a
+/// désignée, et l'image de remplacement se pose sans être déformée.
+///
+/// La région est donnée dans le repère affiché (792 × 612). Peinte en
+/// supposant un repère non tourné, elle atterrissait dans la moitié gauche au
+/// lieu de la moitié basse — et le texte qu'elle devait couvrir restait
+/// lisible. Placée sur le `/MediaBox` brut puis tournée une seconde fois, la
+/// page ressortait étirée.
+#[test]
+fn redaction_sur_page_tournee() {
+    let Some(renderer) = youpdf_core::PdfiumRenderer::load().ok() else {
+        eprintln!("pdfium indisponible : test ignoré");
+        return;
+    };
+    let mut doc = Document::from_bytes(&rotated_page()).unwrap();
+    assert_eq!(doc.page_size(1), (792.0, 612.0), "page affichée couchée");
+
+    // Moitié basse de la page affichée.
+    doc.redact(
+        &[RedactionRegion {
+            page: 1,
+            rect: [0.0, 0.0, 792.0, 306.0],
+        }],
+        &renderer,
+    )
+    .expect("caviardage");
+
+    assert_eq!(
+        doc.page_size(1),
+        (792.0, 612.0),
+        "la rotation a été perdue : la page ressort portrait"
+    );
+
+    let bitmap = renderer
+        .render_page(&doc, 1, &youpdf_core::RenderOptions { scale: 0.5, ..Default::default() })
+        .expect("rendu");
+    let pixel = |x: u32, y: u32| -> [u8; 4] {
+        let idx = ((y * bitmap.width + x) * 4) as usize;
+        [
+            bitmap.pixels[idx],
+            bitmap.pixels[idx + 1],
+            bitmap.pixels[idx + 2],
+            bitmap.pixels[idx + 3],
+        ]
+    };
+
+    // Bas de la page : noir franc.
+    let bas = pixel(40, bitmap.height - 60);
+    assert_eq!(bas, [0, 0, 0, 255], "la zone caviardée n'est pas noire : {bas:?}");
+    // Haut de la page, hors zone : laissé intact.
+    let haut = pixel(40, 60);
+    assert!(
+        haut[0] > 200 && haut[1] > 200 && haut[2] > 200,
+        "la zone non caviardée a été noircie : {haut:?}"
+    );
 }

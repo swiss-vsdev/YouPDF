@@ -42,7 +42,7 @@ pub use annotate::{Annotation, AnnotationKind, AnnotationStyle, STAMP_NAMES, sta
 pub use compare::{ComparisonReport, Difference, DifferenceKind};
 pub use convert::TextFormat;
 pub use compress::CompressionReport;
-pub use document::Document;
+pub use document::{Document, PageView};
 pub use edit::{ImageInfo, TextFragment, TextSpan, encode_pdf_literal};
 pub use forms::{FormField, FormFieldKind, NewFormField};
 pub use metadata::DocumentMetadata;
