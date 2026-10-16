@@ -17,10 +17,12 @@
 //! - [`edit`]     : extraction de texte positionné et d'images
 //! - [`signature`]: signature visuelle et demande de signature
 //! - [`compare`]  : comparaison de deux documents
+//! - [`compress`] : recompression des flux et objets inutilisés
 //! - [`watermark`]: filigranes, en-têtes et numéros de page
 
 pub mod annotate;
 pub mod compare;
+pub mod compress;
 pub mod convert;
 pub mod document;
 pub mod edit;
@@ -38,6 +40,7 @@ pub mod watermark;
 
 pub use annotate::{Annotation, AnnotationKind, AnnotationStyle, STAMP_NAMES, stamp_name};
 pub use compare::{ComparisonReport, Difference, DifferenceKind};
+pub use compress::CompressionReport;
 pub use document::Document;
 pub use edit::{ImageInfo, TextFragment, TextSpan, encode_pdf_literal};
 pub use forms::{FormField, FormFieldKind};

@@ -17,6 +17,8 @@
 //! qui effectue un durcissement itératif sur la clé. C'est complexe
 //! mais nécessaire pour être conforme.
 
+use std::path::Path;
+
 use aes::Aes256;
 use cbc::cipher::{block_padding::NoPadding, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use cbc::{Decryptor, Encryptor};
@@ -164,6 +166,21 @@ impl Document {
             EncryptionStrength::Rc4_128 => self.encrypt_rc4_128(opts),
             EncryptionStrength::Aes256 => self.encrypt_aes_256(opts),
         }
+    }
+
+    /// Chiffre le document et l'écrit à `path`.
+    ///
+    /// Le chiffrement s'applique à une **copie** : le document en mémoire
+    /// reste en clair et éditable, l'état de travail n'est pas contaminé
+    /// par les objets chiffrés ni par le dictionnaire `/Encrypt`.
+    pub fn save_protected(
+        &self,
+        path: impl AsRef<Path>,
+        opts: &EncryptionOptions,
+    ) -> Result<()> {
+        let mut copie = Document::from_lopdf(self.inner.clone());
+        copie.encrypt(opts)?;
+        copie.save(path)
     }
 }
 
