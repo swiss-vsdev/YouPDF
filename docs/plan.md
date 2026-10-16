@@ -114,3 +114,17 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
      password; the engine has no decrypt/password-check path yet.
   4. The form panel lists fields and fills them, but no properties editor exists yet (name, tooltip,
      required, read-only, options), and field names are auto-generated (`Field1`, `Field2`).
+- 2026-10-16 (audit pass): two reviewers swept the workspace, one on the interface and one on
+  the engine, and every finding was fixed in its own commit with a regression test where the
+  behaviour was testable. The engine fixes: an odd-length `/Names` array no longer panics, a
+  cyclic `/Kids` tree no longer multiplies the attachment list, an indirect `/Fields` array keeps
+  the fields already declared (reading and writing), the multi-select flag uses bit 21, redaction
+  on a turned or cropped page paints and places in the displayed frame, inserting "after the last
+  page" appends instead of prepending, inserted pages point at the node that holds them,
+  `sanitize` keeps attachments while removing JavaScript, the OCR text layer is written in
+  WinAnsi, the tiled watermark is bounded on an oversized page, and PDF dates are read and written
+  in the PDF format. The interface fixes: unsaved annotations are no longer reloaded away after a
+  document-rewriting action, closing a modified tab asks first, per-document state (redaction
+  marks, form field, selection, ticked pages, search results) is cleared on a tab switch,
+  Backspace no longer deletes an annotation while typing, Command-F opens the search box, a filled
+  form field refreshes its page, and compressed or encrypted copies carry the pending annotations.
