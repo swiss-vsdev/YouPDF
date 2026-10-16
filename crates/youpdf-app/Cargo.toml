@@ -1,0 +1,21 @@
+[package]
+name        = "youpdf-app"
+description = "Application desktop YouPDF (egui/eframe)."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[[bin]]
+name = "youpdf"
+path = "src/main.rs"
+
+[dependencies]
+youpdf-shared = { workspace = true }
+youpdf-core   = { workspace = true }
+
+eframe              = { workspace = true }
+egui                = { workspace = true }
+tracing             = { workspace = true }
+tracing-subscriber  = { workspace = true }
+rfd                 = "0.15"
