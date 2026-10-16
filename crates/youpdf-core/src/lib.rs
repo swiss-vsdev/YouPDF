@@ -43,7 +43,7 @@ pub use compare::{ComparisonReport, Difference, DifferenceKind};
 pub use compress::CompressionReport;
 pub use document::Document;
 pub use edit::{ImageInfo, TextFragment, TextSpan, encode_pdf_literal};
-pub use forms::{FormField, FormFieldKind};
+pub use forms::{FormField, FormFieldKind, NewFormField};
 pub use metadata::DocumentMetadata;
 pub use ocr::{OcrEngine, OcrMode, OcrResult, TesseractEngine, validate_language};
 pub use protect::{EncryptionOptions, EncryptionStrength, Permissions};
