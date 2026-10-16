@@ -18,11 +18,14 @@ use egui::{
 };
 use egui_phosphor::regular as ph;
 use youpdf_core::render::NullRenderer;
+use youpdf_core::ocr::{make_searchable, TesseractEngine};
 use youpdf_core::{
-    fold_case, Annotation, AnnotationKind, AnnotationStyle, AttachmentInfo, Document,
-    EncryptionOptions, EncryptionStrength, FormField, FormFieldKind, HeaderFooter, NumberStyle,
-    OutlineItem, PageRange, PdfiumRenderer, RedactionRegion, RenderOptions, Renderer, SearchIndex,
-    SearchOptions, SearchResult, TextFormat, TextFragment, Watermark, STAMP_NAMES,
+    blank_document, document_from_images, fold_case, Annotation, AnnotationKind, AnnotationStyle,
+    AttachmentInfo, Background, Bates, BatesPosition, ComparisonReport, CropMargins, DifferenceKind,
+    Document, EncryptionOptions, EncryptionStrength, FormField, FormFieldKind, HeaderFooter,
+    ImageFormat, NumberStyle, OcrEngine, OcrMode, OutlineItem, PageRange, PdfiumRenderer,
+    RedactionRegion, RenderOptions, Renderer, SearchIndex, SearchOptions, SearchResult, TextFormat,
+    TextFragment, Watermark, STAMP_NAMES,
 };
 
 // --------------------------------------------------------------------------
@@ -111,6 +114,30 @@ enum MenuAction {
     Compress,
     /// Ouvre la fenêtre de protection par mot de passe.
     Protect,
+    /// Ouvre la fenêtre de recadrage.
+    Crop,
+    /// Ouvre la fenêtre d'arrière-plan de page.
+    Background,
+    /// Ouvre la fenêtre de numérotation Bates.
+    Bates,
+    /// Ouvre la fenêtre de comparaison de deux PDF.
+    Compare,
+    /// Ouvre la fenêtre d'OCR.
+    Ocr,
+    /// Ouvre la fenêtre de création d'un document.
+    Create,
+    /// Envoie le document à l'imprimante du système.
+    Print,
+    /// Révèle le fichier dans le Finder (macOS) ou le gestionnaire de fichiers.
+    Reveal,
+    /// Enlève la protection par mot de passe (copie déchiffrée).
+    RemoveProtection,
+    /// Nouveau document d'une page vierge.
+    NewBlank,
+    /// Nouveau document à partir d'images.
+    FromImages,
+    /// Insère un autre PDF dans le document courant.
+    Combine,
 }
 
 /// Répartit les pages en rangées selon la disposition choisie. Chaque rangée
@@ -258,12 +285,62 @@ fn mode_tools(mode: usize) -> &'static [ModeTool] {
     }
 }
 
-/// Entrées du menu `Outils` : libellé, raccourci.
-const TOOLS_MENU: [(&str, &str); 4] = [
-    ("Comment", "^1"),
-    ("Edit PDF", "^2"),
-    ("Prepare form", "^3"),
-    ("Redact", "^4"),
+/// Entrée du menu `Outils`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolsEntry {
+    /// Active un mode du canevas (index dans `MODES`).
+    Mode(usize),
+    /// Surface « Organiser les pages » (contient aussi le découpage).
+    Organize,
+    /// Fenêtre de recadrage.
+    Crop,
+    /// Fenêtre de filigrane.
+    Watermark,
+    /// Fenêtre d'arrière-plan de page.
+    Background,
+    /// Fenêtre d'en-tête et pied de page.
+    HeaderFooter,
+    /// Fenêtre de numérotation Bates.
+    Bates,
+    /// Fenêtre d'OCR.
+    Ocr,
+    /// Fenêtre d'export et de conversion.
+    Convert,
+    /// Fenêtre de création d'un document.
+    Create,
+    /// Fenêtre de comparaison.
+    Compare,
+    /// Fenêtre de protection.
+    Protect,
+    /// Fenêtre de compression.
+    Compress,
+    /// Aplatit les annotations.
+    Flatten,
+}
+
+/// Entrées du menu `Outils` : libellé, raccourci, action.
+///
+/// L'ordre suit celui de la référence : les modes d'abord, puis les outils de
+/// document, puis la conversion et l'entretien.
+const TOOLS_MENU: &[(&str, &str, ToolsEntry)] = &[
+    ("Comment", "^1", ToolsEntry::Mode(0)),
+    ("Edit PDF", "^2", ToolsEntry::Mode(1)),
+    ("Prepare form", "^3", ToolsEntry::Mode(2)),
+    ("Redact", "^4", ToolsEntry::Mode(3)),
+    ("Organize pages", "^5", ToolsEntry::Organize),
+    ("Crop pages", "^6", ToolsEntry::Crop),
+    ("Split pages", "^7", ToolsEntry::Organize),
+    ("Watermark", "^8", ToolsEntry::Watermark),
+    ("Background", "^9", ToolsEntry::Background),
+    ("Header & footer", "^0", ToolsEntry::HeaderFooter),
+    ("Bates numbering", "", ToolsEntry::Bates),
+    ("Convert…", "", ToolsEntry::Convert),
+    ("OCR…", "", ToolsEntry::Ocr),
+    ("Create…", "", ToolsEntry::Create),
+    ("Compare PDFs…", "", ToolsEntry::Compare),
+    ("Protect…", "", ToolsEntry::Protect),
+    ("Reduce file size…", "", ToolsEntry::Compress),
+    ("Flatten annotations", "", ToolsEntry::Flatten),
 ];
 
 /// Nature du brouillon de texte en cours de saisie.
@@ -356,9 +433,36 @@ const PRESET_COLORS: [[u8; 3]; 7] = [
     [40, 40, 40],
 ];
 
+/// Positions proposées pour la numérotation Bates.
+const BATES_POSITIONS: [(BatesPosition, &str); 6] = [
+    (BatesPosition::TopLeft, "Top left"),
+    (BatesPosition::TopCenter, "Top centre"),
+    (BatesPosition::TopRight, "Top right"),
+    (BatesPosition::BottomLeft, "Bottom left"),
+    (BatesPosition::BottomCenter, "Bottom centre"),
+    (BatesPosition::BottomRight, "Bottom right"),
+];
+
 // --------------------------------------------------------------------------
 // Onglets
 // --------------------------------------------------------------------------
+
+/// Ce que l'application fera du mot de passe saisi.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PasswordPurpose {
+    /// Ouvrir un document protégé.
+    Open,
+    /// Écrire une copie déchiffrée du fichier.
+    RemoveProtection,
+}
+
+/// Invite de mot de passe en attente.
+struct PasswordPrompt {
+    path: PathBuf,
+    purpose: PasswordPurpose,
+    value: String,
+    error: Option<String>,
+}
 
 struct Tab {
     doc: Document,
@@ -436,12 +540,49 @@ pub struct YouPdfApp {
     /// Fenêtre « Exporter » et le format choisi.
     export_open: bool,
     export_format: TextFormat,
+    /// Export en images plutôt qu'en texte.
+    export_image: bool,
+    /// Format d'image choisi.
+    export_image_format: ImageFormat,
+    /// Résolution d'export, en points par pouce.
+    export_dpi: f32,
     /// Fenêtre « Compresser » : dernier bilan affiché.
     compress_open: bool,
     compress_report: Option<String>,
     /// Fenêtre « Protéger » et ses réglages.
     protect_open: bool,
     protect: EncryptionOptions,
+    /// Fenêtre « Recadrage » et ses marges.
+    crop_open: bool,
+    crop: CropMargins,
+    /// Fenêtre « Arrière-plan » et son brouillon.
+    background_open: bool,
+    background: Background,
+    background_from: Option<u32>,
+    /// Fenêtre « Numérotation Bates » et son brouillon.
+    bates_open: bool,
+    bates: Bates,
+    bates_from: Option<u32>,
+    /// Fenêtre « Comparer » : fichier choisi et rapport affiché.
+    compare_open: bool,
+    compare_path: Option<PathBuf>,
+    compare_report: Option<ComparisonReport>,
+    /// Fenêtre « OCR » et ses réglages.
+    ocr_open: bool,
+    ocr_language: String,
+    ocr_mode: OcrMode,
+    ocr_report: Option<String>,
+    /// Vrai quand les langues OCR ont déjà été lues.
+    ocr_probed: bool,
+    /// Vrai quand tesseract est installé.
+    ocr_installed: bool,
+    /// Langues proposées par tesseract, lues une fois.
+    ocr_languages: Vec<String>,
+    /// Fenêtre « Créer » : nombre de pages vierges.
+    create_open: bool,
+    create_pages: usize,
+    /// Invite de mot de passe en attente (ouverture ou déprotection).
+    password_prompt: Option<PasswordPrompt>,
     /// Outil d'annotation actif (index dans la barre du mode Comment).
     annot_tool: Option<usize>,
     /// Type de marque du surligneur (surlignage, soulignage, barré, ondulé).
@@ -573,10 +714,34 @@ impl YouPdfApp {
             find_focus: false,
             export_open: false,
             export_format: TextFormat::Plain,
+            export_image: false,
+            export_image_format: ImageFormat::Png,
+            export_dpi: 150.0,
             compress_open: false,
             compress_report: None,
             protect_open: false,
             protect: EncryptionOptions::default(),
+            crop_open: false,
+            crop: CropMargins::default(),
+            background_open: false,
+            background: Background::default(),
+            background_from: None,
+            bates_open: false,
+            bates: Bates::default(),
+            bates_from: None,
+            compare_open: false,
+            compare_path: None,
+            compare_report: None,
+            ocr_open: false,
+            ocr_language: "eng".to_owned(),
+            ocr_mode: OcrMode::default(),
+            ocr_report: None,
+            ocr_probed: false,
+            ocr_installed: false,
+            ocr_languages: Vec::new(),
+            create_open: false,
+            create_pages: 1,
+            password_prompt: None,
             annot_tool: None,
             marker: AnnotationKind::Highlight,
             shape: AnnotationKind::Square,
@@ -675,59 +840,76 @@ impl YouPdfApp {
             return;
         }
 
-        match Document::open(&path) {
-            Ok(mut doc) => {
-                let title = doc.display_name();
-                // Les annotations YouPDF sortent du document pour la durée de
-                // l'édition : l'interface les dessine, l'onglet les garde,
-                // l'enregistrement les remet en place avec leur apparence.
-                // Sans cette purge, le moteur de rendu les peindrait en même
-                // temps que l'interface et chaque marque apparaîtrait deux
-                // fois.
-                let annots = doc.read_annotations();
-                if !annots.is_empty() && doc.clear_youpdf_annotations().is_err() {
-                    tracing::warn!(path = %path.display(), "purge des annotations impossible");
-                }
-                self.tabs.push(Tab {
-                    doc,
-                    path: Some(path),
-                    title: title.clone(),
-                    page: 1,
-                    zoom: None,
-                    zoom_fit_page: false,
-                    cache: HashMap::new(),
-                    dirty: false,
-                    annots,
-                    annots_loaded: true,
-                    undo: Vec::new(),
-                    redo: Vec::new(),
-                    outline: Vec::new(),
-                    forms: Vec::new(),
-                    attachments: Vec::new(),
-                    fragments: HashMap::new(),
-                    structure_loaded: false,
-                });
-                self.active = self.tabs.len() - 1;
-                self.panel = Some(Panel::Thumbnails);
-                self.home_open = false;
-                let path = self.tabs[self.active].path.clone().unwrap_or_default();
-                self.recents.retain(|old| old != &path);
-                self.recents.insert(0, path);
-                self.recents.truncate(8);
-                save_recents(&self.recents);
-                self.search_index = None;
-                self.results.clear();
-                self.jump = Some(1);
+        // Un fichier chiffré exige son mot de passe avant toute lecture :
+        // `Document::open` échouerait sur un flux illisible et l'erreur ne
+        // dirait pas à l'utilisateur quoi faire.
+        if Document::file_is_encrypted(&path) {
+            self.password_prompt = Some(PasswordPrompt {
+                path,
+                purpose: PasswordPurpose::Open,
+                value: String::new(),
+                error: None,
+            });
+            return;
+        }
 
-                if self.renderer.renders_real_content() {
-                    self.toast_owned(format!("Opened {title}"));
-                } else {
-                    self.toast_owned(
-                        "PDFium missing — pages render blank. Run scripts/install-pdfium.sh",
-                    );
-                }
-            }
+        match Document::open(&path) {
+            Ok(doc) => self.push_document(doc, Some(path)),
             Err(err) => self.toast_owned(format!("Open failed: {err}")),
+        }
+    }
+
+    /// Ajoute un document déjà ouvert comme nouvel onglet actif.
+    ///
+    /// Les annotations YouPDF sortent du document pour la durée de l'édition :
+    /// l'interface les dessine, l'onglet les garde, l'enregistrement les remet
+    /// en place avec leur apparence. Sans cette purge, le moteur de rendu les
+    /// peindrait en même temps que l'interface et chaque marque apparaîtrait
+    /// deux fois.
+    fn push_document(&mut self, mut doc: Document, path: Option<PathBuf>) {
+        let title = doc.display_name();
+        let annots = doc.read_annotations();
+        if !annots.is_empty() && doc.clear_youpdf_annotations().is_err() {
+            tracing::warn!("purge des annotations impossible");
+        }
+        self.tabs.push(Tab {
+            doc,
+            path: path.clone(),
+            title: title.clone(),
+            page: 1,
+            zoom: None,
+            zoom_fit_page: false,
+            cache: HashMap::new(),
+            dirty: false,
+            annots,
+            annots_loaded: true,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            outline: Vec::new(),
+            forms: Vec::new(),
+            attachments: Vec::new(),
+            fragments: HashMap::new(),
+            structure_loaded: false,
+        });
+        self.active = self.tabs.len() - 1;
+        self.panel = Some(Panel::Thumbnails);
+        self.home_open = false;
+        if let Some(path) = path {
+            self.recents.retain(|old| old != &path);
+            self.recents.insert(0, path);
+            self.recents.truncate(8);
+            save_recents(&self.recents);
+        }
+        self.search_index = None;
+        self.results.clear();
+        self.jump = Some(1);
+
+        if self.renderer.renders_real_content() {
+            self.toast_owned(format!("Opened {title}"));
+        } else {
+            self.toast_owned(
+                "PDFium missing — pages render blank. Run scripts/install-pdfium.sh",
+            );
         }
     }
 
@@ -921,7 +1103,7 @@ impl YouPdfApp {
         }
     }
 
-    /// Fenêtre « Exporter » : choix du format texte.
+    /// Fenêtre « Exporter » : choix du format de sortie.
     fn export_window(&mut self, ctx: &egui::Context) {
         if !self.export_open {
             return;
@@ -934,22 +1116,63 @@ impl YouPdfApp {
             .resizable(false)
             .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .show(ctx, |ui| {
-                ui.set_max_width(360.0);
-                ui.label(RichText::new("Format").size(12.0).color(MUTED));
-                for format in [TextFormat::Plain, TextFormat::Markdown, TextFormat::Html] {
+                ui.set_max_width(380.0);
+                ui.label(RichText::new("Text").size(12.0).color(MUTED));
+                for format in [
+                    TextFormat::Plain,
+                    TextFormat::Markdown,
+                    TextFormat::Html,
+                    TextFormat::Csv,
+                    TextFormat::Xml,
+                    TextFormat::Rtf,
+                ] {
                     if ui
-                        .selectable_label(self.export_format == format, format.display_name())
+                        .selectable_label(
+                            !self.export_image && self.export_format == format,
+                            format.display_name(),
+                        )
                         .clicked()
                     {
+                        self.export_image = false;
                         self.export_format = format;
                     }
                 }
+                ui.add_space(6.0);
+                ui.label(RichText::new("Images").size(12.0).color(MUTED));
+                for (format, label) in [
+                    (ImageFormat::Png, "PNG (one file per page)"),
+                    (ImageFormat::Jpeg, "JPEG (one file per page)"),
+                ] {
+                    if ui
+                        .selectable_label(
+                            self.export_image && self.export_image_format == format,
+                            label,
+                        )
+                        .clicked()
+                    {
+                        self.export_image = true;
+                        self.export_image_format = format;
+                    }
+                }
+                if self.export_image {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Resolution").size(12.0).color(MUTED));
+                        ui.add(
+                            egui::DragValue::new(&mut self.export_dpi)
+                                .range(36.0..=600.0)
+                                .suffix(" dpi"),
+                        );
+                    });
+                }
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new(
+                    RichText::new(if self.export_image {
+                        "Each page is rendered at the chosen resolution and written into a \
+                         folder as page-0001, page-0002…"
+                    } else {
                         "Only the text layer is exported: images, tables and the page layout \
-                         are not rebuilt, and pages without extractable text come out empty.",
-                    )
+                         are not rebuilt, and pages without extractable text come out empty."
+                    })
                     .size(11.0)
                     .color(MUTED),
                 );
@@ -966,8 +1189,32 @@ impl YouPdfApp {
         }
     }
 
-    /// Écrit la couche texte du document dans le format choisi.
+    /// Écrit la couche texte du document dans le format choisi, ou les pages
+    /// en images.
     fn export_active(&mut self, ctx: &egui::Context) {
+        if self.export_image {
+            let format = self.export_image_format;
+            let dpi = self.export_dpi;
+            let Some(directory) = rfd::FileDialog::new().pick_folder() else {
+                return;
+            };
+            let result = self
+                .tabs
+                .get(self.active)
+                .map(|tab| tab.doc.export_images(&directory, format, dpi));
+            match result {
+                Some(Ok(paths)) => {
+                    let name = directory
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "the folder".to_owned());
+                    self.toast(ctx, format!("{} image(s) written to {name}", paths.len()));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Export failed: {err}")),
+                None => {}
+            }
+            return;
+        }
         let format = self.export_format;
         let stem = self
             .active_stem()
@@ -3658,8 +3905,7 @@ impl YouPdfApp {
 
         // Liste déroulante `Outils`.
         if self.tools_open {
-            let mut chosen: Option<usize> = None;
-            let mut close = false;
+            let mut chosen: Option<ToolsEntry> = None;
             Area::new(Id::new("tools-menu"))
                 .fixed_pos(pos2(canvas_left + 10.0, top + 38.0))
                 .order(Order::Foreground)
@@ -3670,32 +3916,47 @@ impl YouPdfApp {
                         .stroke(Stroke::new(1.0_f32, SEPARATOR))
                         .inner_margin(Margin::symmetric(4.0, 4.0))
                         .show(ui, |ui| {
-                            for (idx, (label, shortcut)) in TOOLS_MENU.iter().enumerate() {
-                                let c = menu_row(ui, label, shortcut);
-                                if c {
-                                    chosen = Some(idx);
+                            for (idx, (label, shortcut, entry)) in TOOLS_MENU.iter().enumerate() {
+                                // Deux séparateurs : après les quatre modes, et
+                                // avant la conversion et l'entretien.
+                                if idx == 4 || idx == 11 {
+                                    ui.add_space(4.0);
+                                    let sep = ui.cursor().top();
+                                    ui.painter().hline(
+                                        ui.max_rect().x_range(),
+                                        sep,
+                                        Stroke::new(1.0_f32, SEPARATOR),
+                                    );
+                                    ui.add_space(4.0);
                                 }
-                            }
-                            let sep = ui.cursor().top() + 3.0;
-                            ui.painter().hline(
-                                ui.max_rect().x_range(),
-                                sep,
-                                Stroke::new(1.0_f32, SEPARATOR),
-                            );
-                            ui.add_space(8.0);
-                            if menu_row(ui, "Organize pages", "^5") {
-                                close = true;
-                                self.organize_open = true;
+                                if menu_row(ui, label, shortcut) {
+                                    chosen = Some(*entry);
+                                }
                             }
                         });
                 });
-            if let Some(idx) = chosen {
-                self.mode = Some(idx);
+            if let Some(entry) = chosen {
                 self.tools_open = false;
-                self.annot_tool = None;
-                self.preset_open = false;
-            } else if close {
-                self.tools_open = false;
+                match entry {
+                    ToolsEntry::Mode(idx) => {
+                        self.mode = Some(idx);
+                        self.annot_tool = None;
+                        self.preset_open = false;
+                    }
+                    ToolsEntry::Organize => self.organize_open = true,
+                    ToolsEntry::Crop => self.crop_open = true,
+                    ToolsEntry::Watermark => self.watermark_open = true,
+                    ToolsEntry::Background => self.background_open = true,
+                    ToolsEntry::HeaderFooter => self.header_footer_open = true,
+                    ToolsEntry::Bates => self.bates_open = true,
+                    ToolsEntry::Ocr => self.ocr_open = true,
+                    ToolsEntry::Convert => self.export_open = true,
+                    ToolsEntry::Create => self.create_open = true,
+                    ToolsEntry::Compare => self.compare_open = true,
+                    ToolsEntry::Protect => self.protect_open = true,
+                    ToolsEntry::Compress => self.compress_open = true,
+                    ToolsEntry::Flatten => self.flatten_annotations(ctx),
+                }
             }
         }
 
@@ -3804,6 +4065,36 @@ impl YouPdfApp {
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(10.0);
+                                ui.label(RichText::new("File").size(10.0).color(MUTED));
+                            });
+                            if menu_row(ui, "New blank page", "") {
+                                action = Some(MenuAction::NewBlank);
+                            }
+                            if menu_row(ui, "From images…", "") {
+                                action = Some(MenuAction::FromImages);
+                            }
+                            if menu_row(ui, "Combine with a PDF…", "") {
+                                action = Some(MenuAction::Combine);
+                            }
+                            if menu_row(ui, "Print…", "⌘P") {
+                                action = Some(MenuAction::Print);
+                            }
+                            if menu_row(ui, "Reveal in Finder", "") {
+                                action = Some(MenuAction::Reveal);
+                            }
+                            if menu_row(ui, "Remove protection…", "") {
+                                action = Some(MenuAction::RemoveProtection);
+                            }
+                            ui.add_space(4.0);
+                            let sep = ui.cursor().top();
+                            ui.painter().hline(
+                                ui.max_rect().x_range(),
+                                sep,
+                                Stroke::new(1.0_f32, SEPARATOR),
+                            );
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                ui.add_space(10.0);
                                 ui.label(RichText::new("Document").size(10.0).color(MUTED));
                             });
                             if menu_row(ui, "Watermark…", "") {
@@ -3820,6 +4111,24 @@ impl YouPdfApp {
                             }
                             if menu_row(ui, "Protect…", "") {
                                 action = Some(MenuAction::Protect);
+                            }
+                            if menu_row(ui, "Crop pages…", "") {
+                                action = Some(MenuAction::Crop);
+                            }
+                            if menu_row(ui, "Background…", "") {
+                                action = Some(MenuAction::Background);
+                            }
+                            if menu_row(ui, "Bates numbering…", "") {
+                                action = Some(MenuAction::Bates);
+                            }
+                            if menu_row(ui, "Compare PDFs…", "") {
+                                action = Some(MenuAction::Compare);
+                            }
+                            if menu_row(ui, "OCR…", "") {
+                                action = Some(MenuAction::Ocr);
+                            }
+                            if menu_row(ui, "Create…", "") {
+                                action = Some(MenuAction::Create);
                             }
                             ui.add_space(4.0);
                             let sep = ui.cursor().top();
@@ -3898,6 +4207,21 @@ impl YouPdfApp {
                     }
                     MenuAction::Compress => self.compress_open = true,
                     MenuAction::Protect => self.protect_open = true,
+                    MenuAction::Crop => self.crop_open = true,
+                    MenuAction::Background => self.background_open = true,
+                    MenuAction::Bates => self.bates_open = true,
+                    MenuAction::Compare => {
+                        self.compare_report = None;
+                        self.compare_open = true;
+                    }
+                    MenuAction::Ocr => self.ocr_open = true,
+                    MenuAction::Create => self.create_open = true,
+                    MenuAction::Print => self.print_active(ctx),
+                    MenuAction::Reveal => self.reveal_active(ctx),
+                    MenuAction::RemoveProtection => self.remove_protection(ctx),
+                    MenuAction::NewBlank => self.new_blank_page(ctx),
+                    MenuAction::FromImages => self.import_images(ctx),
+                    MenuAction::Combine => self.combine_active(ctx),
                 }
             }
         }
@@ -4487,6 +4811,907 @@ impl YouPdfApp {
     }
 
     // -- Canevas -----------------------------------------------------------
+
+    // -- Fonctionnalités de document ---------------------------------------
+
+    /// Fenêtre « Recadrage » : marges retirées des quatre bords.
+    fn crop_window(&mut self, ctx: &egui::Context) {
+        if !self.crop_open {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        let mut reset = false;
+        egui::Window::new("Crop pages")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(340.0);
+                ui.label(
+                    RichText::new(
+                        "Margins removed from every edge, in points (72 pt = 1 inch). \
+                         Negative values grow the page.",
+                    )
+                    .size(11.0)
+                    .color(MUTED),
+                );
+                ui.add_space(6.0);
+                egui::Grid::new("crop-grid")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        for (label, value) in [
+                            ("Left", &mut self.crop.left),
+                            ("Right", &mut self.crop.right),
+                            ("Top", &mut self.crop.top),
+                            ("Bottom", &mut self.crop.bottom),
+                        ] {
+                            ui.label(RichText::new(label).size(12.0).color(MUTED));
+                            ui.add(
+                                egui::DragValue::new(value).range(-500.0..=500.0).speed(0.5),
+                            );
+                            ui.end_row();
+                        }
+                    });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Apply").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Reset crop").clicked() {
+                        reset = true;
+                    }
+                });
+            });
+
+        let pages: Vec<usize> = (1..=self.active_total() as usize).collect();
+        if apply {
+            let margins = self.crop;
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.crop_pages(&pages, margins));
+            match result {
+                Some(Ok(count)) => {
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("{count} page(s) cropped"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Crop failed: {err}")),
+                None => {}
+            }
+        }
+        if reset {
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.reset_crop(&pages));
+            match result {
+                Some(Ok(count)) => {
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("Crop removed on {count} page(s)"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Reset failed: {err}")),
+                None => {}
+            }
+        }
+        if !open {
+            self.crop_open = false;
+        }
+    }
+
+    /// Fenêtre « Arrière-plan » : aplat de couleur ou image derrière la page.
+    fn background_window(&mut self, ctx: &egui::Context) {
+        if !self.background_open {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        let mut clear = false;
+        let mut choose = false;
+        let total = self.active_total();
+        let image_name = self
+            .background
+            .image
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned());
+        egui::Window::new("Background")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(380.0);
+                ui.label(
+                    RichText::new(
+                        "The background is painted behind the page content and prints with \
+                         the document.",
+                    )
+                    .size(11.0)
+                    .color(MUTED),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Colour").size(12.0).color(MUTED));
+                    let [mut r, mut g, mut b] = self.background.color;
+                    let mut changed = false;
+                    changed |= ui
+                        .add(egui::Slider::new(&mut r, 0..=255).show_value(false))
+                        .changed();
+                    changed |= ui
+                        .add(egui::Slider::new(&mut g, 0..=255).show_value(false))
+                        .changed();
+                    changed |= ui
+                        .add(egui::Slider::new(&mut b, 0..=255).show_value(false))
+                        .changed();
+                    if changed {
+                        self.background.color = [r, g, b];
+                    }
+                    let (rect, _) = ui.allocate_exact_size(vec2(24.0, 18.0), Sense::hover());
+                    ui.painter().rect_filled(
+                        rect,
+                        Rounding::same(4.0),
+                        Color32::from_rgb(r, g, b),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Opacity").size(12.0).color(MUTED));
+                    ui.add(
+                        egui::Slider::new(&mut self.background.opacity, 0.05..=1.0)
+                            .show_value(false),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Choose an image…").clicked() {
+                        choose = true;
+                    }
+                    ui.label(
+                        RichText::new(
+                            image_name
+                                .clone()
+                                .unwrap_or_else(|| "No image (colour fill)".to_owned()),
+                        )
+                        .size(11.0)
+                        .color(MUTED),
+                    );
+                    if self.background.image.is_some() && ui.small_button("Remove").clicked() {
+                        self.background.image = None;
+                    }
+                });
+                if self.background.image.is_some() {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Image scale").size(12.0).color(MUTED));
+                        ui.add(egui::Slider::new(&mut self.background.scale, 0.2..=2.0));
+                    });
+                }
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Pages").size(12.0).color(MUTED));
+                    let mut all = self.background_from.is_none();
+                    if ui.checkbox(&mut all, format!("All ({total})")).changed() {
+                        self.background_from = if all { None } else { Some(1) };
+                    }
+                    if let Some(from) = self.background_from.as_mut() {
+                        ui.label(RichText::new("from").size(12.0).color(MUTED));
+                        ui.add(egui::DragValue::new(from).range(1..=total));
+                    }
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Apply").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Remove from the document").clicked() {
+                        clear = true;
+                    }
+                });
+            });
+
+        if choose {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Images", &["png", "jpg", "jpeg"])
+                .pick_file()
+            {
+                self.background.image = Some(path);
+            }
+        }
+        if apply {
+            self.background.pages = Self::page_range_from(self.background_from);
+            let bg = self.background.clone();
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.add_background(&bg));
+            match result {
+                Some(Ok(count)) => {
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("Background applied to {count} page(s)"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Background failed: {err}")),
+                None => {}
+            }
+        }
+        if clear {
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.clear_backgrounds());
+            match result {
+                Some(Ok(removed)) => {
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("Removed {removed} background(s)"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Remove failed: {err}")),
+                None => {}
+            }
+        }
+        if !open {
+            self.background_open = false;
+        }
+    }
+
+    /// Fenêtre « Numérotation Bates ».
+    fn bates_window(&mut self, ctx: &egui::Context) {
+        if !self.bates_open {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        let mut clear = false;
+        let total = self.active_total();
+        egui::Window::new("Bates numbering")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(380.0);
+                ui.label(
+                    RichText::new(
+                        "A sequential stamp on every chosen page, for legal discovery and \
+                         document control.",
+                    )
+                    .size(11.0)
+                    .color(MUTED),
+                );
+                ui.add_space(6.0);
+                egui::Grid::new("bates-grid")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("Prefix").size(12.0).color(MUTED));
+                        ui.add(
+                            TextEdit::singleline(&mut self.bates.prefix).desired_width(160.0),
+                        );
+                        ui.end_row();
+                        ui.label(RichText::new("Suffix").size(12.0).color(MUTED));
+                        ui.add(
+                            TextEdit::singleline(&mut self.bates.suffix).desired_width(160.0),
+                        );
+                        ui.end_row();
+                        ui.label(RichText::new("Start at").size(12.0).color(MUTED));
+                        ui.add(egui::DragValue::new(&mut self.bates.start).range(0..=999_999));
+                        ui.end_row();
+                        ui.label(RichText::new("Digits").size(12.0).color(MUTED));
+                        ui.add(egui::DragValue::new(&mut self.bates.digits).range(1..=12));
+                        ui.end_row();
+                        ui.label(RichText::new("Font size").size(12.0).color(MUTED));
+                        ui.add(
+                            egui::DragValue::new(&mut self.bates.font_size).range(4.0..=72.0),
+                        );
+                        ui.end_row();
+                        ui.label(RichText::new("Margin").size(12.0).color(MUTED));
+                        ui.add(egui::DragValue::new(&mut self.bates.margin).range(0.0..=200.0));
+                        ui.end_row();
+                    });
+                ui.add_space(4.0);
+                ui.label(RichText::new("Position").size(12.0).color(MUTED));
+                ui.horizontal_wrapped(|ui| {
+                    for (position, label) in BATES_POSITIONS {
+                        if ui
+                            .selectable_label(self.bates.position == position, label)
+                            .clicked()
+                        {
+                            self.bates.position = position;
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Pages").size(12.0).color(MUTED));
+                    let mut all = self.bates_from.is_none();
+                    if ui.checkbox(&mut all, format!("All ({total})")).changed() {
+                        self.bates_from = if all { None } else { Some(1) };
+                    }
+                    if let Some(from) = self.bates_from.as_mut() {
+                        ui.label(RichText::new("from").size(12.0).color(MUTED));
+                        ui.add(egui::DragValue::new(from).range(1..=total));
+                    }
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Apply").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Remove from the document").clicked() {
+                        clear = true;
+                    }
+                });
+            });
+
+        if apply {
+            self.bates.pages = Self::page_range_from(self.bates_from);
+            let bates = self.bates.clone();
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.add_bates(&bates));
+            match result {
+                Some(Ok(count)) => {
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("Bates stamp applied to {count} page(s)"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Bates failed: {err}")),
+                None => {}
+            }
+        }
+        if clear {
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.clear_bates());
+            match result {
+                Some(Ok(removed)) => {
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("Removed {removed} Bates stamp(s)"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Remove failed: {err}")),
+                None => {}
+            }
+        }
+        if !open {
+            self.bates_open = false;
+        }
+    }
+
+    /// Fenêtre « Comparer des PDF » : différences de texte entre deux fichiers.
+    fn compare_window(&mut self, ctx: &egui::Context) {
+        if !self.compare_open {
+            return;
+        }
+        let mut open = true;
+        let mut pick = false;
+        let mut run = false;
+        let name = self
+            .compare_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned());
+        egui::Window::new("Compare PDFs")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size(vec2(560.0, 440.0))
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Choose a PDF…").clicked() {
+                        pick = true;
+                    }
+                    ui.label(
+                        RichText::new(
+                            name.clone().unwrap_or_else(|| "No file chosen".to_owned()),
+                        )
+                        .size(12.0)
+                        .color(if name.is_some() { ICON_BRIGHT } else { MUTED }),
+                    );
+                });
+                ui.add_space(6.0);
+                if ui.button("Compare with the open document").clicked() {
+                    run = true;
+                }
+                if let Some(report) = &self.compare_report {
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "{} page(s) vs {} page(s) — {} difference(s), \
+                             {} identical line(s)",
+                            report.pages_a,
+                            report.pages_b,
+                            report.differences.len(),
+                            report.identical_lines
+                        ))
+                        .size(12.0)
+                        .color(ICON_BRIGHT),
+                    );
+                    ui.add_space(4.0);
+                    ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                        for diff in report.differences.iter().take(300) {
+                            let (tag, color) = match diff.kind {
+                                DifferenceKind::Added => {
+                                    ("+", Color32::from_rgb(0x7A, 0xC0, 0x7A))
+                                }
+                                DifferenceKind::Removed => ("-", REDACT_RED),
+                                DifferenceKind::Modified => ("~", ACCENT),
+                                DifferenceKind::PageAdded => {
+                                    ("+ page", Color32::from_rgb(0x7A, 0xC0, 0x7A))
+                                }
+                                DifferenceKind::PageRemoved => ("- page", REDACT_RED),
+                            };
+                            let text = diff
+                                .after
+                                .clone()
+                                .or_else(|| diff.before.clone())
+                                .unwrap_or_default();
+                            let page = diff.page_b.or(diff.page_a).unwrap_or(0);
+                            ui.label(
+                                RichText::new(format!("{tag}  p{page}  {text}"))
+                                    .size(11.0)
+                                    .color(color),
+                            );
+                        }
+                    });
+                }
+            });
+
+        if pick {
+            self.compare_path = rfd::FileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .pick_file();
+            self.compare_report = None;
+        }
+        if run {
+            match self.compare_path.clone() {
+                Some(path) => match Document::open(&path) {
+                    Ok(other) => {
+                        let report = self
+                            .tabs
+                            .get(self.active)
+                            .map(|tab| tab.doc.compare_with(&other));
+                        match report {
+                            Some(Ok(report)) => {
+                                let identical = report.is_identical();
+                                self.compare_report = Some(report);
+                                if identical {
+                                    self.toast(ctx, "The two documents match");
+                                }
+                            }
+                            Some(Err(err)) => self.toast(ctx, format!("Compare failed: {err}")),
+                            None => self.toast(ctx, "Open a document first"),
+                        }
+                    }
+                    Err(err) => self.toast(ctx, format!("Open failed: {err}")),
+                },
+                None => self.toast(ctx, "Choose a PDF to compare with"),
+            }
+        }
+        if !open {
+            self.compare_open = false;
+        }
+    }
+
+    /// Fenêtre « OCR » : rend le document consultable par Tesseract.
+    fn ocr_window(&mut self, ctx: &egui::Context) {
+        if !self.ocr_open {
+            return;
+        }
+        let mut open = true;
+        let mut run = false;
+        // Tesseract n'est interrogé qu'une fois : `available_languages` lance
+        // un processus, et le refaire à chaque trame ferait clignoter la
+        // fenêtre tout en lançant un `tesseract --list-langs` par image.
+        if !self.ocr_probed {
+            let engine = TesseractEngine::detect();
+            self.ocr_installed = engine.display_name().contains("système");
+            self.ocr_languages = engine.available_languages().unwrap_or_default();
+            self.ocr_probed = true;
+        }
+        let installed = self.ocr_installed;
+        let languages = self.ocr_languages.clone();
+        egui::Window::new("OCR")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(430.0);
+                ui.label(
+                    RichText::new(if installed {
+                        "Tesseract (system)"
+                    } else {
+                        "Tesseract (not installed)"
+                    })
+                    .size(12.0)
+                    .color(if installed { ICON_BRIGHT } else { REDACT_RED }),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Language").size(12.0).color(MUTED));
+                    ui.add(TextEdit::singleline(&mut self.ocr_language).desired_width(90.0));
+                    if !languages.is_empty() {
+                        let mut picked: Option<String> = None;
+                        egui::ComboBox::from_id_salt("ocr-lang")
+                            .selected_text(self.ocr_language.clone())
+                            .show_ui(ui, |ui| {
+                                for lang in languages.iter().take(300) {
+                                    if ui
+                                        .selectable_label(self.ocr_language == *lang, lang)
+                                        .clicked()
+                                    {
+                                        picked = Some(lang.clone());
+                                    }
+                                }
+                            });
+                        if let Some(lang) = picked {
+                            self.ocr_language = lang;
+                        }
+                    }
+                });
+                ui.add_space(6.0);
+                ui.label(RichText::new("Output").size(12.0).color(MUTED));
+                for &(mode, label, detail) in OcrMode::ALL {
+                    if ui
+                        .selectable_label(self.ocr_mode == mode, format!("{label} — {detail}"))
+                        .clicked()
+                    {
+                        self.ocr_mode = mode;
+                    }
+                }
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(
+                        "Recognition rewrites the document: each page becomes an image plus \
+                         an invisible text layer. It runs on the interface thread and can \
+                         take a while on a long scan.",
+                    )
+                    .size(11.0)
+                    .color(MUTED),
+                );
+                ui.add_space(6.0);
+                if ui
+                    .add_enabled(installed, egui::Button::new("Recognise"))
+                    .clicked()
+                {
+                    run = true;
+                }
+                if let Some(report) = &self.ocr_report {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(report).size(11.0).color(ICON_BRIGHT));
+                }
+            });
+
+        if run {
+            let language = self.ocr_language.clone();
+            let result = {
+                let engine = TesseractEngine::detect();
+                self.tabs.get(self.active).map(|tab| {
+                    make_searchable(&tab.doc, &*self.renderer, &engine, &language)
+                })
+            };
+            match result {
+                Some(Ok(doc)) => {
+                    let pages = doc.page_count();
+                    if let Some(tab) = self.tabs.get_mut(self.active) {
+                        tab.doc = doc;
+                    }
+                    self.mark_document_changed();
+                    let report = format!("{pages} page(s) recognised");
+                    self.ocr_report = Some(report.clone());
+                    self.toast(ctx, format!("OCR done: {report}"));
+                }
+                Some(Err(err)) => {
+                    let message = format!("{err}");
+                    self.ocr_report = Some(message.clone());
+                    self.toast(ctx, format!("OCR failed: {message}"));
+                }
+                None => self.toast(ctx, "Open a document first"),
+            }
+        }
+        if !open {
+            self.ocr_open = false;
+        }
+    }
+
+    /// Fenêtre « Créer » : page vierge ou PDF à partir d'images.
+    fn create_window(&mut self, ctx: &egui::Context) {
+        if !self.create_open {
+            return;
+        }
+        let mut open = true;
+        let mut make_blank = false;
+        let mut images = false;
+        egui::Window::new("Create")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(380.0);
+                ui.label(RichText::new("Blank document").size(12.0).color(MUTED));
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Pages").size(12.0).color(MUTED));
+                    ui.add(egui::DragValue::new(&mut self.create_pages).range(1..=500));
+                    if ui.button("Create blank").clicked() {
+                        make_blank = true;
+                    }
+                });
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(10.0);
+                ui.label(RichText::new("From images").size(12.0).color(MUTED));
+                ui.label(
+                    RichText::new(
+                        "One page per image, in the order chosen. PNG and JPEG are read.",
+                    )
+                    .size(11.0)
+                    .color(MUTED),
+                );
+                ui.add_space(4.0);
+                if ui.button("Choose images…").clicked() {
+                    images = true;
+                }
+            });
+
+        if make_blank {
+            match blank_document(self.create_pages.max(1), 595.0, 842.0) {
+                Ok(doc) => {
+                    self.push_document(doc, None);
+                    self.create_open = false;
+                }
+                Err(err) => self.toast(ctx, format!("Create failed: {err}")),
+            }
+        }
+        if images {
+            self.import_images(ctx);
+        }
+        if !open {
+            self.create_open = false;
+        }
+    }
+
+    /// Nouveau document d'une page vierge.
+    fn new_blank_page(&mut self, ctx: &egui::Context) {
+        match blank_document(1, 595.0, 842.0) {
+            Ok(doc) => self.push_document(doc, None),
+            Err(err) => self.toast(ctx, format!("Create failed: {err}")),
+        }
+    }
+
+    /// Nouveau document dont chaque page porte une image choisie.
+    fn import_images(&mut self, ctx: &egui::Context) {
+        let Some(paths) = rfd::FileDialog::new()
+            .add_filter("Images", &["png", "jpg", "jpeg"])
+            .pick_files()
+        else {
+            return;
+        };
+        if paths.is_empty() {
+            return;
+        }
+        match document_from_images(&paths, 300.0) {
+            Ok(doc) => {
+                let pages = paths.len();
+                self.push_document(doc, None);
+                self.create_open = false;
+                self.toast(ctx, format!("{pages} page(s) created from images"));
+            }
+            Err(err) => self.toast(ctx, format!("Create failed: {err}")),
+        }
+    }
+
+    /// Insère un autre PDF à la fin du document courant.
+    fn combine_active(&mut self, ctx: &egui::Context) {
+        if self.tabs.is_empty() {
+            self.toast(ctx, "Open a document first");
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("PDF", &["pdf"])
+            .pick_file()
+        else {
+            return;
+        };
+        let other = match Document::open(&path) {
+            Ok(doc) => doc,
+            Err(err) => {
+                self.toast(ctx, format!("Open failed: {err}"));
+                return;
+            }
+        };
+        let after = self.tabs.get(self.active).map(|tab| tab.total()).unwrap_or(0);
+        let result = self
+            .tabs
+            .get_mut(self.active)
+            .map(|tab| tab.doc.insert_document(after, &other));
+        match result {
+            Some(Ok(count)) => {
+                self.mark_document_changed();
+                self.toast(ctx, format!("{count} page(s) appended"));
+            }
+            Some(Err(err)) => self.toast(ctx, format!("Combine failed: {err}")),
+            None => {}
+        }
+    }
+
+    /// Envoie le document à l'imprimante par défaut du système.
+    ///
+    /// Utilise `lp` : pas d'aperçu, pas de boîte de dialogue de réglages.
+    /// Le fichier est écrit dans un temporaire, annotations en attente
+    /// comprises, puis remis au spouleur.
+    fn print_active(&mut self, ctx: &egui::Context) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let bytes = match tab.doc.to_bytes() {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                self.toast(ctx, format!("Print failed: {err}"));
+                return;
+            }
+        };
+        let tmp = std::env::temp_dir().join(format!("youpdf-print-{}.pdf", std::process::id()));
+        if let Err(err) = std::fs::write(&tmp, &bytes) {
+            self.toast(ctx, format!("Print failed: {err}"));
+            return;
+        }
+        match std::process::Command::new("lp").arg(&tmp).output() {
+            Ok(output) if output.status.success() => {
+                self.toast(ctx, "Sent to the default printer");
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                self.toast(ctx, format!("Print failed: {}", stderr.trim()));
+            }
+            Err(err) => self.toast(ctx, format!("Print unavailable: {err}")),
+        }
+    }
+
+    /// Révèle le fichier courant dans le gestionnaire de fichiers.
+    fn reveal_active(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.tabs.get(self.active).and_then(|tab| tab.path.clone()) else {
+            self.toast(ctx, "This document has no file on disk yet");
+            return;
+        };
+        #[cfg(target_os = "macos")]
+        let command = std::process::Command::new("open").arg("-R").arg(&path).spawn();
+        #[cfg(not(target_os = "macos"))]
+        let command = std::process::Command::new("xdg-open")
+            .arg(path.parent().unwrap_or(&path))
+            .spawn();
+        match command {
+            Ok(_) => {}
+            Err(err) => self.toast(ctx, format!("Reveal failed: {err}")),
+        }
+    }
+
+    /// Demande le mot de passe d'un fichier protégé pour le déverrouiller.
+    fn remove_protection(&mut self, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("PDF", &["pdf"])
+            .pick_file()
+        else {
+            return;
+        };
+        if !Document::file_is_encrypted(&path) {
+            self.toast(ctx, "This file is not protected");
+            return;
+        }
+        self.password_prompt = Some(PasswordPrompt {
+            path,
+            purpose: PasswordPurpose::RemoveProtection,
+            value: String::new(),
+            error: None,
+        });
+    }
+
+    /// Fenêtre d'invite de mot de passe (ouverture ou déprotection).
+    fn password_window(&mut self, ctx: &egui::Context) {
+        if self.password_prompt.is_none() {
+            return;
+        }
+        let mut open = true;
+        let mut submit = false;
+        let mut cancel = false;
+        let (title, name, purpose) = {
+            let prompt = self.password_prompt.as_ref().unwrap();
+            let title = match prompt.purpose {
+                PasswordPurpose::Open => "Password required",
+                PasswordPurpose::RemoveProtection => "Remove protection",
+            };
+            let name = prompt
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "This file".to_owned());
+            (title, name, prompt.purpose)
+        };
+        egui::Window::new(title)
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(340.0);
+                let prompt = self.password_prompt.as_mut().unwrap();
+                ui.label(
+                    RichText::new(format!("{name} is protected. Enter its password."))
+                        .size(12.0)
+                        .color(ICON_BRIGHT),
+                );
+                ui.add_space(6.0);
+                let resp = ui.add(
+                    TextEdit::singleline(&mut prompt.value)
+                        .password(true)
+                        .desired_width(300.0)
+                        .hint_text("Password"),
+                );
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    submit = true;
+                }
+                if let Some(err) = &prompt.error {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(err).size(11.0).color(REDACT_RED));
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() {
+                        submit = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if !open {
+            cancel = true;
+        }
+        if cancel {
+            self.password_prompt = None;
+            return;
+        }
+        if !submit {
+            return;
+        }
+        let prompt = self.password_prompt.take().unwrap();
+        match Document::open_protected(&prompt.path, &prompt.value) {
+            Ok(doc) => match purpose {
+                PasswordPurpose::Open => self.push_document(doc, Some(prompt.path)),
+                PasswordPurpose::RemoveProtection => {
+                    let stem = prompt
+                        .path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "document".to_owned());
+                    if let Some(out) = rfd::FileDialog::new()
+                        .add_filter("PDF", &["pdf"])
+                        .set_file_name(format!("{stem}-unprotected.pdf"))
+                        .save_file()
+                    {
+                        match doc.save_decrypted(&out) {
+                            Ok(()) => {
+                                let name = out
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                self.toast(ctx, format!("Unprotected copy written to {name}"));
+                            }
+                            Err(err) => {
+                                self.toast(ctx, format!("Remove protection failed: {err}"));
+                            }
+                        }
+                    }
+                }
+            },
+            Err(err) => {
+                let mut prompt = prompt;
+                prompt.value.clear();
+                prompt.error = Some(format!("{err}"));
+                self.password_prompt = Some(prompt);
+            }
+        }
+    }
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
         if self.tabs.is_empty() {
@@ -5573,6 +6798,13 @@ impl eframe::App for YouPdfApp {
         self.header_footer_window(ctx);
         self.compress_window(ctx);
         self.protect_window(ctx);
+        self.crop_window(ctx);
+        self.background_window(ctx);
+        self.bates_window(ctx);
+        self.compare_window(ctx);
+        self.ocr_window(ctx);
+        self.create_window(ctx);
+        self.password_window(ctx);
         self.draft_window(ctx);
         self.redact_window(ctx);
         self.organize_window(ctx);
