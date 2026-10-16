@@ -23,6 +23,10 @@ egui = { workspace = true }
 # et `eframe` : aucune dépendance nouvelle.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
+# Compression zlib des images embarquées (`/FlateDecode`). Déjà tiré par
+# `lopdf` ; on le déclare pour l'utiliser directement.
+flate2 = "1"
+
 # Rendu réel via pdfium (binaire embarqué).
 pdfium-render = { version = "0.8", features = ["bindings"] }
 
