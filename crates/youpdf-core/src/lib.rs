@@ -44,6 +44,6 @@ pub use ocr::{OcrEngine, OcrMode, OcrResult, TesseractEngine, validate_language}
 pub use protect::{EncryptionOptions, EncryptionStrength, Permissions};
 pub use redact::RedactionRegion;
 pub use render::{PageBitmap, PdfiumRenderer, RenderOptions, Renderer};
-pub use search::{SearchIndex, SearchResult, fold_case};
+pub use search::{SearchIndex, SearchOptions, SearchResult, fold_case};
 pub use signature::{SignaturePlacement, SignatureRequest, SignatureStatus};
 pub use structure::{AttachmentInfo, OutlineItem, decode_pdf_text};

@@ -21,7 +21,7 @@ use youpdf_core::render::NullRenderer;
 use youpdf_core::{
     fold_case, Annotation, AnnotationKind, AnnotationStyle, AttachmentInfo, Document,
     FormField, FormFieldKind, OutlineItem, PdfiumRenderer, RedactionRegion, RenderOptions,
-    Renderer, SearchIndex, SearchResult, STAMP_NAMES,
+    Renderer, SearchIndex, SearchOptions, SearchResult, STAMP_NAMES,
 };
 
 // --------------------------------------------------------------------------
@@ -314,6 +314,10 @@ pub struct YouPdfApp {
     search_rects: Vec<[f32; 4]>,
     /// Page des rectangles de recherche affichés.
     search_rects_page: Option<u32>,
+    /// Filtre « respecter la casse » de la recherche.
+    search_case: bool,
+    /// Filtre « mots entiers » de la recherche.
+    search_word: bool,
     /// Saisie de la page à atteindre (pastille bas-droite).
     page_entry: String,
     /// Fenêtre « Organiser les pages » ouverte.
@@ -395,6 +399,8 @@ impl YouPdfApp {
             search_active: None,
             search_rects: Vec::new(),
             search_rects_page: None,
+            search_case: false,
+            search_word: false,
             page_entry: String::new(),
             organize_open: false,
             organize_selected: BTreeSet::new(),
@@ -1497,8 +1503,12 @@ impl YouPdfApp {
             }
         }
 
+        let options = SearchOptions {
+            case_sensitive: self.search_case,
+            whole_word: self.search_word,
+        };
         if let Some((_, index)) = &self.search_index {
-            self.results = index.search(&query, 200);
+            self.results = index.search_with(&query, 200, options);
             let count = self.results.len();
             self.history.retain(|q| q != &query);
             self.history.insert(0, query);
@@ -2063,13 +2073,40 @@ impl YouPdfApp {
                                     Color32::from_rgb(0x33, 0x33, 0x33),
                                 );
                             }
+                            let active = self.search_case || self.search_word;
                             icon_funnel(
                                 ui.painter(),
                                 rect.shrink(7.0),
-                                if resp.hovered() { ICON_BRIGHT } else { ICON },
+                                if resp.hovered() || active { ICON_BRIGHT } else { ICON },
                             );
                             if resp.clicked() {
-                                self.toast(ctx, "Filters — planned");
+                                ui.memory_mut(|m| m.toggle_popup(Id::new("search_filters")));
+                            }
+                            let mut refilter = false;
+                            egui::popup_above_or_below_widget(
+                                ui,
+                                Id::new("search_filters"),
+                                &resp,
+                                egui::AboveOrBelow::Below,
+                                egui::PopupCloseBehavior::CloseOnClickOutside,
+                                |ui| {
+                                    ui.set_min_width(150.0);
+                                    ui.label(
+                                        RichText::new("Search options")
+                                            .size(11.0)
+                                            .color(MUTED),
+                                    );
+                                    ui.add_space(4.0);
+                                    refilter |= ui
+                                        .checkbox(&mut self.search_case, "Case sensitive")
+                                        .changed();
+                                    refilter |= ui
+                                        .checkbox(&mut self.search_word, "Whole words")
+                                        .changed();
+                                },
+                            );
+                            if refilter {
+                                self.run_search(ctx);
                             }
                         });
                     }
