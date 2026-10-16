@@ -57,4 +57,6 @@ pub use render::{PageBitmap, PdfiumRenderer, RenderOptions, Renderer};
 pub use search::{SearchIndex, SearchOptions, SearchResult, fold_case};
 pub use signature::{SignaturePlacement, SignatureRequest, SignatureStatus};
 pub use structure::{AttachmentInfo, OutlineItem, decode_pdf_text};
-pub use watermark::{HeaderFooter, NumberStyle, PageRange, Watermark};
+pub use watermark::{
+    Background, Bates, BatesPosition, HeaderFooter, NumberStyle, PageRange, Watermark,
+};

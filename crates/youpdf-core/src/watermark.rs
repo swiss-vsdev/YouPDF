@@ -24,8 +24,8 @@ use lopdf::{dictionary, Dictionary, Object, ObjectId, Stream};
 
 use youpdf_shared::{Error, Result};
 
-use crate::document::Document;
-use crate::edit::encode_pdf_literal;
+use crate::document::{Document, PageView};
+use crate::edit::{encode_pdf_literal, load_image_rgb};
 
 /// Nom de ressource de la police posée par ce module.
 const WM_FONT_NAME: &str = "YouPdfF1";
@@ -35,6 +35,15 @@ const WM_GS_NAME: &str = "YouPdfWMGS0";
 
 /// Clé marquant un flux de contenu posé par ce module.
 const WM_MARKER: &str = "YouPdfDecoration";
+
+/// Clé marquant un flux d'arrière-plan posé par ce module.
+const BG_MARKER: &str = "YouPdfBackground";
+
+/// Clé marquant un flux de numérotation Bates posé par ce module.
+const BATES_MARKER: &str = "YouPdfBates";
+
+/// Nom de ressource du XObject image d'arrière-plan.
+const BG_XOBJECT_NAME: &str = "YouPdfBG0";
 
 /// Pages auxquelles un filigrane ou un en-tête s'applique.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,10 +177,92 @@ impl Default for HeaderFooter {
     }
 }
 
+/// Description d'un arrière-plan de page : aplat de couleur et/ou image.
+#[derive(Debug, Clone)]
+pub struct Background {
+    /// Couleur RGB (0–255) de l'aplat.
+    pub color: [u8; 3],
+    /// Opacité de l'aplat (0.0 à 1.0).
+    pub opacity: f32,
+    /// Image de fond (PNG ou JPEG). `None` : aplat de couleur seul.
+    pub image: Option<std::path::PathBuf>,
+    /// Échelle de l'image : 1.0 couvre la boîte visible.
+    pub scale: f32,
+    /// Pages concernées.
+    pub pages: PageRange,
+}
+
+impl Default for Background {
+    fn default() -> Self {
+        Self {
+            color: [255, 255, 255],
+            opacity: 1.0,
+            image: None,
+            scale: 1.0,
+            pages: PageRange::All,
+        }
+    }
+}
+
+/// Position du numéro Bates sur la page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatesPosition {
+    /// Coin supérieur gauche.
+    TopLeft,
+    /// Bord supérieur, centré.
+    TopCenter,
+    /// Coin supérieur droit.
+    TopRight,
+    /// Coin inférieur gauche.
+    BottomLeft,
+    /// Bord inférieur, centré.
+    BottomCenter,
+    /// Coin inférieur droit.
+    BottomRight,
+}
+
+/// Description d'une numérotation Bates.
+#[derive(Debug, Clone)]
+pub struct Bates {
+    /// Préfixe du libellé (`DOC-`).
+    pub prefix: String,
+    /// Suffixe du libellé.
+    pub suffix: String,
+    /// Premier numéro de la sélection.
+    pub start: u32,
+    /// Nombre de chiffres, complété par des zéros.
+    pub digits: usize,
+    /// Position sur la page.
+    pub position: BatesPosition,
+    /// Distance au bord de la page, en points.
+    pub margin: f32,
+    /// Taille de police en points.
+    pub font_size: f32,
+    /// Couleur RGB (0–255).
+    pub color: [u8; 3],
+    /// Pages concernées.
+    pub pages: PageRange,
+}
+
+impl Default for Bates {
+    fn default() -> Self {
+        Self {
+            prefix: String::new(),
+            suffix: String::new(),
+            start: 1,
+            digits: 6,
+            position: BatesPosition::BottomRight,
+            margin: 36.0,
+            font_size: 10.0,
+            color: [0, 0, 0],
+            pages: PageRange::All,
+        }
+    }
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Construction du flux de contenu
 // ────────────────────────────────────────────────────────────────────────
-
 /// Largeur approchée d'un texte : l'Helvetica vaut ~0.5 cadratin par
 /// caractère. Suffisant pour centrer, impossible pour ajuster au point.
 fn text_width(text: &str, size: f32) -> f32 {
@@ -362,9 +453,156 @@ fn header_footer_ops(
     Some(out)
 }
 
+/// Flux de contenu d'un aplat de couleur, sur toute la boîte visible.
+fn background_color_ops(bg: &Background, view: PageView) -> Vec<u8> {
+    let [r, g, b] = bg.color;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"q\n");
+    if bg.opacity < 1.0 {
+        out.extend_from_slice(format!("/{WM_GS_NAME} gs\n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "{:.3} {:.3} {:.3} rg\n{:.2} {:.2} {:.2} {:.2} re f\n",
+            r as f32 / 255.0,
+            g as f32 / 255.0,
+            b as f32 / 255.0,
+            view.x,
+            view.y,
+            view.width,
+            view.height
+        )
+        .as_bytes(),
+    );
+    out.extend_from_slice(b"Q\n");
+    out
+}
+
+/// Flux de contenu d'une image d'arrière-plan, recadrée sur la boîte visible.
+///
+/// L'image couvre la boîte (rapport d'échelle le plus grand des deux axes),
+/// multipliée par `scale` : `scale > 1` agrandit et rogne, `scale < 1`
+/// laisse une marge. Le rectangle de recadrage garde l'image dans la boîte.
+fn background_image_ops(view: PageView, img_w: f32, img_h: f32, scale: f32) -> Vec<u8> {
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    let cover = (view.width / img_w).max(view.height / img_h) * scale;
+    let w = img_w * cover;
+    let h = img_h * cover;
+    let x = view.x + (view.width - w) / 2.0;
+    let y = view.y + (view.height - h) / 2.0;
+    format!(
+        "q\n{:.2} {:.2} {:.2} {:.2} re W n\n\
+         {w:.2} 0 0 {h:.2} {x:.2} {y:.2} cm\n/{BG_XOBJECT_NAME} Do\nQ\n",
+        view.x, view.y, view.width, view.height
+    )
+    .into_bytes()
+}
+
+/// Flux de contenu d'un numéro Bates, placé selon la position choisie.
+fn bates_ops(b: &Bates, label: &str, view: PageView) -> Vec<u8> {
+    let size = b.font_size.clamp(4.0, 72.0);
+    let tw = text_width(label, size);
+    let margin = b.margin.clamp(0.0, view.width.min(view.height) / 3.0);
+    let left = view.x + margin;
+    let right = (view.x + view.width - margin - tw).max(left);
+    let center = view.x + (view.width - tw) / 2.0;
+    let top = view.y + view.height - margin - size;
+    let bottom = view.y + margin;
+
+    let (x, y) = match b.position {
+        BatesPosition::TopLeft => (left, top),
+        BatesPosition::TopCenter => (center, top),
+        BatesPosition::TopRight => (right, top),
+        BatesPosition::BottomLeft => (left, bottom),
+        BatesPosition::BottomCenter => (center, bottom),
+        BatesPosition::BottomRight => (right, bottom),
+    };
+
+    let [r, g, bl] = b.color;
+    let mut out = Vec::new();
+    out.extend_from_slice(
+        format!(
+            "q\n{:.3} {:.3} {:.3} rg\nBT\n/{WM_FONT_NAME} {size:.2} Tf\n\
+             1 0 0 1 {x:.2} {y:.2} Tm\n",
+            r as f32 / 255.0,
+            g as f32 / 255.0,
+            bl as f32 / 255.0
+        )
+        .as_bytes(),
+    );
+    push_literal(&mut out, label);
+    out.extend_from_slice(b" Tj\nET\nQ\n");
+    out
+}
+
+/// Enveloppe zlib d'un tampon : en-tête zlib, blocs deflate « stored »,
+/// puis somme de contrôle Adler-32. Le résultat est un flux `/FlateDecode`
+/// valide pour tout décodeur.
+// ponytail: blocs « stored », pas de codage entropique ; passer à un vrai
+// deflate (flate2) si la taille des images d'arrière-plan devient un souci.
+fn zlib_store(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() + 16);
+    // CMF/FLG : deflate, fenêtre 32 K, somme (0x78, 0x01) multiple de 31.
+    out.extend_from_slice(&[0x78, 0x01]);
+    if data.is_empty() {
+        out.extend_from_slice(&[0x01, 0x00, 0x00, 0xFF, 0xFF]);
+    }
+    let mut chunks = data.chunks(65_535).peekable();
+    while let Some(chunk) = chunks.next() {
+        let last = chunks.peek().is_none();
+        out.push(u8::from(last));
+        let len = chunk.len() as u16;
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&(!len).to_le_bytes());
+        out.extend_from_slice(chunk);
+    }
+    let mut a: u32 = 1;
+    let mut b: u32 = 0;
+    for &byte in data {
+        a = (a + byte as u32) % 65_521;
+        b = (b + a) % 65_521;
+    }
+    out.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    out
+}
+
+/// Construit le flux XObject image d'un arrière-plan depuis un fichier.
+///
+/// Un JPEG est recopié tel quel (`/DCTDecode`) ; tout autre format est
+/// décodé en RGB puis compressé en zlib. Renvoie `(flux, largeur, hauteur)`.
+fn background_image_stream(path: &std::path::Path) -> Result<(Stream, u32, u32)> {
+    let raw = std::fs::read(path)?;
+    let (width, height, data, filter) = if raw.starts_with(&[0xFF, 0xD8]) {
+        let (w, h) = image::image_dimensions(path)
+            .map_err(|e| Error::InvalidInput(format!("{} : {e}", path.display())))?;
+        (w, h, raw, "DCTDecode")
+    } else {
+        let (pixels, w, h) = load_image_rgb(path)?;
+        (w, h, zlib_store(&pixels), "FlateDecode")
+    };
+
+    let dict = dictionary! {
+        "Type" => Object::Name(b"XObject".to_vec()),
+        "Subtype" => Object::Name(b"Image".to_vec()),
+        "Width" => Object::Integer(width as i64),
+        "Height" => Object::Integer(height as i64),
+        "ColorSpace" => Object::Name(b"DeviceRGB".to_vec()),
+        "BitsPerComponent" => Object::Integer(8),
+        "Filter" => Object::Name(filter.as_bytes().to_vec()),
+    };
+    Ok((Stream::new(dict, data), width, height))
+}
+
 /// Dictionnaire des flux posés par ce module (clé de repérage).
 fn marked_dict() -> Dictionary {
-    dictionary! { WM_MARKER => Object::Boolean(true) }
+    marked_dict_with(WM_MARKER)
+}
+
+/// Dictionnaire marquant un flux par la clé de repérage `key`.
+fn marked_dict_with(key: &str) -> Dictionary {
+    let mut dict = Dictionary::new();
+    dict.set(key, Object::Boolean(true));
+    dict
 }
 
 /// Chiffres romains minuscules. `0` n'a pas d'écriture romaine : on le
@@ -472,6 +710,110 @@ impl Document {
     /// le contenu d'origine de la page n'est jamais touché. Renvoie le
     /// nombre de flux retirés.
     pub fn clear_watermarks(&mut self) -> Result<usize> {
+        self.wm_clear_marked(WM_MARKER)
+    }
+
+    /// Ajoute un arrière-plan aux pages de `bg.pages`.
+    ///
+    /// L'arrière-plan est inséré **avant** le contenu existant : il se
+    /// dessine donc derrière le texte et les images de la page. Renvoie le
+    /// nombre de pages décorées.
+    pub fn add_background(&mut self, bg: &Background) -> Result<usize> {
+        let total = self.page_count() as u32;
+        let pages = bg.pages.pages(total);
+
+        // L'image n'est décodée qu'une fois, puis partagée entre les pages.
+        let image = match &bg.image {
+            Some(path) => Some(background_image_stream(path)?),
+            None => None,
+        };
+        let image_res = match image {
+            Some((stream, width, height)) => {
+                let id = self.inner_mut().add_object(stream);
+                Some((id, width as f32, height as f32))
+            }
+            None => None,
+        };
+
+        for page in &pages {
+            let page_id = self
+                .page_id(*page)
+                .map_err(|e| Error::Pdf(format!("page {page} : {e}")))?;
+            let view = self.page_view(*page);
+
+            let ops = match &image_res {
+                Some((_, width, height)) => background_image_ops(view, *width, *height, bg.scale),
+                None => background_color_ops(bg, view),
+            };
+            let stream_id = self
+                .inner_mut()
+                .add_object(Stream::new(marked_dict_with(BG_MARKER), ops));
+
+            if let Some((xobject_id, _, _)) = image_res {
+                self.wm_link_xobject(page_id, BG_XOBJECT_NAME, xobject_id)?;
+            }
+            if bg.opacity < 1.0 {
+                self.wm_ensure_extgstate(page_id, bg.opacity.clamp(0.05, 1.0))?;
+            }
+            self.wm_prepend_content(page_id, stream_id)?;
+        }
+
+        tracing::debug!(pages = pages.len(), "arrière-plan ajouté");
+        Ok(pages.len())
+    }
+
+    /// Retire tous les arrière-plans posés par ce module.
+    ///
+    /// Seuls les flux marqués `/YouPdfBackground` sont retirés : les
+    /// filigranes, en-têtes et numéros restent en place. Renvoie le nombre
+    /// de flux retirés.
+    pub fn clear_backgrounds(&mut self) -> Result<usize> {
+        self.wm_clear_marked(BG_MARKER)
+    }
+
+    /// Ajoute une numérotation Bates aux pages de `b.pages`.
+    ///
+    /// Le premier numéro de la sélection est `b.start` ; chaque page suivante
+    /// s'incrémente de 1. Renvoie le nombre de pages numérotées.
+    pub fn add_bates(&mut self, b: &Bates) -> Result<usize> {
+        let total = self.page_count() as u32;
+        let pages = b.pages.pages(total);
+        let digits = b.digits.clamp(1, 20);
+
+        for (index, page) in pages.iter().enumerate() {
+            let page_id = self
+                .page_id(*page)
+                .map_err(|e| Error::Pdf(format!("page {page} : {e}")))?;
+            let n = b.start.saturating_add(index as u32);
+            let label = format!("{}{n:0width$}{}", b.prefix, b.suffix, width = digits);
+
+            let view = self.page_view(*page);
+            let ops = bates_ops(b, &label, view);
+            let stream_id = self
+                .inner_mut()
+                .add_object(Stream::new(marked_dict_with(BATES_MARKER), ops));
+
+            self.wm_ensure_font(page_id)?;
+            self.wm_append_content(page_id, stream_id)?;
+        }
+
+        tracing::debug!(pages = pages.len(), "numérotation Bates ajoutée");
+        Ok(pages.len())
+    }
+
+    /// Retire tous les numéros Bates posés par ce module.
+    ///
+    /// Seuls les flux marqués `/YouPdfBates` sont retirés. Renvoie le nombre
+    /// de flux retirés.
+    pub fn clear_bates(&mut self) -> Result<usize> {
+        self.wm_clear_marked(BATES_MARKER)
+    }
+
+    /// Retire les flux de contenu marqués par `marker`, sur toutes les pages.
+    ///
+    /// Le contenu d'origine n'est jamais touché : seuls les flux portant la
+    /// clé sont retirés. Renvoie le nombre de flux retirés.
+    fn wm_clear_marked(&mut self, marker: &str) -> Result<usize> {
         let pages = self.inner().get_pages();
         let mut removed = 0usize;
 
@@ -494,7 +836,7 @@ impl Document {
                     .ok()
                     .and_then(|id| self.inner().get_object(id).ok())
                     .and_then(|o| o.as_stream().ok())
-                    .and_then(|s| s.dict.get(WM_MARKER.as_bytes()).ok())
+                    .and_then(|s| s.dict.get(marker.as_bytes()).ok())
                     .is_some();
                 if ours {
                     removed += 1;
@@ -643,5 +985,43 @@ impl Document {
             _ => dict.set("Contents", Object::Reference(stream_id)),
         }
         Ok(())
+    }
+
+    /// Insère un flux au début du contenu d'une page.
+    ///
+    /// Miroir de [`Document::wm_append_content`] : le flux passe avant le
+    /// contenu existant, qui reste intact et ordonné après lui.
+    fn wm_prepend_content(&mut self, page_id: ObjectId, stream_id: ObjectId) -> Result<()> {
+        let page = self
+            .inner_mut()
+            .get_object_mut(page_id)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let dict = page
+            .as_dict_mut()
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        match dict.get_mut(b"Contents") {
+            Ok(Object::Reference(id)) => {
+                let existing = *id;
+                dict.set(
+                    "Contents",
+                    Object::Array(vec![
+                        Object::Reference(stream_id),
+                        Object::Reference(existing),
+                    ]),
+                );
+            }
+            Ok(Object::Array(arr)) => arr.insert(0, Object::Reference(stream_id)),
+            _ => dict.set("Contents", Object::Reference(stream_id)),
+        }
+        Ok(())
+    }
+
+    /// Pose un XObject dans `/Resources` d'une page, sous un nom donné.
+    fn wm_link_xobject(&mut self, page_id: ObjectId, name: &str, xobject_id: ObjectId) -> Result<()> {
+        let mut resources = self.wm_read_resources(page_id)?;
+        let mut xobjects = self.wm_sub_dictionary(&resources, b"XObject")?;
+        xobjects.set(name, Object::Reference(xobject_id));
+        resources.set("XObject", Object::Dictionary(xobjects));
+        self.wm_write_resources(page_id, resources)
     }
 }
