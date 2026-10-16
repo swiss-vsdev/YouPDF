@@ -427,6 +427,12 @@ pub struct YouPdfApp {
     header_footer_open: bool,
     header_footer: HeaderFooter,
     header_footer_from: Option<u32>,
+    /// Dernier onglet affiché, pour détecter un changement d'onglet.
+    last_active: usize,
+    /// Confirmation de fermeture en attente d'un onglet modifié.
+    pending_close: Option<usize>,
+    /// La recherche doit prendre le focus à la prochaine trame (⌘F).
+    find_focus: bool,
     /// Fenêtre « Exporter » et le format choisi.
     export_open: bool,
     export_format: TextFormat,
@@ -562,6 +568,9 @@ impl YouPdfApp {
             header_footer_open: false,
             header_footer: HeaderFooter::default(),
             header_footer_from: None,
+            last_active: 0,
+            pending_close: None,
+            find_focus: false,
             export_open: false,
             export_format: TextFormat::Plain,
             compress_open: false,
@@ -735,15 +744,55 @@ impl YouPdfApp {
         }
     }
 
+    /// Demande la fermeture d'un onglet.
+    ///
+    /// Un onglet modifié passe par une confirmation : la fermeture est la
+    /// seule action de l'interface qui puisse perdre du travail sans retour.
     fn close_tab(&mut self, idx: usize) {
+        if idx >= self.tabs.len() {
+            return;
+        }
+        if self.tabs[idx].dirty {
+            self.pending_close = Some(idx);
+            return;
+        }
+        self.close_tab_now(idx);
+    }
+
+    /// Ferme l'onglet, sans confirmation.
+    fn close_tab_now(&mut self, idx: usize) {
         if idx < self.tabs.len() {
             self.tabs.remove(idx);
             if self.active >= self.tabs.len() {
                 self.active = self.tabs.len().saturating_sub(1);
             }
+            self.last_active = self.active;
             self.search_index = None;
             self.results.clear();
         }
+    }
+
+    /// Tout ce qui appartient à la session ouverte sur un document : marques
+    /// de caviardage, champ de formulaire, sélection, pages cochées,
+    /// résultats de recherche. Changer d'onglet doit les remettre à zéro,
+    /// sinon la suite de l'action s'applique au mauvais fichier.
+    fn reset_document_session(&mut self) {
+        self.redact_regions.clear();
+        self.form_edit = None;
+        self.selected_annot = 0;
+        self.has_annot_selection = false;
+        self.organize_selected.clear();
+        self.replace_open = false;
+        self.edit_text = None;
+        self.text_draft = None;
+        self.ink_current.clear();
+        self.drag_from = None;
+        self.drag_to = None;
+        self.results.clear();
+        self.search_index = None;
+        self.search_rects.clear();
+        self.search_rects_page = None;
+        self.search_active = None;
     }
 
     fn active_tab(&self) -> Option<&Tab> {
@@ -806,6 +855,72 @@ impl YouPdfApp {
     }
 
     /// Exporte le texte extractible dans un fichier `.txt`.
+    /// Confirmation de fermeture d'un onglet modifié.
+    fn close_confirm_window(&mut self, ctx: &egui::Context) {
+        let Some(idx) = self.pending_close else {
+            return;
+        };
+        if idx >= self.tabs.len() {
+            self.pending_close = None;
+            return;
+        }
+        let title = self.tabs[idx].title.clone();
+        let mut open = true;
+        let mut choice: Option<u8> = None;
+        egui::Window::new("Unsaved changes")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(340.0);
+                ui.label(
+                    RichText::new(format!("\u{201c}{title}\u{201d} has unsaved changes."))
+                        .size(12.5)
+                        .color(ICON_BRIGHT),
+                );
+                ui.label(
+                    RichText::new("Closing now would lose them.")
+                        .size(11.0)
+                        .color(MUTED),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Save and close").clicked() {
+                        choice = Some(0);
+                    }
+                    if ui.button("Discard and close").clicked() {
+                        choice = Some(1);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        choice = Some(2);
+                    }
+                });
+            });
+        match choice {
+            Some(0) => {
+                // Enregistrer d'abord : `save_active` peut ouvrir une boîte
+                // de dialogue, l'onglet concerné est donc celui qui est actif.
+                self.active = idx;
+                self.last_active = idx;
+                self.save_active(ctx);
+                if !self.tabs[idx].dirty {
+                    self.close_tab_now(idx);
+                }
+                self.pending_close = None;
+            }
+            Some(1) => {
+                self.close_tab_now(idx);
+                self.pending_close = None;
+            }
+            Some(_) => self.pending_close = None,
+            None => {}
+        }
+        if !open {
+            self.pending_close = None;
+        }
+    }
+
     /// Fenêtre « Exporter » : choix du format texte.
     fn export_window(&mut self, ctx: &egui::Context) {
         if !self.export_open {
@@ -1946,7 +2061,9 @@ impl YouPdfApp {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             tab.dirty = true;
             tab.cache.clear();
-            tab.annots_loaded = false;
+            // Les annotations en attente ne vivent qu'en mémoire : les
+            // marquer « à recharger » les remplacerait par celles du
+            // document, c'est-à-dire par rien.
             tab.fragments.clear();
             tab.structure_loaded = false;
             tab.undo.clear();
@@ -2113,7 +2230,6 @@ impl YouPdfApp {
             if changed > 0 {
                 tab.dirty = true;
                 tab.cache.clear();
-                tab.annots_loaded = false;
             }
         }
         if changed > 0 {
@@ -2738,7 +2854,7 @@ impl YouPdfApp {
         ui.horizontal(|ui| {
             ui.add_space(12.0);
             if panel_action(ui, true, icon_search).clicked() {
-                self.toast(ctx, "Search text");
+                self.run_search(ctx);
             }
 
             let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 28.0), Sense::click());
@@ -2774,6 +2890,9 @@ impl YouPdfApp {
                 vec2(PANEL_W - 26.0, 28.0),
                 TextEdit::singleline(&mut self.search_query).hint_text("Search text"),
             );
+            if std::mem::take(&mut self.find_focus) {
+                resp.request_focus();
+            }
             if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 if self.results.is_empty() {
                     self.run_search(ctx);
@@ -5327,9 +5446,13 @@ impl YouPdfApp {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        // Une saisie en cours (recherche, nom de champ, remplacement) a la
+        // priorité : sinon Retour arrière efface l'annotation sélectionnée au
+        // lieu d'un caractère.
+        let typing = ctx.wants_keyboard_input();
         let delete_pressed = ctx.input(|i| {
             i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::Delete)
-        });
+        }) && !typing;
         if delete_pressed && self.has_annot_selection {
             let idx = self.selected_annot;
             self.remove_annot(idx);
@@ -5358,7 +5481,12 @@ impl YouPdfApp {
             return;
         }
         if full {
-            self.toggle_fullscreen(ctx);
+            if shift {
+                self.toggle_fullscreen(ctx);
+            } else {
+                self.panel = Some(Panel::Search);
+                self.find_focus = true;
+            }
         }
         if save {
             if shift {
@@ -5402,6 +5530,10 @@ impl YouPdfApp {
 impl eframe::App for YouPdfApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_drops(ctx);
+        if self.active != self.last_active {
+            self.last_active = self.active;
+            self.reset_document_session();
+        }
         self.ensure_annots();
         self.shortcuts(ctx);
         self.title_bar(ctx);
@@ -5419,6 +5551,7 @@ impl eframe::App for YouPdfApp {
         self.toolbar(ctx);
         self.zoom_overlay(ctx);
         self.properties_window(ctx);
+        self.close_confirm_window(ctx);
         self.export_window(ctx);
         self.watermark_window(ctx);
         self.header_footer_window(ctx);
