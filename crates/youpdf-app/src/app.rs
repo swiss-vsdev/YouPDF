@@ -1685,7 +1685,7 @@ impl YouPdfApp {
                 .add_filter(format.display_name(), &[format.extension()])
                 .pick_file()
             {
-                match std::fs::read_to_string(&path) {
+                match std::fs::read(&path) {
                     Ok(data) => {
                         let result = self
                             .tabs
@@ -1796,10 +1796,10 @@ impl YouPdfApp {
                         idx,
                         FieldProperties {
                             name: field.name.clone(),
-                            tooltip: String::new(),
-                            required: false,
+                            tooltip: field.tooltip.clone(),
+                            required: field.required,
                             read_only: field.read_only,
-                            multiline: false,
+                            multiline: field.multiline,
                             options: field.options.clone(),
                         },
                     )
@@ -1876,10 +1876,10 @@ impl YouPdfApp {
             .map(|(_, props)| props)
             .unwrap_or_else(|| FieldProperties {
                 name: field.name.clone(),
-                tooltip: String::new(),
-                required: false,
+                tooltip: field.tooltip.clone(),
+                required: field.required,
                 read_only: field.read_only,
-                multiline: false,
+                multiline: field.multiline,
                 options: field.options.clone(),
             });
         let mut apply_props = false;
@@ -1938,7 +1938,10 @@ impl YouPdfApp {
                         Ok(()) => {
                             if let Some(entry) = tab.forms.get_mut(idx) {
                                 entry.name = props.name.clone();
+                                entry.tooltip = props.tooltip.clone();
+                                entry.required = props.required;
                                 entry.read_only = props.read_only;
+                                entry.multiline = props.multiline;
                                 entry.options = props.options.clone();
                             }
                             tab.dirty = true;
