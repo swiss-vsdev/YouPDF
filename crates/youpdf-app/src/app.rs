@@ -283,6 +283,34 @@ struct EditTextDraft {
     fresh: bool,
 }
 
+/// Champ de formulaire que trace un outil du mode « Prepare form ».
+///
+/// Volontairement recopiable : `ToolAction` l'est aussi, et `FormFieldKind`
+/// du cœur ne l'est pas.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FormKind {
+    Text,
+    Checkbox,
+    Radio,
+    Choice,
+    MultiChoice,
+    Signature,
+}
+
+impl FormKind {
+    /// Libellé affiché après création.
+    fn label(&self) -> &'static str {
+        match self {
+            FormKind::Text => "Text field",
+            FormKind::Checkbox => "Checkbox",
+            FormKind::Radio => "Radio button",
+            FormKind::Choice => "Dropdown",
+            FormKind::MultiChoice => "List",
+            FormKind::Signature => "Signature field",
+        }
+    }
+}
+
 /// Ce que fait un outil sur le canevas.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ToolAction {
@@ -301,6 +329,8 @@ enum ToolAction {
     EditText,
     /// Clic pour poser une image (modes Comment et Édition).
     InsertImage,
+    /// Glissé d'une boîte de champ de formulaire (mode Prepare form).
+    FormField(FormKind),
 }
 
 /// Couleurs de préréglage proposées dans la popup.
@@ -1292,6 +1322,21 @@ impl YouPdfApp {
                 Some(1) => ToolAction::EditText,
                 Some(2) => ToolAction::InsertImage,
                 Some(3) => ToolAction::Click(AnnotationKind::Link),
+                _ => ToolAction::None,
+            };
+        }
+        if self.mode == Some(2) {
+            // Mode formulaire : chaque outil trace la boîte du champ. Les
+            // types sans écriture côté cœur (bouton, code-barres, image,
+            // séparateur) restent inertes et l'interface le dit.
+            return match self.annot_tool {
+                Some(0) => ToolAction::Select,
+                Some(1) => ToolAction::FormField(FormKind::Text),
+                Some(2) => ToolAction::FormField(FormKind::Checkbox),
+                Some(3) => ToolAction::FormField(FormKind::Radio),
+                Some(4) => ToolAction::FormField(FormKind::Choice),
+                Some(5) => ToolAction::FormField(FormKind::MultiChoice),
+                Some(9) => ToolAction::FormField(FormKind::Signature),
                 _ => ToolAction::None,
             };
         }
@@ -2502,17 +2547,6 @@ impl YouPdfApp {
                     Panel::Forms => self.forms_panel(ctx, ui),
                     Panel::Attachments => self.attachments_panel(ctx, ui),
                     Panel::Aspect => self.aspect_panel(ui),
-                    #[allow(unreachable_patterns)]
-                    other => {
-                        ui.add_space(14.0);
-                        ui.vertical_centered(|ui| {
-                            ui.label(
-                                RichText::new(format!("{} — planned", other.title()))
-                                    .size(12.0)
-                                    .color(MUTED),
-                            );
-                        });
-                    }
                 }
             });
     }
@@ -3092,6 +3126,75 @@ impl YouPdfApp {
         }
     }
 
+    /// Description du champ à créer pour un outil donné.
+    fn new_form_field(
+        kind: FormKind,
+        page: usize,
+        rect: [f32; 4],
+        name: String,
+    ) -> youpdf_core::forms::NewFormField {
+        use youpdf_core::forms::NewFormField;
+        match kind {
+            FormKind::Text => NewFormField::text(page as u32, rect, name),
+            FormKind::Checkbox => NewFormField::checkbox(page as u32, rect, name),
+            FormKind::Radio => {
+                let mut field = NewFormField::checkbox(page as u32, rect, name);
+                field.kind = FormFieldKind::Radio;
+                field
+            }
+            FormKind::Choice => {
+                NewFormField::choice(page as u32, rect, name, &["Option 1", "Option 2"])
+            }
+            FormKind::MultiChoice => {
+                let mut field =
+                    NewFormField::choice(page as u32, rect, name, &["Option 1", "Option 2"]);
+                field.kind = FormFieldKind::MultiChoice;
+                field
+            }
+            FormKind::Signature => {
+                let mut field = NewFormField::text(page as u32, rect, name);
+                field.kind = FormFieldKind::Signature;
+                field
+            }
+        }
+    }
+
+    /// Crée un champ de formulaire sur la zone tracée, et l'inscrit au
+    /// panneau des formulaires.
+    fn create_form_field(
+        &mut self,
+        page: usize,
+        rect: [f32; 4],
+        kind: FormKind,
+        ctx: &egui::Context,
+    ) {
+        if (rect[2] - rect[0]) < 6.0 || (rect[3] - rect[1]) < 6.0 {
+            return;
+        }
+        let created = self.tabs.get_mut(self.active).map(|tab| {
+            // Les noms de champ sont des identifiants dans tout le document :
+            // deux champs ne peuvent pas partager le même.
+            let existing: Vec<String> = tab.forms.iter().map(|f| f.name.clone()).collect();
+            let mut num = existing.len() + 1;
+            while existing.contains(&format!("Field{num}")) {
+                num += 1;
+            }
+            let field = Self::new_form_field(kind, page, rect, format!("Field{num}"));
+            tab.doc.create_form_field(&field)
+        });
+        match created {
+            Some(Ok(field)) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.forms.push(field);
+                }
+                self.mark_document_changed();
+                self.toast(ctx, format!("{} added", kind.label()));
+            }
+            Some(Err(err)) => self.toast(ctx, format!("Field failed: {err}")),
+            None => {}
+        }
+    }
+
     /// Fenêtre de confirmation du caviardage.
     fn redact_window(&mut self, ctx: &egui::Context) {
         if !self.redact_modal {
@@ -3286,13 +3389,18 @@ impl YouPdfApp {
                         }
                         _ => {}
                     },
-                    _ => self.toast(
-                        ctx,
-                        format!(
-                            "{} — planned",
-                            mode_tools(mode).get(idx).map(|t| t.0).unwrap_or("Tool")
+                    2 => match idx {
+                        // Select et les champs créables travaillent au clic.
+                        0..=5 | 9 => {}
+                        _ => self.toast(
+                            ctx,
+                            format!(
+                                "{} is not available yet",
+                                mode_tools(mode).get(idx).map(|t| t.0).unwrap_or("Tool")
+                            ),
                         ),
-                    ),
+                    },
+                    _ => {}
                 }
             }
             if exit {
@@ -3703,6 +3811,7 @@ impl YouPdfApp {
         let mut pending_edit: Option<(usize, [f32; 2])> = None;
         let mut pending_image: Option<(usize, [f32; 2])> = None;
         let mut pending_redact: Option<(usize, [f32; 4])> = None;
+        let mut pending_form: Option<(usize, [f32; 4], FormKind)> = None;
         let redact_marks = &self.redact_regions;
         let search_rects = &self.search_rects;
         let search_rects_page = self.search_rects_page;
@@ -4079,6 +4188,41 @@ impl YouPdfApp {
                                     );
                                 }
                             }
+                            ToolAction::FormField(kind) => {
+                                if resp.dragged() {
+                                    let point = resp.interact_pointer_pos().map(to_pdf);
+                                    if drag_from.is_none() {
+                                        *drag_from = point;
+                                    }
+                                    if point.is_some() {
+                                        *drag_to = point;
+                                    }
+                                }
+                                if resp.drag_stopped() {
+                                    let from = drag_from.take();
+                                    let to = drag_to.take();
+                                    if let (Some(a), Some(b)) = (from, to) {
+                                        pending_form = Some((
+                                            page as usize,
+                                            [
+                                                a[0].min(b[0]),
+                                                a[1].min(b[1]),
+                                                a[0].max(b[0]),
+                                                a[1].max(b[1]),
+                                            ],
+                                            kind,
+                                        ));
+                                    }
+                                }
+                                if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
+                                    let rect = Rect::from_two_pos(to_screen(a), to_screen(b));
+                                    ui.painter().rect_stroke(
+                                        rect,
+                                        Rounding::same(2.0),
+                                        Stroke::new(1.5_f32, ACCENT),
+                                    );
+                                }
+                            }
                             ToolAction::Erase | ToolAction::Select => {
                                 if resp.clicked() {
                                     if let Some(p) = resp.interact_pointer_pos() {
@@ -4131,6 +4275,9 @@ impl YouPdfApp {
         }
         if let Some((page, point)) = pending_click {
             self.open_draft(page, point);
+        }
+        if let Some((page, rect, kind)) = pending_form {
+            self.create_form_field(page, rect, kind, &ctx);
         }
         if let Some((page, rect)) = pending_redact {
             if (rect[2] - rect[0]).abs() > 2.0 && (rect[3] - rect[1]).abs() > 2.0 {
