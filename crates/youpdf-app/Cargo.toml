@@ -16,6 +16,7 @@ youpdf-core   = { workspace = true }
 
 eframe              = { workspace = true }
 egui                = { workspace = true }
+egui-phosphor       = "0.7"
 tracing             = { workspace = true }
 tracing-subscriber  = { workspace = true }
 rfd                 = "0.15"

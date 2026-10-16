@@ -13,9 +13,10 @@ use std::path::PathBuf;
 
 use egui::{
     pos2, vec2, Align, Align2, Area, Button, CentralPanel, Color32, FontId, Frame, Id, Layout,
-    Margin, Order, Painter, Rect, RichText, Rounding, ScrollArea, Sense, Shape, SidePanel, Stroke,
+    Margin, Order, Painter, Rect, RichText, Rounding, ScrollArea, Sense, SidePanel, Stroke,
     TextEdit, TextureHandle, TextureOptions, TopBottomPanel, ViewportCommand,
 };
+use egui_phosphor::regular as ph;
 use youpdf_core::render::NullRenderer;
 use youpdf_core::{Document, PdfiumRenderer, RenderOptions, Renderer, SearchIndex, SearchResult};
 
@@ -107,7 +108,7 @@ const COMMENT_TOOLS: &[ModeTool] = &[
     ModeTool("Shapes", icon_shapes, true, false),
     ModeTool("Insert", icon_plus, true, false),
     ModeTool("Link", icon_link, false, false),
-    ModeTool("Emoji", icon_smile, true, false),
+    ModeTool("Stamp", icon_stamp, true, false),
     ModeTool("Signature", icon_signature, true, false),
     ModeTool("Eraser", icon_eraser, false, false),
 ];
@@ -117,7 +118,7 @@ const EDIT_TOOLS: &[ModeTool] = &[
     ModeTool("Text", icon_text, true, false),
     ModeTool("Image", icon_image, true, false),
     ModeTool("Link", icon_link, true, false),
-    ModeTool("Layout", icon_aspect, false, false),
+    ModeTool("Layout", icon_layout, false, false),
 ];
 
 const FORM_TOOLS: &[ModeTool] = &[
@@ -1225,10 +1226,19 @@ impl YouPdfApp {
                     .inner_margin(Margin::symmetric(8.0, 4.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            let minus = ui.add(
-                                Button::new(RichText::new("−").size(13.0).color(ICON))
-                                    .frame(false)
-                                    .min_size(vec2(18.0, 18.0)),
+                            let (rect, minus) = ui
+                                .allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+                            if minus.hovered() {
+                                ui.painter().rect_filled(
+                                    rect,
+                                    Rounding::same(5.0),
+                                    HOVER_BG,
+                                );
+                            }
+                            icon_minus(
+                                ui.painter(),
+                                rect.shrink(2.0),
+                                if minus.hovered() { ICON_BRIGHT } else { ICON },
                             );
                             if minus.clicked() {
                                 delta = -1.0;
@@ -1242,10 +1252,15 @@ impl YouPdfApp {
                             ui.label(RichText::new(&zoom_label).size(11.0).color(MUTED));
                             ui.add_space(6.0);
                             ui.label(RichText::new(engine).size(10.0).color(MUTED));
-                            let plus = ui.add(
-                                Button::new(RichText::new("+").size(13.0).color(ICON))
-                                    .frame(false)
-                                    .min_size(vec2(18.0, 18.0)),
+                            let (rect, plus) = ui
+                                .allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+                            if plus.hovered() {
+                                ui.painter().rect_filled(rect, Rounding::same(5.0), HOVER_BG);
+                            }
+                            icon_plus(
+                                ui.painter(),
+                                rect.shrink(2.0),
+                                if plus.hovered() { ICON_BRIGHT } else { ICON },
                             );
                             if plus.clicked() {
                                 delta = 1.0;
@@ -1363,6 +1378,11 @@ impl eframe::App for YouPdfApp {
 // --------------------------------------------------------------------------
 
 fn apply_theme(ctx: &egui::Context) {
+    // Police d'icônes Phosphor (MIT) ajoutée à la famille proportionnelle.
+    let mut fonts = egui::FontDefinitions::default();
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    ctx.set_fonts(fonts);
+
     let mut visuals = egui::Visuals::dark();
     visuals.panel_fill = CANVAS_BG;
     visuals.window_fill = CHROME_BG;
@@ -1572,728 +1592,145 @@ fn shorten(text: &str, max: usize) -> String {
 }
 
 // --------------------------------------------------------------------------
-// Icônes vectorielles (identité maison)
+// Icônes Phosphor (police d'icônes, licence MIT)
 // --------------------------------------------------------------------------
 
-fn icon_home(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.5_f32, c);
-    let body = Rect::from_min_max(
-        pos2(r.min.x + r.width() * 0.14, r.min.y + r.height() * 0.42),
-        pos2(r.max.x - r.width() * 0.14, r.max.y - r.height() * 0.06),
-    );
-    let apex = pos2(r.center().x, r.min.y + r.height() * 0.08);
-    p.add(Shape::line(
-        vec![pos2(body.min.x, body.min.y), apex, pos2(body.max.x, body.min.y)],
-        stroke,
-    ));
-    p.add(Shape::closed_line(
-        vec![
-            body.min,
-            pos2(body.max.x, body.min.y),
-            body.max,
-            pos2(body.min.x, body.max.y),
-        ],
-        stroke,
-    ));
-}
-
-fn icon_organize(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.4_f32, c);
-    let s = r.width() * 0.32;
-    let gap = r.width() * 0.14;
-    let origin = r.center() - vec2((s + gap) / 2.0, (s + gap) / 2.0);
-    for (dx, dy) in [(0.0, 0.0), (s + gap, 0.0), (0.0, s + gap), (s + gap, s + gap)] {
-        p.rect_stroke(
-            Rect::from_min_size(origin + vec2(dx, dy), vec2(s, s)),
-            Rounding::same(1.5),
-            stroke,
-        );
-    }
-}
-
-fn icon_search(p: &Painter, r: Rect, c: Color32) {    let stroke = Stroke::new(1.5_f32, c);
-    let center = r.center() - vec2(r.width() * 0.08, r.height() * 0.08);
-    let radius = r.width() * 0.28;
-    p.circle_stroke(center, radius, stroke);
-    let dir = vec2(0.707, 0.707);
-    p.line_segment(
-        [
-            center + dir * (radius + 1.0),
-            center + dir * (radius + r.width() * 0.22),
-        ],
-        stroke,
-    );
-}
-
-fn icon_page(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.4_f32, c);
-    let page = Rect::from_center_size(r.center(), vec2(r.width() * 0.72, r.height() * 0.94));
-    let fold = page.width() * 0.34;
-    p.add(Shape::closed_line(
-        vec![
-            page.min,
-            pos2(page.max.x - fold, page.min.y),
-            pos2(page.max.x, page.min.y + fold),
-            page.max,
-            pos2(page.min.x, page.max.y),
-        ],
-        stroke,
-    ));
-    p.add(Shape::line(
-        vec![
-            pos2(page.max.x - fold, page.min.y),
-            pos2(page.max.x - fold, page.min.y + fold),
-            pos2(page.max.x, page.min.y + fold),
-        ],
-        stroke,
-    ));
-    for i in 0..3 {
-        let y = page.min.y + fold + (page.height() - fold) * (0.18 + 0.24 * i as f32);
-        if y < page.max.y - 2.0 {
-            p.line_segment(
-                [pos2(page.min.x + 2.5, y), pos2(page.max.x - 2.5, y)],
-                Stroke::new(1.0_f32, c),
-            );
-        }
-    }
-}
-
-fn icon_bookmark(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.5_f32, c);
-    let w = r.width() * 0.6;
-    let x0 = r.center().x - w / 2.0;
-    let x1 = r.center().x + w / 2.0;
-    let top = r.min.y + r.height() * 0.06;
-    let bottom = r.max.y - r.height() * 0.06;
-    let notch = bottom - r.height() * 0.28;
-    p.add(Shape::closed_line(
-        vec![
-            pos2(x0, top),
-            pos2(x1, top),
-            pos2(x1, bottom),
-            pos2(r.center().x, notch),
-            pos2(x0, bottom),
-        ],
-        stroke,
-    ));
-}
-
-fn icon_bubble(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.4_f32, c);
-    let body = Rect::from_min_max(
-        pos2(r.min.x + r.width() * 0.04, r.min.y + r.height() * 0.10),
-        pos2(r.max.x - r.width() * 0.04, r.max.y - r.height() * 0.30),
-    );
-    p.rect_stroke(body, Rounding::same(4.0), stroke);
-    p.add(Shape::line(
-        vec![
-            pos2(body.min.x + body.width() * 0.24, body.max.y),
-            pos2(body.min.x + body.width() * 0.22, r.max.y - r.height() * 0.06),
-            pos2(body.min.x + body.width() * 0.52, body.max.y),
-        ],
-        stroke,
-    ));
-}
-
-fn icon_form(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.4_f32, c);
-    let body = Rect::from_center_size(r.center(), vec2(r.width() * 0.94, r.height() * 0.86));
-    p.rect_stroke(body, Rounding::same(3.0), stroke);
-    for i in 0..2 {
-        let y = body.min.y + body.height() * (0.30 + 0.40 * i as f32);
-        let sq = Rect::from_center_size(
-            pos2(body.min.x + body.width() * 0.20, y),
-            vec2(body.width() * 0.16, body.width() * 0.16),
-        );
-        p.rect_stroke(sq, Rounding::same(1.0), Stroke::new(1.1_f32, c));
-        p.line_segment(
-            [
-                pos2(body.min.x + body.width() * 0.36, y),
-                pos2(body.max.x - body.width() * 0.12, y),
-            ],
-            Stroke::new(1.1_f32, c),
-        );
-    }
-}
-
-fn icon_attach(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.4_f32, c);
-    // Trombone : deux anneaux imbriqués, ouverts en haut à droite.
-    let outer = Rect::from_min_max(
-        pos2(r.min.x + r.width() * 0.32, r.min.y + r.height() * 0.10),
-        pos2(r.max.x - r.width() * 0.30, r.max.y - r.height() * 0.10),
-    );
-    p.rect_stroke(outer, Rounding::same(outer.width() * 0.5), stroke);
-    let inner = Rect::from_min_max(
-        pos2(r.min.x + r.width() * 0.44, r.min.y + r.height() * 0.28),
-        pos2(r.max.x - r.width() * 0.42, r.max.y - r.height() * 0.30),
-    );
-    p.rect_stroke(inner, Rounding::same(inner.width() * 0.5), stroke);
-}
-
-fn icon_aspect(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.4_f32, c);
-    // Cube isométrique : face avant + face arrière + arêtes.
-    let s = r.width() * 0.56;
-    let front = Rect::from_min_size(
-        pos2(r.min.x + r.width() * 0.04, r.center().y - r.height() * 0.10),
-        vec2(s, s),
-    );
-    let back = front.translate(vec2(r.width() * 0.30, -r.height() * 0.30));
-    p.rect_stroke(front, Rounding::same(2.0), stroke);
-    p.rect_stroke(back, Rounding::same(2.0), stroke);
-    p.line_segment([front.min, back.min], stroke);
-    p.line_segment(
-        [pos2(front.max.x, front.min.y), pos2(back.max.x, back.min.y)],
-        stroke,
-    );
-    p.line_segment([front.max, back.max], stroke);
-}
-
-fn icon_plus(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.5_f32, c);
-    p.line_segment(
-        [
-            pos2(r.center().x, r.min.y + r.height() * 0.22),
-            pos2(r.center().x, r.max.y - r.height() * 0.22),
-        ],
-        stroke,
-    );
-    p.line_segment(
-        [
-            pos2(r.min.x + r.width() * 0.22, r.center().y),
-            pos2(r.max.x - r.width() * 0.22, r.center().y),
-        ],
-        stroke,
-    );
-}
-
-fn icon_close(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    let d = r.width() * 0.22;
-    p.line_segment(
-        [
-            pos2(r.center().x - d, r.center().y - d),
-            pos2(r.center().x + d, r.center().y + d),
-        ],
-        stroke,
-    );
-    p.line_segment(
-        [
-            pos2(r.center().x + d, r.center().y - d),
-            pos2(r.center().x - d, r.center().y + d),
-        ],
-        stroke,
-    );
-}
-
-fn icon_chevron(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    p.line_segment(
-        [pos2(r.min.x + 1.0, r.min.y + 1.0), pos2(r.center().x, r.max.y - 1.0)],
-        stroke,
-    );
-    p.line_segment(
-        [pos2(r.center().x, r.max.y - 1.0), pos2(r.max.x - 1.0, r.min.y + 1.0)],
-        stroke,
-    );
-}
-
-fn icon_tools(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.4_f32, c);
-    let body = Rect::from_min_max(
-        pos2(r.min.x + r.width() * 0.06, r.center().y + r.height() * 0.02),
-        pos2(r.max.x - r.width() * 0.06, r.max.y - r.height() * 0.08),
-    );
-    p.rect_stroke(body, Rounding::same(3.0), stroke);
-    // Poignée arrondie.
-    let arc_center = pos2(r.center().x, body.min.y);
-    let rad = body.width() * 0.24;
-    let pts: Vec<egui::Pos2> = (0..=10)
-        .map(|i| {
-            let a = std::f32::consts::PI * (1.0 - i as f32 / 10.0);
-            arc_center + vec2(a.cos() * rad, -a.sin() * rad * 0.85)
-        })
-        .collect();
-    p.add(Shape::line(pts, stroke));
-    p.line_segment([body.min, pos2(body.max.x, body.min.y)], stroke);
-}
-
-fn icon_trash(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.4_f32, c);
-    let body = Rect::from_min_max(
-        pos2(r.min.x + r.width() * 0.22, r.min.y + r.height() * 0.3),
-        pos2(r.max.x - r.width() * 0.22, r.max.y - r.height() * 0.08),
-    );
-    p.rect_stroke(body, Rounding::same(1.5), stroke);
-    p.line_segment(
-        [
-            pos2(r.min.x + r.width() * 0.12, body.min.y),
-            pos2(r.max.x - r.width() * 0.12, body.min.y),
-        ],
-        stroke,
-    );
-    p.line_segment(
-        [
-            pos2(r.center().x - r.width() * 0.14, r.min.y + r.height() * 0.16),
-            pos2(r.center().x + r.width() * 0.14, r.min.y + r.height() * 0.16),
-        ],
-        stroke,
-    );
-}
-
-fn icon_undo(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.6_f32, c);
-    let centre = r.center() + vec2(0.0, r.height() * 0.12);
-    let rad = r.width() * 0.34;
-    let pts: Vec<egui::Pos2> = (0..=14)
-        .map(|i| {
-            let a = std::f32::consts::PI * (1.15 - 1.3 * (i as f32 / 14.0));
-            centre + vec2(a.cos() * rad, -a.sin() * rad)
-        })
-        .collect();
-    let tip = pts[0];
-    p.add(Shape::line(pts, stroke));
-    p.line_segment([tip, tip + vec2(4.0, -5.0)], stroke);
-    p.line_segment([tip, tip + vec2(6.0, 3.0)], stroke);
-}
-
-fn icon_redo(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.6_f32, c);
-    let centre = r.center() + vec2(0.0, r.height() * 0.12);
-    let rad = r.width() * 0.34;
-    let pts: Vec<egui::Pos2> = (0..=14)
-        .map(|i| {
-            let a = std::f32::consts::PI * (1.15 - 1.3 * (i as f32 / 14.0));
-            centre + vec2(-a.cos() * rad, -a.sin() * rad)
-        })
-        .collect();
-    let tip = pts[0];
-    p.add(Shape::line(pts, stroke));
-    p.line_segment([tip, tip + vec2(-4.0, -5.0)], stroke);
-    p.line_segment([tip, tip + vec2(-6.0, 3.0)], stroke);
-}
-
-fn icon_ellipsis(p: &Painter, r: Rect, c: Color32) {
-    for dx in [-1.0_f32, 0.0, 1.0] {
-        p.circle_filled(
-            r.center() + vec2(dx * r.width() * 0.3, 0.0),
-            r.width() * 0.07,
-            c,
-        );
-    }
-}
-
-fn icon_cursor(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.4_f32, c);
-    let w = r.width();
-    let h = r.height();
-    p.add(Shape::closed_line(
-        vec![
-            pos2(r.min.x + w * 0.26, r.min.y + h * 0.04),
-            pos2(r.min.x + w * 0.26, r.max.y - h * 0.16),
-            pos2(r.min.x + w * 0.44, r.max.y - h * 0.36),
-            pos2(r.min.x + w * 0.56, r.max.y - h * 0.04),
-            pos2(r.min.x + w * 0.72, r.max.y - h * 0.12),
-            pos2(r.min.x + w * 0.60, r.max.y - h * 0.46),
-            pos2(r.min.x + w * 0.84, r.max.y - h * 0.50),
-        ],
-        stroke,
-    ));
-}
-
-fn icon_highlighter(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.4_f32, c);
-    let w = r.width();
-    let h = r.height();
-    p.add(Shape::closed_line(
-        vec![
-            pos2(r.min.x + w * 0.30, r.min.y + h * 0.06),
-            pos2(r.max.x - w * 0.12, r.min.y + h * 0.06),
-            pos2(r.max.x - w * 0.12, r.max.y - h * 0.52),
-            pos2(r.min.x + w * 0.30, r.max.y - h * 0.52),
-        ],
-        stroke,
-    ));
-    p.add(Shape::line(
-        vec![
-            pos2(r.min.x + w * 0.30, r.max.y - h * 0.52),
-            pos2(r.center().x - w * 0.02, r.max.y - h * 0.22),
-            pos2(r.max.x - w * 0.12, r.max.y - h * 0.52),
-        ],
-        stroke,
-    ));
-    p.line_segment(
-        [
-            pos2(r.min.x + w * 0.10, r.max.y - h * 0.02),
-            pos2(r.max.x - w * 0.04, r.max.y - h * 0.02),
-        ],
-        Stroke::new(1.8_f32, c),
-    );
-}
-
-fn icon_funnel(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    let w = r.width();
-    let h = r.height();
-    p.add(Shape::closed_line(
-        vec![
-            pos2(r.min.x + w * 0.06, r.min.y + h * 0.14),
-            pos2(r.max.x - w * 0.06, r.min.y + h * 0.14),
-            pos2(r.center().x + w * 0.10, r.center().y + h * 0.02),
-            pos2(r.center().x + w * 0.10, r.max.y - h * 0.10),
-            pos2(r.center().x, r.max.y - h * 0.02),
-            pos2(r.center().x - w * 0.10, r.max.y - h * 0.10),
-            pos2(r.center().x - w * 0.10, r.center().y + h * 0.02),
-        ],
-        stroke,
-    ));
-}
-
-fn icon_text(p: &Painter, r: Rect, c: Color32) {
+/// Trace un glyphe Phosphor centré dans `r`.
+fn glyph(p: &Painter, r: Rect, c: Color32, ch: &str) {
     p.text(
         r.center(),
         Align2::CENTER_CENTER,
-        "T",
-        FontId::proportional(r.height() * 0.95),
+        ch,
+        FontId::proportional((r.height() * 1.12).max(9.0)),
         c,
     );
 }
 
-fn icon_pen(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    let w = r.width();
-    let h = r.height();
-    // Stylo : corps diagonal + pointe.
-    p.add(Shape::closed_line(
-        vec![
-            pos2(r.min.x + w * 0.16, r.max.y - h * 0.16),
-            pos2(r.min.x + w * 0.30, r.min.y + h * 0.50),
-            pos2(r.min.x + w * 0.72, r.min.y + h * 0.12),
-            pos2(r.max.x - w * 0.12, r.min.y + h * 0.28),
-            pos2(r.min.x + w * 0.48, r.max.y - h * 0.28),
-        ],
-        stroke,
-    ));
-    p.line_segment(
-        [
-            pos2(r.min.x + w * 0.30, r.min.y + h * 0.50),
-            pos2(r.min.x + w * 0.48, r.max.y - h * 0.28),
-        ],
-        stroke,
-    );
+fn icon_home(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::HOUSE);
 }
-
-fn icon_shapes(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    let sq = Rect::from_min_size(
-        pos2(r.min.x + r.width() * 0.06, r.min.y + r.height() * 0.06),
-        vec2(r.width() * 0.58, r.height() * 0.58),
-    );
-    p.rect_stroke(sq, Rounding::same(2.0), stroke);
-    p.circle_stroke(
-        pos2(r.max.x - r.width() * 0.28, r.max.y - r.height() * 0.28),
-        r.width() * 0.28,
-        stroke,
-    );
+fn icon_organize(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::SQUARES_FOUR);
 }
-
-fn icon_link(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    let y = r.center().y;
-    p.circle_stroke(pos2(r.min.x + r.width() * 0.32, y), r.width() * 0.24, stroke);
-    p.circle_stroke(pos2(r.max.x - r.width() * 0.32, y), r.width() * 0.24, stroke);
-    p.line_segment(
-        [
-            pos2(r.min.x + r.width() * 0.46, y),
-            pos2(r.max.x - r.width() * 0.46, y),
-        ],
-        stroke,
-    );
+fn icon_search(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::MAGNIFYING_GLASS);
 }
-
-fn icon_smile(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    p.circle_stroke(r.center(), r.width() * 0.44, stroke);
-    for dx in [-0.16_f32, 0.16] {
-        p.circle_filled(
-            pos2(r.center().x + r.width() * dx, r.center().y - r.height() * 0.14),
-            1.3,
-            c,
-        );
-    }
-    let pts: Vec<egui::Pos2> = (0..=8)
-        .map(|i| {
-            let t = i as f32 / 8.0;
-            let a = std::f32::consts::PI * (0.15 + 0.7 * t);
-            r.center() + vec2(a.cos() * r.width() * 0.26, a.sin() * r.height() * 0.20)
-        })
-        .collect();
-    p.add(Shape::line(pts, stroke));
+fn icon_page(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::FILE_TEXT);
 }
-
-fn icon_signature(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.4_f32, c);
-    let pts: Vec<egui::Pos2> = (0..=20)
-        .map(|i| {
-            let t = i as f32 / 20.0;
-            let x = r.min.x + r.width() * t;
-            let y = r.center().y
-                - (t * 14.0).sin() * r.height() * 0.26
-                - (t * 5.0).cos() * r.height() * 0.08;
-            pos2(x, y)
-        })
-        .collect();
-    p.add(Shape::line(pts, stroke));
-    p.line_segment(
-        [
-            pos2(r.min.x + r.width() * 0.10, r.max.y - r.height() * 0.10),
-            pos2(r.max.x - r.width() * 0.10, r.max.y - r.height() * 0.10),
-        ],
-        Stroke::new(1.0_f32, c),
-    );
+fn icon_bookmark(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::BOOKMARK_SIMPLE);
 }
-
-fn icon_eraser(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    let w = r.width();
-    let h = r.height();
-    p.add(Shape::closed_line(
-        vec![
-            pos2(r.min.x + w * 0.14, r.max.y - h * 0.30),
-            pos2(r.min.x + w * 0.52, r.min.y + h * 0.12),
-            pos2(r.max.x - w * 0.10, r.min.y + h * 0.12),
-            pos2(r.min.x + w * 0.44, r.max.y - h * 0.30),
-        ],
-        stroke,
-    ));
-    p.line_segment(
-        [
-            pos2(r.min.x + w * 0.14, r.max.y - h * 0.30),
-            pos2(r.max.x - w * 0.14, r.max.y - h * 0.30),
-        ],
-        stroke,
-    );
+fn icon_bubble(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::CHAT_CIRCLE_DOTS);
 }
-
-fn icon_text_field(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    let body = Rect::from_center_size(r.center(), vec2(r.width() * 0.9, r.height() * 0.66));
-    p.rect_stroke(body, Rounding::same(2.0), stroke);
-    p.line_segment(
-        [
-            pos2(body.min.x + body.width() * 0.22, body.min.y + body.height() * 0.28),
-            pos2(body.min.x + body.width() * 0.22, body.max.y - body.height() * 0.28),
-        ],
-        Stroke::new(1.2_f32, c),
-    );
+fn icon_form(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::LIST_CHECKS);
 }
-
-fn icon_checkbox(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    let body = Rect::from_center_size(r.center(), vec2(r.width() * 0.7, r.height() * 0.7));
-    p.rect_stroke(body, Rounding::same(2.5), stroke);
-    p.add(Shape::line(
-        vec![
-            pos2(body.min.x + body.width() * 0.20, body.center().y),
-            pos2(body.min.x + body.width() * 0.44, body.max.y - body.height() * 0.24),
-            pos2(body.max.x - body.width() * 0.14, body.min.y + body.height() * 0.22),
-        ],
-        Stroke::new(1.6_f32, c),
-    ));
+fn icon_attach(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::PAPERCLIP);
 }
-
-fn icon_radio(p: &Painter, r: Rect, c: Color32) {
-    p.circle_stroke(r.center(), r.width() * 0.36, Stroke::new(1.3_f32, c));
-    p.circle_filled(r.center(), r.width() * 0.16, c);
+fn icon_aspect(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::CUBE);
 }
-
-fn icon_dropdown(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    let body = Rect::from_center_size(r.center(), vec2(r.width() * 0.92, r.height() * 0.6));
-    p.rect_stroke(body, Rounding::same(2.0), stroke);
-    p.line_segment(
-        [
-            pos2(body.max.x - body.width() * 0.34, body.min.y + body.height() * 0.34),
-            pos2(body.max.x - body.width() * 0.22, body.max.y - body.height() * 0.32),
-        ],
-        stroke,
-    );
-    p.line_segment(
-        [
-            pos2(body.max.x - body.width() * 0.22, body.max.y - body.height() * 0.32),
-            pos2(body.max.x - body.width() * 0.10, body.min.y + body.height() * 0.34),
-        ],
-        stroke,
-    );
+fn icon_plus(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::PLUS);
 }
-
-fn icon_list(p: &Painter, r: Rect, c: Color32) {
-    let w = r.width();
-    for i in 0..3 {
-        let y = r.min.y + r.height() * (0.22 + 0.28 * i as f32);
-        p.circle_filled(pos2(r.min.x + w * 0.14, y), 1.3, c);
-        p.line_segment(
-            [pos2(r.min.x + w * 0.30, y), pos2(r.max.x - w * 0.08, y)],
-            Stroke::new(1.2_f32, c),
-        );
-    }
+fn icon_close(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::X);
 }
-
-fn icon_button_shape(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    let body = Rect::from_center_size(r.center(), vec2(r.width() * 0.88, r.height() * 0.56));
-    p.rect_stroke(body, Rounding::same(body.height() * 0.5), stroke);
-    p.line_segment(
-        [
-            pos2(body.center().x - body.width() * 0.16, body.center().y),
-            pos2(body.center().x + body.width() * 0.16, body.center().y),
-        ],
-        Stroke::new(1.2_f32, c),
-    );
+fn icon_chevron(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::CARET_DOWN);
 }
-
-fn icon_date(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    let body = Rect::from_center_size(
-        pos2(r.center().x, r.center().y + r.height() * 0.06),
-        vec2(r.width() * 0.84, r.height() * 0.70),
-    );
-    p.rect_stroke(body, Rounding::same(2.0), stroke);
-    p.line_segment(
-        [
-            pos2(body.min.x, body.min.y + body.height() * 0.30),
-            pos2(body.max.x, body.min.y + body.height() * 0.30),
-        ],
-        stroke,
-    );
-    for dx in [0.28_f32, 0.62] {
-        p.line_segment(
-            [
-                pos2(body.min.x + body.width() * dx, body.min.y - r.height() * 0.12),
-                pos2(body.min.x + body.width() * dx, body.min.y + body.height() * 0.10),
-            ],
-            stroke,
-        );
-    }
+fn icon_tools(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::TOOLBOX);
 }
-
-fn icon_barcode(p: &Painter, r: Rect, c: Color32) {
-    let widths = [1.4_f32, 0.9, 1.8, 0.9, 1.3, 2.0, 0.9, 1.5];
-    let mut x = r.min.x + r.width() * 0.06;
-    let limit = r.max.x - r.width() * 0.06;
-    for w in widths {
-        if x + w > limit {
-            break;
-        }
-        p.rect_filled(
-            Rect::from_min_max(
-                pos2(x, r.min.y + r.height() * 0.16),
-                pos2(x + w, r.max.y - r.height() * 0.16),
-            ),
-            0.0,
-            c,
-        );
-        x += w + r.width() * 0.06;
-    }
+fn icon_trash(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::TRASH);
 }
-
-fn icon_image(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.3_f32, c);
-    let body = Rect::from_center_size(r.center(), vec2(r.width() * 0.92, r.height() * 0.76));
-    p.rect_stroke(body, Rounding::same(2.5), stroke);
-    p.circle_filled(
-        pos2(body.min.x + body.width() * 0.26, body.min.y + body.height() * 0.28),
-        1.6,
-        c,
-    );
-    p.add(Shape::line(
-        vec![
-            pos2(body.min.x + body.width() * 0.08, body.max.y - body.height() * 0.14),
-            pos2(body.min.x + body.width() * 0.38, body.min.y + body.height() * 0.50),
-            pos2(body.min.x + body.width() * 0.58, body.max.y - body.height() * 0.28),
-            pos2(body.min.x + body.width() * 0.76, body.min.y + body.height() * 0.44),
-            pos2(body.max.x - body.width() * 0.06, body.max.y - body.height() * 0.14),
-        ],
-        stroke,
-    ));
+fn icon_undo(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::ARROW_COUNTER_CLOCKWISE);
 }
-
-fn icon_divider(p: &Painter, r: Rect, c: Color32) {
-    let y = r.center().y;
-    p.line_segment(
-        [pos2(r.min.x + r.width() * 0.08, y), pos2(r.max.x - r.width() * 0.08, y)],
-        Stroke::new(1.6_f32, c),
-    );
-    p.line_segment(
-        [
-            pos2(r.min.x + r.width() * 0.30, y - r.height() * 0.24),
-            pos2(r.min.x + r.width() * 0.70, y - r.height() * 0.24),
-        ],
-        Stroke::new(1.0_f32, c),
-    );
-    p.line_segment(
-        [
-            pos2(r.min.x + r.width() * 0.30, y + r.height() * 0.24),
-            pos2(r.min.x + r.width() * 0.70, y + r.height() * 0.24),
-        ],
-        Stroke::new(1.0_f32, c),
-    );
+fn icon_redo(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::ARROW_CLOCKWISE);
 }
-
-fn icon_sparkle(p: &Painter, r: Rect, c: Color32) {
-    let cx = r.center().x;
-    let cy = r.center().y;
-    let rad = r.width() * 0.46;
-    let inner = rad * 0.28;
-    p.add(Shape::closed_line(
-        vec![
-            pos2(cx, cy - rad),
-            pos2(cx + inner, cy - inner),
-            pos2(cx + rad, cy),
-            pos2(cx + inner, cy + inner),
-            pos2(cx, cy + rad),
-            pos2(cx - inner, cy + inner),
-            pos2(cx - rad, cy),
-            pos2(cx - inner, cy - inner),
-        ],
-        Stroke::new(1.3_f32, c),
-    ));
+fn icon_ellipsis(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::DOTS_THREE);
 }
-
-fn icon_check(p: &Painter, r: Rect, c: Color32) {
-    p.add(Shape::line(
-        vec![
-            pos2(r.min.x + r.width() * 0.16, r.center().y),
-            pos2(r.min.x + r.width() * 0.42, r.max.y - r.height() * 0.20),
-            pos2(r.max.x - r.width() * 0.14, r.min.y + r.height() * 0.22),
-        ],
-        Stroke::new(1.8_f32, c),
-    ));
-}
-
 fn icon_bell(p: &Painter, r: Rect, c: Color32) {
-    let stroke = Stroke::new(1.4_f32, c);
-    let dome = Rect::from_center_size(
-        pos2(r.center().x, r.center().y - r.height() * 0.04),
-        vec2(r.width() * 0.62, r.height() * 0.66),
-    );
-    p.add(Shape::closed_line(
-        vec![
-            pos2(dome.min.x, dome.max.y),
-            pos2(dome.min.x + 1.5, dome.min.y + 3.0),
-            pos2(dome.center().x, dome.min.y),
-            pos2(dome.max.x - 1.5, dome.min.y + 3.0),
-            pos2(dome.max.x, dome.max.y),
-        ],
-        stroke,
-    ));
-    p.line_segment(
-        [
-            pos2(dome.min.x - 1.5, dome.max.y),
-            pos2(dome.max.x + 1.5, dome.max.y),
-        ],
-        stroke,
-    );
-    p.circle_filled(pos2(r.center().x, dome.max.y + 3.0), 1.4, c);
+    glyph(p, r, c, ph::BELL);
+}
+fn icon_cursor(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::CURSOR);
+}
+fn icon_highlighter(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::HIGHLIGHTER);
+}
+fn icon_funnel(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::FUNNEL);
+}
+fn icon_text(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::TEXT_T);
+}
+fn icon_pen(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::PEN_NIB);
+}
+fn icon_shapes(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::SHAPES);
+}
+fn icon_link(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::LINK_SIMPLE);
+}
+fn icon_stamp(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::STAMP);
+}
+fn icon_signature(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::SIGNATURE);
+}
+fn icon_eraser(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::ERASER);
+}
+fn icon_text_field(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::TEXTBOX);
+}
+fn icon_checkbox(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::CHECK_SQUARE);
+}
+fn icon_radio(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::RADIO_BUTTON);
+}
+fn icon_dropdown(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::CARET_UP_DOWN);
+}
+fn icon_list(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::LIST_BULLETS);
+}
+fn icon_button_shape(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::RECTANGLE);
+}
+fn icon_date(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::CALENDAR);
+}
+fn icon_barcode(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::BARCODE);
+}
+fn icon_image(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::IMAGE);
+}
+fn icon_divider(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::MINUS);
+}
+fn icon_sparkle(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::SPARKLE);
+}
+fn icon_check(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::CHECK);
+}
+fn icon_layout(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::LAYOUT);
+}
+
+// Icônes d'application (fichiers, zoom, gestion de pages).
+fn icon_minus(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::MINUS);
 }
