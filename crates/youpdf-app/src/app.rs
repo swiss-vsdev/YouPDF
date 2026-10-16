@@ -1168,6 +1168,12 @@ impl YouPdfApp {
         self.search_rects.clear();
         self.search_rects_page = None;
         self.search_active = None;
+        // Les résultats d'extraction et l'outil de mesure appartiennent au
+        // document : les garder ferait agir la fenêtre sur le mauvais onglet.
+        self.extract_tables.clear();
+        self.extract_pairs.clear();
+        self.measure_active = false;
+        self.batch_report.clear();
     }
 
     fn active_tab(&self) -> Option<&Tab> {
@@ -6382,6 +6388,9 @@ impl YouPdfApp {
         }
         if !open {
             self.measure_open = false;
+            // Sans la fenêtre, l'outil n'a plus de réglages visibles : le
+            // laisser actif bloquerait tous les autres outils du canevas.
+            self.measure_active = false;
         }
     }
 
