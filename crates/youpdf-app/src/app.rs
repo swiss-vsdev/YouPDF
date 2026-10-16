@@ -938,7 +938,7 @@ impl YouPdfApp {
     /// deux fois.
     fn push_document(&mut self, mut doc: Document, path: Option<PathBuf>) {
         let title = doc.display_name();
-        let annots = doc.read_annotations();
+        let annots = annots_to_display(&doc, doc.read_annotations());
         if !annots.is_empty() && doc.clear_youpdf_annotations().is_err() {
             tracing::warn!("purge des annotations impossible");
         }
@@ -1330,7 +1330,7 @@ impl YouPdfApp {
     fn ensure_annots(&mut self) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             if !tab.annots_loaded {
-                tab.annots = tab.doc.read_annotations();
+                tab.annots = annots_to_display(&tab.doc, tab.doc.read_annotations());
                 tab.annots_loaded = true;
             }
         }
@@ -1415,8 +1415,9 @@ impl YouPdfApp {
         if tab.annots.is_empty() {
             return Ok(());
         }
+        let page_annots = annots_to_page(&tab.doc, &tab.annots);
         tab.doc
-            .apply_annotations(&tab.annots)
+            .apply_annotations(&page_annots)
             .map_err(|err| err.to_string())
     }
 
@@ -2265,7 +2266,12 @@ impl YouPdfApp {
         };
         for page in missing {
             match tab.doc.extract_text_fragments(page) {
-                Ok(frags) => {
+                Ok(mut frags) => {
+                    // Les fragments sortent du moteur en repère page ; tout le
+                    // canevas raisonne en repère affiché.
+                    for frag in &mut frags {
+                        frag.rect = rect_to_display(&tab.doc, page as usize, frag.rect);
+                    }
                     tab.fragments.insert(page, frags);
                 }
                 Err(err) => {
@@ -2317,7 +2323,13 @@ impl YouPdfApp {
             return;
         }
         let replaced = match self.tabs.get_mut(self.active) {
-            Some(tab) => tab.doc.replace_text_fragment(&draft.fragment, &draft.buffer),
+            Some(tab) => {
+                // Le fragment vit en repère affiché, la réécriture attend le
+                // repère page.
+                let mut fragment = draft.fragment.clone();
+                fragment.rect = rect_to_page(&tab.doc, fragment.page, fragment.rect);
+                tab.doc.replace_text_fragment(&fragment, &draft.buffer)
+            }
             None => return,
         };
         match replaced {
@@ -2331,6 +2343,11 @@ impl YouPdfApp {
 
     /// Demande une image puis la pose au point touché.
     fn insert_image_at(&mut self, page: usize, point: [f32; 2], ctx: &egui::Context) {
+        // Le clic arrive en repère affiché ; l'insertion se fait en repère page.
+        let point = match self.tabs.get(self.active) {
+            Some(tab) => point_to_page(&tab.doc, page, point),
+            None => return,
+        };
         let Some(path) = rfd::FileDialog::new()
             .add_filter("Image", &["png", "jpg", "jpeg"])
             .pick_file()
@@ -3902,6 +3919,9 @@ impl YouPdfApp {
             return;
         }
         let created = self.tabs.get_mut(self.active).map(|tab| {
+            // La boîte tracée est en repère affiché, le champ s'écrit en repère
+            // page.
+            let rect = rect_to_page(&tab.doc, page, rect);
             // Les noms de champ sont des identifiants dans tout le document :
             // deux champs ne peuvent pas partager le même.
             let existing: Vec<String> = tab.forms.iter().map(|f| f.name.clone()).collect();
@@ -4953,7 +4973,8 @@ impl YouPdfApp {
         write: impl FnOnce(&mut Tab) -> T,
     ) -> Option<T> {
         let tab = self.tabs.get_mut(self.active)?;
-        if tab.doc.apply_annotations(&tab.annots).is_err() {
+        let page_annots = annots_to_page(&tab.doc, &tab.annots);
+        if tab.doc.apply_annotations(&page_annots).is_err() {
             return None;
         }
         let outcome = write(tab);
@@ -6246,7 +6267,8 @@ impl YouPdfApp {
         let renderer = &*self.renderer;
         let result = self.tabs.get_mut(self.active).map(|tab| {
             // Les annotations en attente font partie de l'image produite.
-            let _ = tab.doc.apply_annotations(&tab.annots);
+            let page_annots = annots_to_page(&tab.doc, &tab.annots);
+            let _ = tab.doc.apply_annotations(&page_annots);
             let outcome = tab.doc.save_image_pdf(&path, renderer, 150.0);
             let _ = tab.doc.clear_youpdf_annotations();
             outcome
@@ -7199,6 +7221,14 @@ impl YouPdfApp {
             }
         }
         if let Some((page, from, to)) = pending_measure {
+            // Le glissé est en repère affiché ; la mesure s'écrit en repère page.
+            let (from, to) = match self.tabs.get(self.active) {
+                Some(tab) => (
+                    point_to_page(&tab.doc, page, from),
+                    point_to_page(&tab.doc, page, to),
+                ),
+                None => (from, to),
+            };
             let low = [from[0].min(to[0]), from[1].min(to[1])];
             let high = [from[0].max(to[0]), from[1].max(to[1])];
             let points = match self.measure_kind {
@@ -8007,6 +8037,55 @@ fn csv_cell(value: &str) -> String {
     } else {
         value.to_owned()
     }
+}
+
+/// Recadre les annotations du repère affiché (celui du canevas) vers le repère
+/// page, rotation et boîte visible comprises.
+///
+/// L'interface dessine et sélectionne en repère affiché ; le PDF s'écrit en
+/// repère page. Sans cette conversion, une annotation posée sur une page
+/// tournée ou recadrée atterrit au mauvais endroit dans le fichier.
+fn annots_to_page(doc: &Document, annots: &[Annotation]) -> Vec<Annotation> {
+    let mut out = annots.to_vec();
+    for ann in &mut out {
+        let view = doc.page_view(ann.page as u32);
+        ann.rect = view.page_rect(ann.rect);
+        for stroke in &mut ann.ink_points {
+            for point in stroke.iter_mut() {
+                *point = view.page_point(*point);
+            }
+        }
+    }
+    out
+}
+
+/// L'inverse : les annotations lues dans le PDF reviennent en repère affiché.
+fn annots_to_display(doc: &Document, mut annots: Vec<Annotation>) -> Vec<Annotation> {
+    for ann in &mut annots {
+        let view = doc.page_view(ann.page as u32);
+        ann.rect = view.display_rect(ann.rect);
+        for stroke in &mut ann.ink_points {
+            for point in stroke.iter_mut() {
+                *point = view.display_point(*point);
+            }
+        }
+    }
+    annots
+}
+
+/// Recadre un rectangle du repère affiché vers le repère page.
+fn rect_to_page(doc: &Document, page: usize, rect: [f32; 4]) -> [f32; 4] {
+    doc.page_view(page as u32).page_rect(rect)
+}
+
+/// Recadre un point du repère affiché vers le repère page.
+fn point_to_page(doc: &Document, page: usize, point: [f32; 2]) -> [f32; 2] {
+    doc.page_view(page as u32).page_point(point)
+}
+
+/// Recadre un rectangle du repère page vers le repère affiché.
+fn rect_to_display(doc: &Document, page: usize, rect: [f32; 4]) -> [f32; 4] {
+    doc.page_view(page as u32).display_rect(rect)
 }
 
 /// Bouton-icône 38×38 avec fond sélection/hover.
