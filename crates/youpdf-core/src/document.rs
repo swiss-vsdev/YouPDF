@@ -15,7 +15,7 @@ use crate::metadata::DocumentMetadata;
 /// Un document PDF chargé en mémoire.
 pub struct Document {
     /// Instance bas niveau `lopdf`.
-    inner: lopdf::Document,
+    pub(crate) inner: lopdf::Document,
 
     /// Chemin d'origine, si le document vient d'un fichier.
     pub path: Option<PathBuf>,
@@ -106,6 +106,37 @@ impl Document {
         let bytes = Rc::new(buf);
         *self.snapshot.borrow_mut() = Some((generation, Rc::clone(&bytes)));
         Ok(bytes)
+    }
+
+    /// Enveloppe un document `lopdf` déjà chargé (copies internes).
+    pub(crate) fn from_lopdf(inner: lopdf::Document) -> Self {
+        let metadata = DocumentMetadata::from_lopdf(&inner);
+        Self {
+            inner,
+            path: None,
+            metadata,
+            mutation: Cell::new(0),
+            snapshot: RefCell::new(None),
+        }
+    }
+
+    /// Signale une modification : invalide la sérialisation en cache.
+    pub(crate) fn touch(&mut self) {
+        self.mutation.set(self.mutation.get().wrapping_add(1));
+        self.snapshot.borrow_mut().take();
+    }
+
+    /// Identifiant du nœud racine de l'arbre des pages.
+    pub(crate) fn pages_root_id(&self) -> Result<lopdf::ObjectId> {
+        let catalog = self
+            .inner
+            .catalog()
+            .map_err(|e| Error::Pdf(format!("catalogue : {e}")))?;
+        let pages = catalog
+            .get(b"Pages")
+            .map_err(|e| Error::Pdf(format!("racine des pages : {e}")))?;
+        lopdf::Object::as_reference(pages)
+            .map_err(|e| Error::Pdf(format!("racine des pages : {e}")))
     }
 
     /// Résout un numéro de page (1-indexé) en identifiant d'objet lopdf.
