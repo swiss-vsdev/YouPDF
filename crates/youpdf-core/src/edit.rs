@@ -686,6 +686,21 @@ impl Document {
 /// faut donc écrire **un octet** par caractère. Renvoyer une `String` et la
 /// convertir en UTF-8 produisait deux octets pour chaque accentué — « café »
 /// sortait en `caf\xc3\xa9`, que le lecteur affiche « cafÃ© ».
+/// Décode une image disque (PNG ou JPEG) en pixels RGB 8 bits.
+///
+/// Rend `(pixels, largeur, hauteur)`, prêt pour
+/// [`Document::insert_image_bitmap`].
+pub fn load_image_rgb(
+    path: impl AsRef<std::path::Path>,
+) -> Result<(Vec<u8>, u32, u32)> {
+    let path = path.as_ref();
+    let image = image::open(path)
+        .map_err(|e| Error::InvalidInput(format!("{} : {e}", path.display())))?;
+    let rgb = image.to_rgb8();
+    let (width, height) = rgb.dimensions();
+    Ok((rgb.into_raw(), width, height))
+}
+
 pub fn encode_pdf_literal(s: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len());
     for c in s.chars() {
