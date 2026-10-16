@@ -154,3 +154,35 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
   7. The optional AI panel (providers exist in `YouPDF_OLD`) and signature requests.
   Out of scope by design: cloud sync, eIDAS signature requests, screen capture, scanner import,
   dictation and emoji — they need a cloud service or OS facilities the brief forbids or excludes.
+- 2026-10-16 (missing-features pass 2): the five remaining engine gaps were implemented in parallel,
+  each in its own file and its own commit, then wired into the interface. `forms` gained a properties
+  editor (name, tooltip, Required, Read only, Multiline, choice options) and form data exchange in
+  FDF, XFDF, CSV and JSON. `structure` gained `generate_outline`, which reads the heading sizes to
+  rebuild the bookmark tree, and `clear_outline`. `extract` recognises aligned tables and key/value
+  pairs and can write either set to CSV. `pdfa` declares PDF/A-2b, PDF/X-4 or PDF/E-1 on a copy
+  (XMP, `/OutputIntents`, `/MarkInfo`, `/ID`) and writes an image-only PDF; the module says plainly
+  that this is a declaration, not a validation, and that no ICC profile bytes are embedded.
+  `measure` draws distance, perimeter and area measurements as page content with a labelled value.
+  The interface also gained slideshow (F5), batch processing over a file list, and the
+  displayed-frame/page-frame conversion below.
+
+  Fix from that pass: the canvas works in the displayed frame (rotation applied, origin at the
+  visible box) while the PDF is written in the page frame. On an unrotated page at the origin the
+  two coincide, which hid the bug; on a rotated or cropped page every annotation, image, form field,
+  measurement and text block was written to the wrong place. `PageView` now has the inverse
+  conversions (`page_point`, `page_rect`, `display_point`) and the application converts at the
+  boundaries. Covered by `tests/page_view.rs`.
+
+  Still missing after this pass, in rough priority order:
+  1. Word/Excel/PowerPoint export (needs a hand-rolled ZIP/DOCX writer; the `docx-rs` chain is still
+     unresolvable).
+  2. Themes beyond dark (light, mint, starry) and an i18n layer — the reference app ships 12+
+     languages, YouPDF strings are English literals today, and the palette is compile-time consts.
+  3. The optional AI panel (providers exist in `YouPDF_OLD`) and signature requests.
+  4. Compression quality grades (image resampling, font subsetting) — the engine only deflates
+     streams and prunes objects.
+  5. Separate header and footer slot sets (today they share one set and the band is drawn twice).
+  6. Embedded ICC profile bytes for the declared conformance, and a structure tree if tagged PDF
+     is wanted.
+  Out of scope by design: cloud sync, eIDAS signature requests, screen capture, scanner import,
+  dictation and emoji — they need a cloud service or OS facilities the brief forbids or excludes.
