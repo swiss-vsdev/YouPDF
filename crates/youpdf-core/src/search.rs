@@ -36,6 +36,16 @@ pub struct SearchResult {
     pub context: String,
 }
 
+/// Options de recherche.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SearchOptions {
+    /// Distinguer majuscules et minuscules.
+    pub case_sensitive: bool,
+    /// N'accepter que des mots entiers : la correspondance ne doit pas
+    /// être collée à un caractère alphanumérique.
+    pub whole_word: bool,
+}
+
 /// Index de recherche d'un document.
 ///
 /// Le champ `text` contient le texte concaténé de toutes les pages,
@@ -135,6 +145,16 @@ impl SearchIndex {
     /// `max_results` limite le nombre de résultats retournés (0 = illimité).
     /// Les résultats sont triés par ordre d'apparition dans le document.
     pub fn search(&self, query: &str, max_results: usize) -> Vec<SearchResult> {
+        self.search_with(query, max_results, SearchOptions::default())
+    }
+
+    /// Comme [`Self::search`], avec les filtres de [`SearchOptions`].
+    pub fn search_with(
+        &self,
+        query: &str,
+        max_results: usize,
+        options: SearchOptions,
+    ) -> Vec<SearchResult> {
         let query = query.trim();
         if query.is_empty() {
             return Vec::new();
@@ -151,23 +171,32 @@ impl SearchIndex {
         // Les deux appels à `fold_case` sont O(n) mais **une seule fois
         // par index** : `folded` est précalculé dans `build`, sinon chaque
         // frappe au clavier replierait les 2 Mo du document.
-        let text_lower = &self.folded;
-        let query_lower = fold_case(query);
-
+        // En mode sensible à la casse, la comparaison se fait sur le texte
+        // brut : les indices restent ceux de `text`, donc valables partout.
+        let (haystack, needle): (&str, String) = if options.case_sensitive {
+            (self.text.as_str(), query.to_owned())
+        } else {
+            (self.folded.as_str(), fold_case(query))
+        };
         let mut results = Vec::new();
         let mut search_from = 0;
-        while search_from < text_lower.len() {
-            let Some(found) = text_lower[search_from..].find(&query_lower) else {
+        while search_from < haystack.len() {
+            let Some(found) = haystack[search_from..].find(&needle) else {
                 break;
             };
             let start = search_from + found;
-            let end = start + query_lower.len();
+            let end = start + needle.len();
 
             // On vérifie que les bornes tombent sur des frontières de
             // caractères UTF-8 valides. `find` renvoie toujours des
-            // indices valides, mais l'ajout de `query_lower.len()` doit
+            // indices valides, mais l'ajout de `needle.len()` doit
             // être vérifié.
             if !self.text.is_char_boundary(start) || !self.text.is_char_boundary(end) {
+                search_from = end.max(start + 1);
+                continue;
+            }
+
+            if options.whole_word && !self.is_whole_word(start, end) {
                 search_from = end.max(start + 1);
                 continue;
             }
@@ -189,6 +218,19 @@ impl SearchIndex {
         }
 
         results
+    }
+
+    /// Vrai si `start..end` n'est pas collé à un caractère alphanumérique.
+    fn is_whole_word(&self, start: usize, end: usize) -> bool {
+        let before = self.text[..start]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric());
+        let after = self.text[end..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric());
+        !before && !after
     }
 
     /// Retourne le numéro de page (1-indexé) contenant `offset`.

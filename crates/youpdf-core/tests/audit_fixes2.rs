@@ -206,6 +206,78 @@ fn search_folds_case_beyond_ascii() {
     );
 }
 
+/// Les filtres de recherche : casse exacte et mots entiers.
+#[test]
+fn search_options_filter_matches() {
+    let mut doc = lopdf::Document::with_version("1.7");
+    let font = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Font".to_vec()),
+        "Subtype" => Object::Name(b"Type1".to_vec()),
+        "BaseFont" => Object::Name(b"Helvetica".to_vec()),
+    });
+    // « Page page PAGES paged » : trois occurrences du mot, une collée.
+    let cid = doc.add_object(Stream::new(
+        Dictionary::new(),
+        b"BT /F1 18 Tf 60 700 Td (Page page PAGES paged) Tj ET".to_vec(),
+    ));
+    let pid = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+        "Contents" => cid,
+        "Resources" => dictionary! { "Font" => dictionary! { "F1" => Object::Reference(font) } },
+    });
+    let pages = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![pid.into()]),
+        "Count" => 1,
+    });
+    let cat = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()), "Pages" => pages });
+    doc.trailer.set("Root", Object::Reference(cat));
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf).unwrap();
+    let doc = Document::from_bytes(&buf).unwrap();
+    let index = youpdf_core::SearchIndex::build(&doc).unwrap();
+
+    let all = index.search("page", 20);
+    assert_eq!(all.len(), 4, "sans filtre : les quatre formes");
+
+    let exact = index.search_with(
+        "Page",
+        20,
+        youpdf_core::SearchOptions {
+            case_sensitive: true,
+            whole_word: false,
+        },
+    );
+    assert_eq!(exact.len(), 1, "casse exacte : une seule occurrence");
+
+    let words = index.search_with(
+        "page",
+        20,
+        youpdf_core::SearchOptions {
+            case_sensitive: false,
+            whole_word: true,
+        },
+    );
+    assert_eq!(
+        words.len(),
+        2,
+        "mots entiers : « PAGES » et « paged » exclus, il ne reste que les deux mots"
+    );
+
+    let both = index.search_with(
+        "Page",
+        20,
+        youpdf_core::SearchOptions {
+            case_sensitive: true,
+            whole_word: true,
+        },
+    );
+    assert_eq!(both.len(), 1, "casse exacte et mot entier : le premier « Page »");
+    assert_eq!(both[0].start, 0, "et c'est bien la première occurrence");
+}
+
 /// Un OCR est souvent lancé sur un PDF venu d'ailleurs : la valeur de
 /// langue, qui atterrit dans les arguments de tesseract, doit rester un
 /// code de langue.
