@@ -115,3 +115,89 @@ fn champ_cree_puis_rempli() {
         .render_page(&reopened, 1, &RenderOptions::default())
         .expect("rendu");
 }
+
+/// Un document dont `/Fields` est une référence garde ses champs existants.
+///
+/// C'est la forme qu'utilisent la plupart des producteurs : remplacer le
+/// tableau par un neuf ferait disparaître les champs déjà déclarés.
+#[test]
+fn champs_existants_conserves_si_fields_indirect() {
+    use lopdf::{dictionary, Document as LopdfDoc, Object, Stream};
+
+    let mut doc = LopdfDoc::with_version("1.7");
+    let font = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Font".to_vec()),
+        "Subtype" => Object::Name(b"Type1".to_vec()),
+        "BaseFont" => Object::Name(b"Helvetica".to_vec()),
+    });
+    let content = doc.add_object(Stream::new(dictionary! {}, b" ".to_vec()));
+    let page = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+        "Contents" => content,
+        "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+    });
+    let widget = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Annot".to_vec()),
+        "Subtype" => Object::Name(b"Widget".to_vec()),
+        "FT" => Object::Name(b"Tx".to_vec()),
+        "T" => Object::string_literal(b"existant".to_vec()),
+        "Rect" => Object::Array(vec![72.into(), 700.into(), 300.into(), 724.into()]),
+        "P" => page,
+        "F" => 4,
+        "DA" => Object::string_literal(b"/Helv 12 Tf 0 g".to_vec()),
+    });
+    let fields = doc.add_object(Object::Array(vec![Object::Reference(widget)]));
+    let acro = doc.add_object(dictionary! {
+        "Fields" => Object::Reference(fields),
+        "NeedAppearances" => true,
+    });
+    let pages = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![page.into()]),
+        "Count" => 1,
+    });
+    let catalog = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => pages,
+        "AcroForm" => Object::Reference(acro),
+    });
+    doc.trailer.set("Root", Object::Reference(catalog));
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).expect("écriture du PDF de test");
+
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+    assert_eq!(
+        doc.read_form_fields().len(),
+        1,
+        "le champ existant n'est pas lu"
+    );
+
+    doc.create_form_field(&NewFormField::text(1, [72.0, 600.0, 272.0, 620.0], "nouveau"))
+        .expect("création");
+
+    let saved = doc.to_bytes().expect("sérialisation");
+    let reopened = Document::from_bytes(&saved).expect("réouverture");
+    let names: Vec<String> = reopened
+        .read_form_fields()
+        .into_iter()
+        .map(|field| field.name)
+        .collect();
+    assert!(names.contains(&"existant".to_string()), "champ perdu : {names:?}");
+    assert!(names.contains(&"nouveau".to_string()), "champ absent : {names:?}");
+}
+
+/// Une liste à choix multiple porte le bit 21, et non son voisin.
+#[test]
+fn multi_selection_drapeau() {
+    let mut doc = Document::from_bytes(&page_blanche()).expect("ouverture");
+    let mut field = NewFormField::choice(1, [72.0, 400.0, 220.0, 420.0], "Liste", &["a", "b"]);
+    field.kind = FormFieldKind::MultiChoice;
+    doc.create_form_field(&field).expect("création");
+
+    // 1 << 17 (liste déroulante) | 1 << 20 (choix multiple).
+    let bytes = doc.to_bytes().expect("sérialisation");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("/Ff 1179648"), "drapeaux inattendus : {text}");
+    assert_eq!(doc.read_form_fields()[0].kind, FormFieldKind::MultiChoice);
+}

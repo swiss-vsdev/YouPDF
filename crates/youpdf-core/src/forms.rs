@@ -165,15 +165,23 @@ impl Document {
         let Some(acroform) = self.acroform_dict() else {
             return out;
         };
-        let Ok(fields_ref) = acroform.get(b"Fields") else {
-            return out;
-        };
-        let Ok(fields) = fields_ref.as_array() else {
-            return out;
+        // `/Fields` peut être un tableau direct ou une référence : les
+        // deux formes sont valides, et beaucoup de producteurs choisissent
+        // la seconde.
+        let fields: Vec<Object> = match acroform.get(b"Fields") {
+            Ok(Object::Array(items)) => items.clone(),
+            Ok(Object::Reference(id)) => self
+                .inner()
+                .get_object(*id)
+                .ok()
+                .and_then(|obj| obj.as_array().ok())
+                .cloned()
+                .unwrap_or_default(),
+            _ => return out,
         };
 
         // 2. Parcourir récursivement (les champs peuvent être hiérarchiques).
-        for field_ref in fields {
+        for field_ref in &fields {
             let Ok(field_id) = field_ref.as_reference() else {
                 continue;
             };
@@ -239,7 +247,8 @@ impl Document {
                     .ok()
                     .and_then(|o| o.as_i64().ok())
                     .unwrap_or(0);
-                if flags & 0x200000 != 0 {
+                // Bit 21 : MultiSelect (le bit 22 est DoNotSpellCheck).
+                if flags & (1 << 20) != 0 {
                     kind = FormFieldKind::MultiChoice;
                 }
             }
@@ -391,7 +400,7 @@ impl Document {
             }
             FormFieldKind::Radio => 1 << 15,
             FormFieldKind::Choice => 1 << 17,
-            FormFieldKind::MultiChoice => (1 << 17) | (1 << 21),
+            FormFieldKind::MultiChoice => (1 << 17) | (1 << 20),
             _ => 0,
         };
         if field.read_only {
@@ -583,14 +592,22 @@ impl Document {
         // croisés pendant la réécriture.
         let base = self.acroform_dict().cloned();
         let mut acro = base.unwrap_or_default();
-        let mut fields = acro
-            .get(b"Fields")
-            .ok()
-            .and_then(|o| o.as_array().ok())
-            .cloned()
-            .unwrap_or_default();
-        fields.push(Object::Reference(widget_id));
-        acro.set("Fields", Object::Array(fields));
+        // Un `/Fields` indirect se modifie sur place : le remplacer par un
+        // tableau neuf ferait disparaître les champs déjà déclarés.
+        match acro.get(b"Fields").cloned() {
+            Ok(Object::Reference(array_id)) => {
+                if let Ok(Object::Array(array)) = self.inner_mut().get_object_mut(array_id) {
+                    array.push(Object::Reference(widget_id));
+                }
+            }
+            Ok(Object::Array(mut array)) => {
+                array.push(Object::Reference(widget_id));
+                acro.set("Fields", Object::Array(array));
+            }
+            _ => {
+                acro.set("Fields", Object::Array(vec![Object::Reference(widget_id)]));
+            }
+        }
         if acro.get(b"DR").is_err() {
             let mut fonts = Dictionary::new();
             fonts.set("Helv", Object::Reference(font));
