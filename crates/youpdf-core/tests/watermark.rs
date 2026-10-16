@@ -5,7 +5,7 @@
 //! l'enregistrement, qu'elles ne touchent que les pages choisies, et que
 //! les formats de numérotation sont ceux annoncés.
 
-use youpdf_core::{Document, HeaderFooter, NumberStyle, PageRange, Watermark};
+use youpdf_core::{BandSlots, Document, HeaderFooter, NumberStyle, PageRange, Watermark};
 
 /// `n` pages blanches 612×792, chacune avec un flux de contenu vide.
 fn pages_blanches(n: usize) -> Vec<u8> {
@@ -110,7 +110,10 @@ fn filigrane_present_apres_enregistrement() {
 fn entete_pied_seulement_pages_choisies() {
     let mut doc = Document::from_bytes(&pages_blanches(3)).expect("ouverture");
     let hf = HeaderFooter {
-        left: "YouPDF".to_string(),
+        header: BandSlots {
+            left: "YouPDF".to_string(),
+            ..Default::default()
+        },
         pages: PageRange::Range(2, 3),
         ..Default::default()
     };
@@ -125,6 +128,33 @@ fn entete_pied_seulement_pages_choisies() {
     );
     assert!(text_of(&bytes, 2).contains("YouPDF"));
     assert!(text_of(&bytes, 3).contains("YouPDF"));
+}
+
+/// L'en-tête et le pied portent chacun leurs propres textes.
+#[test]
+fn entete_et_pied_textes_distincts() {
+    let mut doc = Document::from_bytes(&pages_blanches(1)).expect("ouverture");
+    let hf = HeaderFooter {
+        header: BandSlots {
+            center: "Rapport annuel".to_string(),
+            ..Default::default()
+        },
+        footer: BandSlots {
+            left: "Interne".to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    doc.add_header_footer(&hf).expect("en-tête");
+    let bytes = doc.to_bytes().expect("écriture");
+    let text = text_of(&bytes, 1);
+    assert!(text.contains("Rapport annuel"), "{text}");
+    assert!(text.contains("Interne"), "{text}");
+    // Le titre ne doit pas se retrouver aussi en bas : chaque bande a ses
+    // propres emplacements.
+    assert_eq!(text.matches("Rapport annuel").count(), 1, "{text}");
+    assert_eq!(text.matches("Interne").count(), 1, "{text}");
 }
 
 /// Les trois styles de numérotation rendent les formats annoncés.

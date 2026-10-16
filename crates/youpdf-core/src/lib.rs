@@ -64,5 +64,5 @@ pub use search::{SearchIndex, SearchOptions, SearchResult, fold_case};
 pub use signature::{SignaturePlacement, SignatureRequest, SignatureStatus};
 pub use structure::{AttachmentInfo, OutlineItem, OutlineStyle, decode_pdf_text};
 pub use watermark::{
-    Background, Bates, BatesPosition, HeaderFooter, NumberStyle, PageRange, Watermark,
+    Background, BandSlots, Bates, BatesPosition, HeaderFooter, NumberStyle, PageRange, Watermark,
 };
