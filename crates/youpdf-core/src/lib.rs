@@ -34,6 +34,7 @@ pub mod measure;
 pub mod metadata;
 pub mod organize;
 pub mod ocr;
+pub mod pdfa;
 pub mod protect;
 pub mod redact;
 pub mod render;
@@ -55,6 +56,7 @@ pub use forms::{FieldProperties, FormDataFormat, FormField, FormFieldKind, NewFo
 pub use measure::{MeasureKind, Measurement};
 pub use metadata::DocumentMetadata;
 pub use ocr::{OcrEngine, OcrMode, OcrResult, TesseractEngine, validate_language};
+pub use pdfa::Conformance;
 pub use protect::{EncryptionOptions, EncryptionStrength, Permissions};
 pub use redact::RedactionRegion;
 pub use render::{PageBitmap, PdfiumRenderer, RenderOptions, Renderer};
