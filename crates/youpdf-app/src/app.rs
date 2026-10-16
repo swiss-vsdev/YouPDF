@@ -138,6 +138,10 @@ enum MenuAction {
     FromImages,
     /// Insère un autre PDF dans le document courant.
     Combine,
+    /// Présentation plein écran, une page à la fois.
+    Slideshow,
+    /// Ouvre la fenêtre de traitement par lots.
+    Batch,
 }
 
 /// Répartit les pages en rangées selon la disposition choisie. Chaque rangée
@@ -583,6 +587,18 @@ pub struct YouPdfApp {
     create_pages: usize,
     /// Invite de mot de passe en attente (ouverture ou déprotection).
     password_prompt: Option<PasswordPrompt>,
+    /// Présentation plein écran, une page à la fois.
+    slideshow: bool,
+    /// Fenêtre « Traitement par lots ».
+    batch_open: bool,
+    batch_files: Vec<PathBuf>,
+    batch_dir: Option<PathBuf>,
+    batch_text: bool,
+    batch_images: bool,
+    batch_compress: bool,
+    batch_protect: bool,
+    batch_flatten: bool,
+    batch_report: String,
     /// Outil d'annotation actif (index dans la barre du mode Comment).
     annot_tool: Option<usize>,
     /// Type de marque du surligneur (surlignage, soulignage, barré, ondulé).
@@ -742,6 +758,16 @@ impl YouPdfApp {
             create_open: false,
             create_pages: 1,
             password_prompt: None,
+            slideshow: false,
+            batch_open: false,
+            batch_files: Vec::new(),
+            batch_dir: None,
+            batch_text: false,
+            batch_images: false,
+            batch_compress: true,
+            batch_protect: false,
+            batch_flatten: false,
+            batch_report: String::new(),
             annot_tool: None,
             marker: AnnotationKind::Highlight,
             shape: AnnotationKind::Square,
@@ -4130,6 +4156,9 @@ impl YouPdfApp {
                             if menu_row(ui, "Create…", "") {
                                 action = Some(MenuAction::Create);
                             }
+                            if menu_row(ui, "Batch processing…", "") {
+                                action = Some(MenuAction::Batch);
+                            }
                             ui.add_space(4.0);
                             let sep = ui.cursor().top();
                             ui.painter().hline(
@@ -4154,6 +4183,9 @@ impl YouPdfApp {
                             }
                             if menu_row_checked(ui, "Fullscreen", self.fullscreen) {
                                 action = Some(MenuAction::Fullscreen);
+                            }
+                            if menu_row(ui, "Slideshow", "F5") {
+                                action = Some(MenuAction::Slideshow);
                             }
                             ui.add_space(4.0);
                             let sep = ui.cursor().top();
@@ -4222,6 +4254,8 @@ impl YouPdfApp {
                     MenuAction::NewBlank => self.new_blank_page(ctx),
                     MenuAction::FromImages => self.import_images(ctx),
                     MenuAction::Combine => self.combine_active(ctx),
+                    MenuAction::Slideshow => self.enter_slideshow(ctx),
+                    MenuAction::Batch => self.batch_open = true,
                 }
             }
         }
@@ -5713,6 +5747,321 @@ impl YouPdfApp {
         }
     }
 
+    // -- Présentation et traitement par lots --------------------------------
+
+    /// Entre en présentation plein écran sur la page courante.
+    fn enter_slideshow(&mut self, ctx: &egui::Context) {
+        if self.tabs.is_empty() {
+            self.toast(ctx, "Open a document first");
+            return;
+        }
+        self.slideshow = true;
+        self.panel = None;
+        if !self.fullscreen {
+            self.toggle_fullscreen(ctx);
+        }
+    }
+
+    /// Sort de la présentation.
+    fn exit_slideshow(&mut self, ctx: &egui::Context) {
+        self.slideshow = false;
+        if self.fullscreen {
+            self.toggle_fullscreen(ctx);
+        }
+    }
+
+    /// Présentation : fond noir, une page à la fois, flèches pour tourner.
+    fn slideshow_view(&mut self, ctx: &egui::Context) {
+        if self.tabs.is_empty() {
+            self.exit_slideshow(ctx);
+            return;
+        }
+        let (left, right, first, last, escape, quit) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowLeft)
+                    || i.key_pressed(egui::Key::ArrowUp)
+                    || i.key_pressed(egui::Key::PageUp),
+                i.key_pressed(egui::Key::ArrowRight)
+                    || i.key_pressed(egui::Key::ArrowDown)
+                    || i.key_pressed(egui::Key::PageDown)
+                    || i.key_pressed(egui::Key::Space),
+                i.key_pressed(egui::Key::Home),
+                i.key_pressed(egui::Key::End),
+                i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::F5),
+            )
+        });
+        if escape || quit {
+            self.exit_slideshow(ctx);
+            return;
+        }
+        let total = self.active_total() as usize;
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            if first {
+                tab.page = 1;
+            }
+            if last {
+                tab.page = total.max(1);
+            }
+            if left {
+                tab.page = tab.page.saturating_sub(1).max(1);
+            }
+            if right {
+                tab.page = (tab.page + 1).min(total.max(1));
+            }
+            // Une page entière par écran : l'ajustement automatique s'en charge.
+            tab.zoom = None;
+            tab.zoom_fit_page = true;
+        }
+        CentralPanel::default()
+            .frame(Frame::none().fill(Color32::BLACK))
+            .show(ctx, |ui| {
+                self.canvas(ui);
+            });
+        let page = self.tabs[self.active].page;
+        Area::new(Id::new("slideshow-hud"))
+            .fixed_pos(pos2(16.0, 16.0))
+            .order(Order::Foreground)
+            .show(ctx, |ui| {
+                Frame::none()
+                    .fill(Color32::from_black_alpha(160))
+                    .rounding(Rounding::same(8.0))
+                    .inner_margin(Margin::symmetric(10.0, 6.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(format!("{page} / {total}"))
+                                .size(12.0)
+                                .color(Color32::WHITE),
+                        );
+                        ui.label(
+                            RichText::new("← → to turn, Esc to leave")
+                                .size(10.5)
+                                .color(Color32::from_gray(170)),
+                        );
+                    });
+            });
+    }
+
+    /// Fenêtre « Traitement par lots » : plusieurs fichiers, mêmes opérations.
+    fn batch_window(&mut self, ctx: &egui::Context) {
+        if !self.batch_open {
+            return;
+        }
+        let mut open = true;
+        let mut add_files = false;
+        let mut choose_dir = false;
+        let mut clear = false;
+        let mut run = false;
+        let files = self.batch_files.len();
+        let dir = self
+            .batch_dir
+            .as_ref()
+            .map(|p| p.display().to_string());
+        egui::Window::new("Batch processing")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size(vec2(520.0, 470.0))
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(520.0);
+                ui.label(RichText::new("Files").size(12.0).color(MUTED));
+                ui.horizontal(|ui| {
+                    if ui.button("Add PDFs…").clicked() {
+                        add_files = true;
+                    }
+                    if ui.button("Clear").clicked() {
+                        clear = true;
+                    }
+                    ui.label(RichText::new(format!("{files} file(s)")).size(11.0).color(MUTED));
+                });
+                ScrollArea::vertical().max_height(130.0).show(ui, |ui| {
+                    for path in &self.batch_files {
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        ui.label(RichText::new(name).size(11.0).color(ICON_BRIGHT));
+                    }
+                });
+                ui.add_space(6.0);
+                ui.label(RichText::new("Output folder").size(12.0).color(MUTED));
+                ui.horizontal(|ui| {
+                    if ui.button("Choose…").clicked() {
+                        choose_dir = true;
+                    }
+                    ui.label(
+                        RichText::new(dir.clone().unwrap_or_else(|| "Not chosen".to_owned()))
+                            .size(11.0)
+                            .color(MUTED),
+                    );
+                });
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("Operations, applied in this order").size(12.0).color(MUTED),
+                );
+                ui.checkbox(&mut self.batch_text, "Export the text (plain text)");
+                ui.checkbox(&mut self.batch_images, "Export the pages as PNG (150 dpi)");
+                ui.checkbox(&mut self.batch_compress, "Write a compressed copy");
+                ui.checkbox(
+                    &mut self.batch_protect,
+                    "Write a protected copy (current settings)",
+                );
+                ui.checkbox(
+                    &mut self.batch_flatten,
+                    "Write a copy with the annotations flattened",
+                );
+                ui.add_space(8.0);
+                if ui
+                    .add_enabled(
+                        files > 0 && self.batch_dir.is_some(),
+                        egui::Button::new("Run"),
+                    )
+                    .clicked()
+                {
+                    run = true;
+                }
+                if !self.batch_report.is_empty() {
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
+                        ui.label(
+                            RichText::new(self.batch_report.clone())
+                                .size(11.0)
+                                .color(ICON_BRIGHT),
+                        );
+                    });
+                }
+            });
+
+        if add_files {
+            if let Some(paths) = rfd::FileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .pick_files()
+            {
+                for path in paths {
+                    if !self.batch_files.contains(&path) {
+                        self.batch_files.push(path);
+                    }
+                }
+            }
+        }
+        if clear {
+            self.batch_files.clear();
+            self.batch_report.clear();
+        }
+        if choose_dir {
+            self.batch_dir = rfd::FileDialog::new().pick_folder();
+        }
+        if run {
+            self.run_batch(ctx);
+        }
+        if !open {
+            self.batch_open = false;
+        }
+    }
+
+    /// Applique les opérations cochées à chaque fichier de la liste.
+    ///
+    /// Chaque fichier est traité en séquence : les opérations écrivent des
+    /// copies dans le dossier de sortie, l'original n'est jamais touché.
+    fn run_batch(&mut self, ctx: &egui::Context) {
+        let Some(dir) = self.batch_dir.clone() else {
+            return;
+        };
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            self.toast(ctx, format!("Batch failed: {err}"));
+            return;
+        }
+        let files = self.batch_files.clone();
+        let text = self.batch_text;
+        let images = self.batch_images;
+        let compress = self.batch_compress;
+        let protect = self.batch_protect;
+        let flatten = self.batch_flatten;
+        let protect_opts = self.protect.clone();
+        let mut report = String::new();
+        let mut done = 0usize;
+        let mut failed = 0usize;
+        for path in &files {
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "document".to_owned());
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let mut doc = match Document::open(path) {
+                Ok(doc) => doc,
+                Err(err) => {
+                    failed += 1;
+                    report.push_str(&format!("{name}: open failed — {err}\n"));
+                    continue;
+                }
+            };
+            let mut errors: Vec<String> = Vec::new();
+            if text {
+                let out = dir.join(format!("{stem}.txt"));
+                match doc.export_text(TextFormat::Plain) {
+                    Ok(body) => {
+                        if let Err(err) = std::fs::write(&out, body) {
+                            errors.push(format!("text: {err}"));
+                        }
+                    }
+                    Err(err) => errors.push(format!("text: {err}")),
+                }
+            }
+            if images {
+                let out = dir.join(format!("{stem}-pages"));
+                match std::fs::create_dir_all(&out) {
+                    Ok(()) => {
+                        if let Err(err) = doc.export_images(&out, ImageFormat::Png, 150.0) {
+                            errors.push(format!("images: {err}"));
+                        }
+                    }
+                    Err(err) => errors.push(format!("images: {err}")),
+                }
+            }
+            if compress {
+                let out = dir.join(format!("{stem}-compressed.pdf"));
+                if let Err(err) = doc.compress(&out) {
+                    errors.push(format!("compress: {err}"));
+                }
+            }
+            if protect {
+                let out = dir.join(format!("{stem}-protected.pdf"));
+                if let Err(err) = doc.save_protected(&out, &protect_opts) {
+                    errors.push(format!("protect: {err}"));
+                }
+            }
+            if flatten {
+                let out = dir.join(format!("{stem}-flat.pdf"));
+                match doc.flatten_annotations() {
+                    Ok(_) => {
+                        if let Err(err) = doc.save(&out) {
+                            errors.push(format!("flatten: {err}"));
+                        }
+                    }
+                    Err(err) => errors.push(format!("flatten: {err}")),
+                }
+            }
+            if errors.is_empty() {
+                done += 1;
+                report.push_str(&format!("{name}: ok\n"));
+            } else {
+                failed += 1;
+                report.push_str(&format!("{name}: {}\n", errors.join("; ")));
+            }
+        }
+        report.push_str(&format!("\n{done} done, {failed} failed"));
+        self.batch_report = report;
+        self.toast(ctx, format!("Batch finished: {done} done, {failed} failed"));
+    }
+
     fn canvas(&mut self, ui: &mut egui::Ui) {
         if self.tabs.is_empty() {
             self.empty_state(ui);
@@ -6691,6 +7040,10 @@ impl YouPdfApp {
         // priorité : sinon Retour arrière efface l'annotation sélectionnée au
         // lieu d'un caractère.
         let typing = ctx.wants_keyboard_input();
+        if ctx.input(|i| i.key_pressed(egui::Key::F5)) && !typing {
+            self.enter_slideshow(ctx);
+            return;
+        }
         let delete_pressed = ctx.input(|i| {
             i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::Delete)
         }) && !typing;
@@ -6776,6 +7129,10 @@ impl eframe::App for YouPdfApp {
             self.reset_document_session();
         }
         self.ensure_annots();
+        if self.slideshow {
+            self.slideshow_view(ctx);
+            return;
+        }
         self.shortcuts(ctx);
         self.title_bar(ctx);
         self.rail(ctx);
@@ -6804,6 +7161,7 @@ impl eframe::App for YouPdfApp {
         self.compare_window(ctx);
         self.ocr_window(ctx);
         self.create_window(ctx);
+        self.batch_window(ctx);
         self.password_window(ctx);
         self.draft_window(ctx);
         self.redact_window(ctx);
