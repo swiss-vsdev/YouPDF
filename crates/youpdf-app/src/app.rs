@@ -23,9 +23,9 @@ use youpdf_core::{
     blank_document, document_from_images, fold_case, Annotation, AnnotationKind, AnnotationStyle,
     AttachmentInfo, Background, Bates, BatesPosition, ComparisonReport, CropMargins, DifferenceKind,
     Document, EncryptionOptions, EncryptionStrength, FormField, FormFieldKind, HeaderFooter,
-    ImageFormat, NumberStyle, OcrEngine, OcrMode, OutlineItem, PageRange, PdfiumRenderer,
-    RedactionRegion, RenderOptions, Renderer, SearchIndex, SearchOptions, SearchResult, TextFormat,
-    TextFragment, Watermark, STAMP_NAMES,
+    ImageFormat, MeasureKind, Measurement, NumberStyle, OcrEngine, OcrMode, OutlineItem, PageRange,
+    PdfiumRenderer, RedactionRegion, RenderOptions, Renderer, SearchIndex, SearchOptions,
+    SearchResult, TextFormat, TextFragment, Watermark, STAMP_NAMES,
 };
 
 // --------------------------------------------------------------------------
@@ -306,6 +306,8 @@ enum ToolsEntry {
     HeaderFooter,
     /// Fenêtre de numérotation Bates.
     Bates,
+    /// Fenêtre des outils de mesure.
+    Measure,
     /// Fenêtre d'OCR.
     Ocr,
     /// Fenêtre d'export et de conversion.
@@ -338,6 +340,7 @@ const TOOLS_MENU: &[(&str, &str, ToolsEntry)] = &[
     ("Background", "^9", ToolsEntry::Background),
     ("Header & footer", "^0", ToolsEntry::HeaderFooter),
     ("Bates numbering", "", ToolsEntry::Bates),
+    ("Measure", "", ToolsEntry::Measure),
     ("Convert…", "", ToolsEntry::Convert),
     ("OCR…", "", ToolsEntry::Ocr),
     ("Create…", "", ToolsEntry::Create),
@@ -424,6 +427,8 @@ enum ToolAction {
     InsertImage,
     /// Glissé d'une boîte de champ de formulaire (mode Prepare form).
     FormField(FormKind),
+    /// Glissé d'une mesure (distance, périmètre, aire).
+    Measure,
 }
 
 /// Couleurs de préréglage proposées dans la popup.
@@ -587,6 +592,16 @@ pub struct YouPdfApp {
     create_pages: usize,
     /// Invite de mot de passe en attente (ouverture ou déprotection).
     password_prompt: Option<PasswordPrompt>,
+    /// Outil de mesure actif : le canevas trace des mesures au glissé.
+    measure_active: bool,
+    /// Fenêtre « Mesure ».
+    measure_open: bool,
+    /// Nature de la mesure posée.
+    measure_kind: MeasureKind,
+    /// Échelle : unités de dessin par unité réelle.
+    measure_scale: f32,
+    /// Unité affichée.
+    measure_unit: String,
     /// Présentation plein écran, une page à la fois.
     slideshow: bool,
     /// Fenêtre « Traitement par lots ».
@@ -758,6 +773,11 @@ impl YouPdfApp {
             create_open: false,
             create_pages: 1,
             password_prompt: None,
+            measure_active: false,
+            measure_open: false,
+            measure_kind: MeasureKind::Distance,
+            measure_scale: 72.0,
+            measure_unit: "in".to_owned(),
             slideshow: false,
             batch_open: false,
             batch_files: Vec::new(),
@@ -1796,6 +1816,9 @@ impl YouPdfApp {
         // plus : les clics reviennent au champ posé sur la page.
         if self.edit_text.is_some() {
             return ToolAction::None;
+        }
+        if self.measure_active {
+            return ToolAction::Measure;
         }
         if self.mode == Some(3) {
             return if self.annot_tool == Some(1) {
@@ -3975,6 +3998,7 @@ impl YouPdfApp {
                     ToolsEntry::Background => self.background_open = true,
                     ToolsEntry::HeaderFooter => self.header_footer_open = true,
                     ToolsEntry::Bates => self.bates_open = true,
+                    ToolsEntry::Measure => self.measure_open = true,
                     ToolsEntry::Ocr => self.ocr_open = true,
                     ToolsEntry::Convert => self.export_open = true,
                     ToolsEntry::Create => self.create_open = true,
@@ -5842,6 +5866,95 @@ impl YouPdfApp {
             });
     }
 
+    /// Fenêtre « Mesure » : nature, échelle, unité, activation.
+    fn measure_window(&mut self, ctx: &egui::Context) {
+        if !self.measure_open {
+            return;
+        }
+        let mut open = true;
+        let mut clear = false;
+        egui::Window::new("Measure")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(340.0);
+                ui.checkbox(&mut self.measure_active, "Draw on the page");
+                ui.add_space(6.0);
+                ui.label(RichText::new("Kind").size(12.0).color(MUTED));
+                for kind in [
+                    MeasureKind::Distance,
+                    MeasureKind::Perimeter,
+                    MeasureKind::Area,
+                ] {
+                    if ui
+                        .selectable_label(self.measure_kind == kind, kind.display_name())
+                        .clicked()
+                    {
+                        self.measure_kind = kind;
+                    }
+                }
+                ui.add_space(6.0);
+                egui::Grid::new("measure-grid")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("Scale").size(12.0).color(MUTED));
+                        ui.add(
+                            egui::DragValue::new(&mut self.measure_scale)
+                                .range(0.01..=10_000.0)
+                                .speed(1.0),
+                        );
+                        ui.end_row();
+                        ui.label(RichText::new("Unit").size(12.0).color(MUTED));
+                        ui.add(
+                            TextEdit::singleline(&mut self.measure_unit).desired_width(80.0),
+                        );
+                        ui.end_row();
+                    });
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
+                        "Scale is drawing points per real unit: 72 with unit \"in\" reads inches \
+                         at 1:1.",
+                    )
+                    .size(11.0)
+                    .color(MUTED),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "Distance follows the drag; perimeter and area take the dragged \
+                         rectangle.",
+                    )
+                    .size(11.0)
+                    .color(MUTED),
+                );
+                ui.add_space(8.0);
+                if ui.button("Remove all measurements").clicked() {
+                    clear = true;
+                }
+            });
+        if clear {
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.clear_measurements());
+            match result {
+                Some(Ok(count)) => {
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("Removed {count} measurement(s)"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Remove failed: {err}")),
+                None => {}
+            }
+        }
+        if !open {
+            self.measure_open = false;
+        }
+    }
+
     /// Fenêtre « Traitement par lots » : plusieurs fichiers, mêmes opérations.
     fn batch_window(&mut self, ctx: &egui::Context) {
         if !self.batch_open {
@@ -6115,6 +6228,7 @@ impl YouPdfApp {
         let mut pending_image: Option<(usize, [f32; 2])> = None;
         let mut pending_redact: Option<(usize, [f32; 4])> = None;
         let mut pending_form: Option<(usize, [f32; 4], FormKind)> = None;
+        let mut pending_measure: Option<(usize, [f32; 2], [f32; 2])> = None;
         let redact_marks = &self.redact_regions;
         let search_rects = &self.search_rects;
         let search_rects_page = self.search_rects_page;
@@ -6491,6 +6605,32 @@ impl YouPdfApp {
                                     );
                                 }
                             }
+                            ToolAction::Measure => {
+                                if resp.dragged() {
+                                    let point = resp.interact_pointer_pos().map(to_pdf);
+                                    if drag_from.is_none() {
+                                        *drag_from = point;
+                                    }
+                                    if point.is_some() {
+                                        *drag_to = point;
+                                    }
+                                }
+                                if resp.drag_stopped() {
+                                    let from = drag_from.take();
+                                    let to = drag_to.take();
+                                    if let (Some(a), Some(b)) = (from, to) {
+                                        pending_measure = Some((page as usize, a, b));
+                                    }
+                                }
+                                if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
+                                    let rect = Rect::from_two_pos(to_screen(a), to_screen(b));
+                                    ui.painter().rect_stroke(
+                                        rect,
+                                        Rounding::ZERO,
+                                        Stroke::new(1.5_f32, ACCENT),
+                                    );
+                                }
+                            }
                             ToolAction::FormField(kind) => {
                                 if resp.dragged() {
                                     let point = resp.interact_pointer_pos().map(to_pdf);
@@ -6585,6 +6725,42 @@ impl YouPdfApp {
         if let Some((page, rect)) = pending_redact {
             if (rect[2] - rect[0]).abs() > 2.0 && (rect[3] - rect[1]).abs() > 2.0 {
                 self.redact_regions.push(RedactionRegion { page, rect });
+            }
+        }
+        if let Some((page, from, to)) = pending_measure {
+            let low = [from[0].min(to[0]), from[1].min(to[1])];
+            let high = [from[0].max(to[0]), from[1].max(to[1])];
+            let points = match self.measure_kind {
+                // Un glissé donne deux points : la distance va de l'un à
+                // l'autre, le périmètre et l'aire prennent le rectangle.
+                MeasureKind::Distance => vec![from, to],
+                MeasureKind::Perimeter => vec![
+                    low,
+                    [high[0], low[1]],
+                    high,
+                    [low[0], high[1]],
+                    low,
+                ],
+                MeasureKind::Area => vec![low, [high[0], low[1]], high, [low[0], high[1]]],
+            };
+            let measurement = Measurement {
+                kind: self.measure_kind,
+                points,
+                scale: self.measure_scale,
+                unit: self.measure_unit.clone(),
+            };
+            let page = page as u32;
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.add_measurement(page, &measurement));
+            match result {
+                Some(Ok(())) => {
+                    self.mark_document_changed();
+                    self.toast(&ctx, "Measurement added");
+                }
+                Some(Err(err)) => self.toast(&ctx, format!("Measure failed: {err}")),
+                None => {}
             }
         }
         if let Some((page, point)) = pending_hit {
@@ -7162,6 +7338,7 @@ impl eframe::App for YouPdfApp {
         self.ocr_window(ctx);
         self.create_window(ctx);
         self.batch_window(ctx);
+        self.measure_window(ctx);
         self.password_window(ctx);
         self.draft_window(ctx);
         self.redact_window(ctx);

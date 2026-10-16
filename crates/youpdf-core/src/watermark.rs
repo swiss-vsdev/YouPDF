@@ -813,7 +813,7 @@ impl Document {
     ///
     /// Le contenu d'origine n'est jamais touché : seuls les flux portant la
     /// clé sont retirés. Renvoie le nombre de flux retirés.
-    fn wm_clear_marked(&mut self, marker: &str) -> Result<usize> {
+    pub(crate) fn wm_clear_marked(&mut self, marker: &str) -> Result<usize> {
         let pages = self.inner().get_pages();
         let mut removed = 0usize;
 
@@ -874,7 +874,7 @@ impl Document {
     /// On n'écrit jamais dans une police existante : un `/F1` peut être en
     /// StandardEncoding ou en Identity-H, où des octets WinAnsi donneraient
     /// un texte illisible.
-    fn wm_ensure_font(&mut self, page_id: ObjectId) -> Result<()> {
+    pub(crate) fn wm_ensure_font(&mut self, page_id: ObjectId) -> Result<()> {
         if let Ok(fonts) = self
             .inner()
             .get_dictionary(page_id)
@@ -962,7 +962,7 @@ impl Document {
     }
 
     /// Concatène un flux à la fin du contenu d'une page.
-    fn wm_append_content(&mut self, page_id: ObjectId, stream_id: ObjectId) -> Result<()> {
+    pub(crate) fn wm_append_content(&mut self, page_id: ObjectId, stream_id: ObjectId) -> Result<()> {
         let page = self
             .inner_mut()
             .get_object_mut(page_id)
