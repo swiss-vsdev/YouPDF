@@ -8,6 +8,7 @@ use lopdf::{Dictionary, Object, ObjectId};
 use youpdf_shared::{Error, Result};
 
 use crate::document::Document;
+use crate::edit::{encode_pdf_literal, TextFragment};
 
 /// Entrée du plan (signets) d'un document.
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +30,79 @@ pub struct AttachmentInfo {
     pub size: Option<usize>,
     /// Description éventuelle.
     pub description: Option<String>,
+}
+
+/// Part du document transformée en signets.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutlineStyle {
+    /// Profondeur maximale conservée (1 = seulement la plus grande taille).
+    pub max_levels: usize,
+    /// Ignore les titres plus petits que cette taille, en points.
+    pub min_font_size: f32,
+    /// Nombre maximal de signets au total (0 = aucune limite).
+    pub max_entries: usize,
+}
+
+impl Default for OutlineStyle {
+    fn default() -> Self {
+        OutlineStyle {
+            max_levels: 3,
+            min_font_size: 10.0,
+            max_entries: 500,
+        }
+    }
+}
+
+/// Titre candidat, avant écriture de l'arbre `/Outlines`.
+#[derive(Debug, Clone)]
+struct DetectedHeading {
+    title: String,
+    page: u32,
+    left: f32,
+    top: f32,
+    level: usize,
+}
+
+/// Ligne reconstituée à partir de fragments de texte.
+struct TextLine {
+    page: u32,
+    baseline: f32,
+    font_size: f32,
+    left: f32,
+    top: f32,
+    parts: Vec<(f32, String)>,
+}
+
+impl TextLine {
+    fn new(page: u32, fragment: &TextFragment) -> Self {
+        TextLine {
+            page,
+            baseline: fragment.rect[1],
+            font_size: fragment.font_size,
+            left: fragment.rect[0],
+            top: fragment.rect[3],
+            parts: vec![(fragment.rect[0], fragment.text.clone())],
+        }
+    }
+
+    fn push(&mut self, fragment: &TextFragment) {
+        self.font_size = self.font_size.max(fragment.font_size);
+        self.left = self.left.min(fragment.rect[0]);
+        self.top = self.top.max(fragment.rect[3]);
+        self.parts.push((fragment.rect[0], fragment.text.clone()));
+    }
+
+    fn text(&self) -> String {
+        let mut parts = self.parts.clone();
+        parts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        parts
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_owned()
+    }
 }
 
 /// Plafond de sécurité sur la profondeur du plan.
@@ -109,6 +183,248 @@ impl Document {
             .iter()
             .find(|(_, id)| **id == page_id)
             .map(|(number, _)| *number as usize)
+    }
+
+    /// Reconstruit le plan à partir du texte.
+    ///
+    /// Une ligne dont la taille dépasse nettement celle du corps du texte
+    /// devient un signet ; les tailles distinctes sont rangées en niveaux,
+    /// de la plus grande à la plus petite. L'ancien plan est remplacé.
+    pub fn generate_outline(&mut self, style: &OutlineStyle) -> Result<usize> {
+        let headings = self.detect_headings(style);
+        // Toute arborescence précédente est retirée avant d'écrire la neuve.
+        self.drop_outline_key();
+
+        if headings.is_empty() {
+            self.touch();
+            return Ok(0);
+        }
+
+        let pages = self.inner.get_pages();
+        let mut item_ids: Vec<ObjectId> = Vec::with_capacity(headings.len());
+        for heading in &headings {
+            // La destination reste dans la boîte visible de la page.
+            let view = self.page_view(heading.page);
+            let left = heading.left.max(view.x);
+            let top = heading.top.min(view.y + view.height);
+            let dest = match pages.get(&heading.page).copied() {
+                Some(page_id) => Object::Array(vec![
+                    Object::Reference(page_id),
+                    Object::Name(b"XYZ".to_vec()),
+                    Object::Real(left),
+                    Object::Real(top),
+                    Object::Null,
+                ]),
+                None => Object::Null,
+            };
+            let dict = Dictionary::from_iter(vec![
+                (
+                    "Title",
+                    Object::string_literal(encode_pdf_literal(&heading.title)),
+                ),
+                ("Dest", dest),
+            ]);
+            let id = self.inner_mut().add_object(Object::Dictionary(dict));
+            item_ids.push(id);
+        }
+
+        let root_id = self
+            .inner_mut()
+            .add_object(Object::Dictionary(Dictionary::from_iter(vec![(
+                "Type",
+                Object::Name(b"Outlines".to_vec()),
+            )])));
+
+        self.link_outline_tree(&headings, &item_ids, root_id)?;
+
+        self.inner_mut()
+            .catalog_mut()
+            .map_err(|e| Error::Pdf(format!("catalogue : {e}")))?
+            .set("Outlines", Object::Reference(root_id));
+
+        self.touch();
+        Ok(headings.len())
+    }
+
+    /// Supprime tous les signets (`/Outlines` du catalogue).
+    ///
+    /// Renvoie le nombre d'entrées qui existaient avant la suppression.
+    pub fn clear_outline(&mut self) -> Result<usize> {
+        let count = self.outline().len();
+        self.drop_outline_key();
+        self.touch();
+        Ok(count)
+    }
+
+    /// Détecte les titres du document, dans l'ordre page puis haut-bas.
+    fn detect_headings(&self, style: &OutlineStyle) -> Vec<DetectedHeading> {
+        let mut lines: Vec<TextLine> = Vec::new();
+        let mut sizes: Vec<u32> = Vec::new();
+        for page in 1..=self.page_count() as u32 {
+            let Ok(fragments) = self.extract_text_fragments(page) else {
+                continue;
+            };
+            for fragment in &fragments {
+                sizes.push(size_key(fragment.font_size));
+            }
+            lines.extend(group_lines(page, &fragments));
+        }
+
+        // Taille du corps : la plus fréquente dans tout le document.
+        let Some(body) = most_frequent(&sizes) else {
+            return Vec::new();
+        };
+        let body = body as f32 / 10.0;
+
+        let candidates: Vec<(f32, DetectedHeading)> = lines
+            .into_iter()
+            .filter(|line| line.font_size >= body * 1.15 && line.font_size >= style.min_font_size)
+            .map(|line| {
+                (
+                    line.font_size,
+                    DetectedHeading {
+                        title: line.text(),
+                        page: line.page,
+                        left: line.left,
+                        top: line.top,
+                        level: 0,
+                    },
+                )
+            })
+            .collect();
+
+        // Bandes de tailles distinctes, de la plus grande à la plus petite.
+        let bands: Vec<u32> = candidates
+            .iter()
+            .map(|(size, _)| size_key(*size))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+
+        let mut headings: Vec<DetectedHeading> = candidates
+            .into_iter()
+            .filter_map(|(size, mut heading)| {
+                let level = bands.iter().position(|band| *band == size_key(size))?;
+                if level >= style.max_levels {
+                    return None;
+                }
+                heading.level = level;
+                Some(heading)
+            })
+            .collect();
+
+        if style.max_entries > 0 && headings.len() > style.max_entries {
+            headings.truncate(style.max_entries);
+        }
+        headings
+    }
+
+    /// Relie les entrées entre elles et à la racine du plan.
+    fn link_outline_tree(
+        &mut self,
+        headings: &[DetectedHeading],
+        item_ids: &[ObjectId],
+        root_id: ObjectId,
+    ) -> Result<()> {
+        let count = headings.len();
+        // Parent de chaque entrée : le dernier titre de niveau supérieur.
+        let mut parent: Vec<Option<usize>> = vec![None; count];
+        let mut stack: Vec<usize> = Vec::new();
+        for (index, heading) in headings.iter().enumerate() {
+            while let Some(&top) = stack.last() {
+                if headings[top].level < heading.level {
+                    break;
+                }
+                stack.pop();
+            }
+            parent[index] = stack.last().copied();
+            stack.push(index);
+        }
+
+        // Taille du sous-arbre (entrée incluse), pour `/Count`.
+        let mut subtree = vec![1i64; count];
+        for index in (0..count).rev() {
+            if let Some(above) = parent[index] {
+                subtree[above] += subtree[index];
+            }
+        }
+
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); count];
+        let mut root_children: Vec<usize> = Vec::new();
+        for (index, above) in parent.iter().enumerate() {
+            match above {
+                Some(above) => children[*above].push(index),
+                None => root_children.push(index),
+            }
+        }
+
+        for index in 0..count {
+            let parent_obj = Object::Reference(match parent[index] {
+                Some(above) => item_ids[above],
+                None => root_id,
+            });
+            let dict = self
+                .inner_mut()
+                .get_object_mut(item_ids[index])
+                .map_err(|e| Error::Pdf(format!("signet {index} : {e}")))?
+                .as_dict_mut()
+                .map_err(|e| Error::Pdf(format!("signet {index} : {e}")))?;
+            dict.set("Parent", parent_obj);
+            if let (Some(first), Some(last)) = (children[index].first(), children[index].last()) {
+                dict.set("First", Object::Reference(item_ids[*first]));
+                dict.set("Last", Object::Reference(item_ids[*last]));
+                dict.set("Count", Object::Integer(subtree[index] - 1));
+            }
+        }
+
+        self.link_siblings(&root_children, item_ids)?;
+        for siblings in &children {
+            self.link_siblings(siblings, item_ids)?;
+        }
+
+        let root = self
+            .inner_mut()
+            .get_object_mut(root_id)
+            .map_err(|e| Error::Pdf(format!("racine du plan : {e}")))?
+            .as_dict_mut()
+            .map_err(|e| Error::Pdf(format!("racine du plan : {e}")))?;
+        if let (Some(first), Some(last)) = (root_children.first(), root_children.last()) {
+            root.set("First", Object::Reference(item_ids[*first]));
+            root.set("Last", Object::Reference(item_ids[*last]));
+        }
+        root.set("Count", Object::Integer(count as i64));
+
+        Ok(())
+    }
+
+    /// Chaîne `/Prev` `/Next` entre entrées sœurs.
+    fn link_siblings(&mut self, siblings: &[usize], item_ids: &[ObjectId]) -> Result<()> {
+        for pair in siblings.windows(2) {
+            let (before, after) = (item_ids[pair[0]], item_ids[pair[1]]);
+            self.set_dict_key(before, "Next", Object::Reference(after))?;
+            self.set_dict_key(after, "Prev", Object::Reference(before))?;
+        }
+        Ok(())
+    }
+
+    /// Écrit une clé dans le dictionnaire d'un objet.
+    fn set_dict_key(&mut self, id: ObjectId, key: &str, value: Object) -> Result<()> {
+        let dict = self
+            .inner_mut()
+            .get_object_mut(id)
+            .map_err(|e| Error::Pdf(format!("signet : {e}")))?
+            .as_dict_mut()
+            .map_err(|e| Error::Pdf(format!("signet : {e}")))?;
+        dict.set(key, value);
+        Ok(())
+    }
+
+    /// Retire la clé `/Outlines` du catalogue, si présente.
+    fn drop_outline_key(&mut self) {
+        if let Ok(catalog) = self.inner_mut().catalog_mut() {
+            catalog.remove(b"Outlines");
+        }
     }
 
     /// Pièces jointes déclarées dans `/Names /EmbeddedFiles`.
@@ -307,6 +623,42 @@ fn object_text(object: &Object) -> Option<String> {
         Object::Name(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
         _ => None,
     }
+}
+
+/// Clé de comparaison d'une taille de police, arrondie au dixième.
+fn size_key(size: f32) -> u32 {
+    (size.max(0.0) * 10.0).round() as u32
+}
+
+/// Taille la plus fréquente (à égalité, la plus petite).
+fn most_frequent(sizes: &[u32]) -> Option<u32> {
+    let mut counts: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
+    for &size in sizes {
+        *counts.entry(size).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+        .map(|(size, _)| size)
+}
+
+/// Regroupe des fragments en lignes, de haut en bas.
+fn group_lines(page: u32, fragments: &[TextFragment]) -> Vec<TextLine> {
+    let mut sorted: Vec<&TextFragment> = fragments.iter().collect();
+    sorted.sort_by(|a, b| {
+        b.rect[1]
+            .partial_cmp(&a.rect[1])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut lines: Vec<TextLine> = Vec::new();
+    for fragment in sorted {
+        match lines.last_mut() {
+            Some(line) if (line.baseline - fragment.rect[1]).abs() <= 2.0 => line.push(fragment),
+            _ => lines.push(TextLine::new(page, fragment)),
+        }
+    }
+    lines
 }
 
 /// Décode une chaîne PDF : UTF-16BE avec BOM, sinon Latin-1/ASCII.
