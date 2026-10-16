@@ -33,12 +33,6 @@ use youpdf_core::{
 // Palette
 // --------------------------------------------------------------------------
 
-const CANVAS_BG: Color32 = Color32::from_rgb(0x30, 0x30, 0x30);
-/// Rouge des marques de caviardage.
-const REDACT_RED: Color32 = Color32::from_rgb(0xE0, 0x4F, 0x5F);
-/// Jaune des correspondances de recherche.
-const SEARCH_MATCH: Color32 = Color32::from_rgba_premultiplied(0x50, 0x40, 0x05, 0x6E);
-
 /// Fonds proposés dans le panneau Aspect.
 const CANVAS_STYLES: [Color32; 4] = [
     Color32::from_rgb(0x30, 0x30, 0x30),
@@ -46,15 +40,136 @@ const CANVAS_STYLES: [Color32; 4] = [
     Color32::from_rgb(0x4A, 0x4A, 0x4A),
     Color32::from_rgb(0xD8, 0xD8, 0xD8),
 ];
-const CHROME_BG: Color32 = Color32::from_rgb(0x28, 0x28, 0x28);
-const WIDGET_BG: Color32 = Color32::from_rgb(0x38, 0x38, 0x38);
-const HOVER_BG: Color32 = Color32::from_rgb(0x48, 0x48, 0x48);
-const ACCENT: Color32 = Color32::from_rgb(0x7A, 0x7E, 0xF6);
-const MUTED: Color32 = Color32::from_rgb(0xA0, 0xA0, 0xA0);
-const ICON: Color32 = Color32::from_rgb(0xC8, 0xC8, 0xC8);
-const ICON_BRIGHT: Color32 = Color32::from_rgb(0xE8, 0xE8, 0xE8);
-const THUMB_TINT: Color32 = Color32::from_rgb(0xE8, 0xE8, 0xF8);
-const SEPARATOR: Color32 = Color32::from_rgb(0x3A, 0x3A, 0x3A);
+
+/// Couleurs de l'interface, choisies par le thème.
+///
+/// La palette est lue à l'exécution (`pal()`) parce que le thème se change
+/// sans redémarrer ; tout le chrome de YouPDF se peint avec elle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Palette {
+    canvas_bg: Color32,
+    chrome_bg: Color32,
+    widget_bg: Color32,
+    hover_bg: Color32,
+    accent: Color32,
+    muted: Color32,
+    icon: Color32,
+    icon_bright: Color32,
+    thumb_tint: Color32,
+    separator: Color32,
+    redact_red: Color32,
+    search_match: Color32,
+}
+
+/// Thème de l'interface, comme dans le menu Affichage de l'application de
+/// référence.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Theme {
+    /// Sombre, la palette d'origine.
+    #[default]
+    Dark,
+    /// Clair : chrome et canevas clairs.
+    Light,
+    /// Menthe : vert d'eau, pour un écran clair teinté.
+    Mint,
+    /// Nuit étoilée : bleu très sombre, canevas noir.
+    Starry,
+}
+
+impl Theme {
+    /// Tous les thèmes, dans l'ordre du menu.
+    const ALL: [Theme; 4] = [Theme::Dark, Theme::Light, Theme::Mint, Theme::Starry];
+
+    /// Nom affiché dans le menu.
+    fn label(self) -> &'static str {
+        match self {
+            Theme::Dark => "Dark",
+            Theme::Light => "Light",
+            Theme::Mint => "Mint",
+            Theme::Starry => "Starry",
+        }
+    }
+
+    /// Palette associée.
+    fn palette(self) -> Palette {
+        match self {
+            Theme::Dark => DARK,
+            Theme::Light => LIGHT,
+            Theme::Mint => MINT,
+            Theme::Starry => STARRY,
+        }
+    }
+}
+
+const DARK: Palette = Palette {
+    canvas_bg: Color32::from_rgb(0x30, 0x30, 0x30),
+    chrome_bg: Color32::from_rgb(0x28, 0x28, 0x28),
+    widget_bg: Color32::from_rgb(0x38, 0x38, 0x38),
+    hover_bg: Color32::from_rgb(0x48, 0x48, 0x48),
+    accent: Color32::from_rgb(0x7A, 0x7E, 0xF6),
+    muted: Color32::from_rgb(0xA0, 0xA0, 0xA0),
+    icon: Color32::from_rgb(0xC8, 0xC8, 0xC8),
+    icon_bright: Color32::from_rgb(0xE8, 0xE8, 0xE8),
+    thumb_tint: Color32::from_rgb(0xE8, 0xE8, 0xF8),
+    separator: Color32::from_rgb(0x3A, 0x3A, 0x3A),
+    redact_red: Color32::from_rgb(0xE0, 0x4F, 0x5F),
+    search_match: Color32::from_rgba_premultiplied(0x50, 0x40, 0x05, 0x6E),
+};
+
+const LIGHT: Palette = Palette {
+    canvas_bg: Color32::from_rgb(0xEC, 0xEC, 0xEE),
+    chrome_bg: Color32::from_rgb(0xF6, 0xF6, 0xF8),
+    widget_bg: Color32::from_rgb(0xE4, 0xE4, 0xE8),
+    hover_bg: Color32::from_rgb(0xD4, 0xD4, 0xDA),
+    accent: Color32::from_rgb(0x5B, 0x5F, 0xE0),
+    muted: Color32::from_rgb(0x66, 0x66, 0x6E),
+    icon: Color32::from_rgb(0x44, 0x44, 0x4C),
+    icon_bright: Color32::from_rgb(0x1E, 0x1E, 0x24),
+    thumb_tint: Color32::from_rgb(0x30, 0x30, 0x38),
+    separator: Color32::from_rgb(0xD0, 0xD0, 0xD6),
+    redact_red: Color32::from_rgb(0xC8, 0x38, 0x48),
+    search_match: Color32::from_rgba_premultiplied(0xF0, 0xD0, 0x40, 0x9C),
+};
+
+const MINT: Palette = Palette {
+    canvas_bg: Color32::from_rgb(0xDF, 0xEE, 0xE7),
+    chrome_bg: Color32::from_rgb(0xF0, 0xFA, 0xF4),
+    widget_bg: Color32::from_rgb(0xDC, 0xEC, 0xE3),
+    hover_bg: Color32::from_rgb(0xC8, 0xE0, 0xD3),
+    accent: Color32::from_rgb(0x18, 0x9E, 0x77),
+    muted: Color32::from_rgb(0x4E, 0x6B, 0x5D),
+    icon: Color32::from_rgb(0x2E, 0x4A, 0x3D),
+    icon_bright: Color32::from_rgb(0x14, 0x2C, 0x21),
+    thumb_tint: Color32::from_rgb(0x1E, 0x3A, 0x2C),
+    separator: Color32::from_rgb(0xC2, 0xDA, 0xCD),
+    redact_red: Color32::from_rgb(0xC8, 0x38, 0x48),
+    search_match: Color32::from_rgba_premultiplied(0xF5, 0xD8, 0x50, 0x9C),
+};
+
+const STARRY: Palette = Palette {
+    canvas_bg: Color32::from_rgb(0x08, 0x0A, 0x18),
+    chrome_bg: Color32::from_rgb(0x12, 0x16, 0x2A),
+    widget_bg: Color32::from_rgb(0x1C, 0x22, 0x3C),
+    hover_bg: Color32::from_rgb(0x2A, 0x32, 0x52),
+    accent: Color32::from_rgb(0x8E, 0x9B, 0xFF),
+    muted: Color32::from_rgb(0x9A, 0xA4, 0xC8),
+    icon: Color32::from_rgb(0xC2, 0xCA, 0xEA),
+    icon_bright: Color32::from_rgb(0xEE, 0xF2, 0xFF),
+    thumb_tint: Color32::from_rgb(0xE0, 0xE8, 0xFF),
+    separator: Color32::from_rgb(0x26, 0x2E, 0x4C),
+    redact_red: Color32::from_rgb(0xFF, 0x6B, 0x7A),
+    search_match: Color32::from_rgba_premultiplied(0x60, 0x50, 0x10, 0x7E),
+};
+
+thread_local! {
+    /// Palette courante, lue par tout le chrome.
+    static PALETTE: std::cell::Cell<Palette> = const { std::cell::Cell::new(DARK) };
+}
+
+/// Palette courante.
+fn pal() -> Palette {
+    PALETTE.with(std::cell::Cell::get)
+}
 
 const TITLE_H: f32 = 40.0;
 const RAIL_W: f32 = 52.0;
@@ -153,6 +268,8 @@ enum MenuAction {
     GenerateOutline,
     /// Retire tous les signets.
     ClearOutline,
+    /// Change le thème de l'interface.
+    Theme(Theme),
 }
 
 /// Répartit les pages en rangées selon la disposition choisie. Chaque rangée
@@ -617,6 +734,9 @@ pub struct YouPdfApp {
     extract_open: bool,
     extract_tables: Vec<ExtractedTable>,
     extract_pairs: Vec<KeyValue>,
+    /// Thème choisi, et celui déjà appliqué à egui.
+    theme: Theme,
+    applied_theme: Theme,
     /// Présentation plein écran, une page à la fois.
     slideshow: bool,
     /// Fenêtre « Traitement par lots ».
@@ -732,7 +852,8 @@ pub struct YouPdfApp {
 
 impl YouPdfApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
-        apply_theme(&cc.egui_ctx);
+        install_fonts(&cc.egui_ctx);
+        apply_theme(&cc.egui_ctx, Theme::Dark);
 
         let (renderer, renderer_label): (Box<dyn Renderer>, &'static str) =
             match PdfiumRenderer::load() {
@@ -800,6 +921,8 @@ impl YouPdfApp {
             extract_open: false,
             extract_tables: Vec::new(),
             extract_pairs: Vec::new(),
+            theme: Theme::Dark,
+            applied_theme: Theme::Dark,
             slideshow: false,
             batch_open: false,
             batch_files: Vec::new(),
@@ -1129,12 +1252,12 @@ impl YouPdfApp {
                 ui.label(
                     RichText::new(format!("\u{201c}{title}\u{201d} has unsaved changes."))
                         .size(12.5)
-                        .color(ICON_BRIGHT),
+                        .color(pal().icon_bright),
                 );
                 ui.label(
                     RichText::new("Closing now would lose them.")
                         .size(11.0)
-                        .color(MUTED),
+                        .color(pal().muted),
                 );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -1187,7 +1310,7 @@ impl YouPdfApp {
             .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.set_max_width(380.0);
-                ui.label(RichText::new("Text").size(12.0).color(MUTED));
+                ui.label(RichText::new("Text").size(12.0).color(pal().muted));
                 for format in [
                     TextFormat::Plain,
                     TextFormat::Markdown,
@@ -1208,7 +1331,7 @@ impl YouPdfApp {
                     }
                 }
                 ui.add_space(6.0);
-                ui.label(RichText::new("Images").size(12.0).color(MUTED));
+                ui.label(RichText::new("Images").size(12.0).color(pal().muted));
                 for (format, label) in [
                     (ImageFormat::Png, "PNG (one file per page)"),
                     (ImageFormat::Jpeg, "JPEG (one file per page)"),
@@ -1226,7 +1349,7 @@ impl YouPdfApp {
                 }
                 if self.export_image {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Resolution").size(12.0).color(MUTED));
+                        ui.label(RichText::new("Resolution").size(12.0).color(pal().muted));
                         ui.add(
                             egui::DragValue::new(&mut self.export_dpi)
                                 .range(36.0..=600.0)
@@ -1244,7 +1367,7 @@ impl YouPdfApp {
                          are not rebuilt, and pages without extractable text come out empty."
                     })
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
                 ui.add_space(8.0);
                 if ui.button("Export…").clicked() {
@@ -1464,14 +1587,14 @@ impl YouPdfApp {
                     );
                     if resp.hovered() {
                         ui.painter()
-                            .rect_filled(rect, Rounding::same(6.0), WIDGET_BG);
+                            .rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
                     }
                     ui.painter().text(
                         pos2(rect.min.x + indent, rect.center().y),
                         Align2::LEFT_CENTER,
                         shorten(title, 30),
                         FontId::proportional(12.0),
-                        ICON_BRIGHT,
+                        pal().icon_bright,
                     );
                     if let Some(page) = page {
                         ui.painter().text(
@@ -1479,7 +1602,7 @@ impl YouPdfApp {
                             Align2::RIGHT_CENTER,
                             format!("p.{page}"),
                             FontId::proportional(10.5),
-                            MUTED,
+                            pal().muted,
                         );
                     }
                     if resp.clicked() {
@@ -1615,14 +1738,14 @@ impl YouPdfApp {
                         .allocate_exact_size(vec2(PANEL_W - 24.0, 40.0), Sense::click());
                     if resp.hovered() {
                         ui.painter()
-                            .rect_filled(rect, Rounding::same(6.0), WIDGET_BG);
+                            .rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
                     }
                     ui.painter().text(
                         pos2(rect.min.x + 10.0, rect.min.y + 12.0),
                         Align2::LEFT_CENTER,
                         shorten(name, 26),
                         FontId::proportional(12.0),
-                        ICON_BRIGHT,
+                        pal().icon_bright,
                     );
                     let detail = if value.is_empty() {
                         format!("{kind} · empty")
@@ -1634,7 +1757,7 @@ impl YouPdfApp {
                         Align2::LEFT_CENTER,
                         if *read_only { format!("{detail} · read-only") } else { detail },
                         FontId::proportional(10.5),
-                        MUTED,
+                        pal().muted,
                     );
                     if let Some(page) = page {
                         ui.painter().text(
@@ -1642,7 +1765,7 @@ impl YouPdfApp {
                             Align2::RIGHT_CENTER,
                             format!("p.{page}"),
                             FontId::proportional(10.0),
-                            MUTED,
+                            pal().muted,
                         );
                     }
                     if resp.clicked() {
@@ -1701,14 +1824,14 @@ impl YouPdfApp {
         let mut apply = false;
         let mut close = false;
         Frame::none()
-            .fill(WIDGET_BG)
+            .fill(pal().widget_bg)
             .rounding(Rounding::same(8.0))
             .inner_margin(Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
                 ui.label(
                     RichText::new(format!("{}  ({})", field.name, form_kind_label(&field.kind)))
                         .size(11.5)
-                        .color(ICON_BRIGHT),
+                        .color(pal().icon_bright),
                 );
                 ui.add_space(4.0);
                 match field.kind {
@@ -1763,11 +1886,11 @@ impl YouPdfApp {
             FormFieldKind::Choice | FormFieldKind::MultiChoice
         );
         Frame::none()
-            .fill(WIDGET_BG)
+            .fill(pal().widget_bg)
             .rounding(Rounding::same(8.0))
             .inner_margin(Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
-                ui.label(RichText::new("Properties").size(11.5).color(ICON_BRIGHT));
+                ui.label(RichText::new("Properties").size(11.5).color(pal().icon_bright));
                 ui.add_space(4.0);
                 ui.add_sized(
                     vec2(PANEL_W - 46.0, 24.0),
@@ -1880,19 +2003,19 @@ impl YouPdfApp {
                         ui.allocate_exact_size(vec2(PANEL_W - 24.0, 44.0), Sense::click());
                     if resp.hovered() {
                         ui.painter()
-                            .rect_filled(rect, Rounding::same(6.0), WIDGET_BG);
+                            .rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
                     }
                     let icon_rect = Rect::from_center_size(
                         pos2(rect.min.x + 16.0, rect.center().y),
                         vec2(15.0, 15.0),
                     );
-                    icon_attach(ui.painter(), icon_rect, ICON_BRIGHT);
+                    icon_attach(ui.painter(), icon_rect, pal().icon_bright);
                     ui.painter().text(
                         pos2(rect.min.x + 30.0, rect.min.y + 13.0),
                         Align2::LEFT_CENTER,
                         shorten(name, 24),
                         FontId::proportional(12.0),
-                        ICON_BRIGHT,
+                        pal().icon_bright,
                     );
                     let mut detail = size
                         .map(format_size)
@@ -1905,7 +2028,7 @@ impl YouPdfApp {
                         Align2::LEFT_CENTER,
                         detail,
                         FontId::proportional(10.5),
-                        MUTED,
+                        pal().muted,
                     );
                     let save_rect = Rect::from_center_size(
                         pos2(rect.max.x - 18.0, rect.center().y),
@@ -1916,7 +2039,7 @@ impl YouPdfApp {
                     icon_save(
                         ui.painter(),
                         save_rect.shrink(3.0),
-                        if save_resp.hovered() { ICON_BRIGHT } else { ICON },
+                        if save_resp.hovered() { pal().icon_bright } else { pal().icon },
                     );
                     if save_resp.clicked() {
                         save = Some(idx);
@@ -1956,7 +2079,7 @@ impl YouPdfApp {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.add_space(12.0);
-            ui.label(RichText::new("Background").size(11.5).color(MUTED));
+            ui.label(RichText::new("Background").size(11.5).color(pal().muted));
         });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
@@ -1970,7 +2093,7 @@ impl YouPdfApp {
                     ui.painter().rect_stroke(
                         rect.expand(2.0),
                         7.0,
-                        Stroke::new(1.5_f32, ACCENT),
+                        Stroke::new(1.5_f32, pal().accent),
                     );
                 }
                 if resp.clicked() {
@@ -1991,7 +2114,7 @@ impl YouPdfApp {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.add_space(12.0);
-            ui.label(RichText::new("Thumbnails").size(11.5).color(MUTED));
+            ui.label(RichText::new("Thumbnails").size(11.5).color(pal().muted));
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -2009,7 +2132,7 @@ impl YouPdfApp {
             ui.label(
                 RichText::new("Notation")
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
             );
         });
         ui.add_space(4.0);
@@ -2018,7 +2141,7 @@ impl YouPdfApp {
             ui.label(
                 RichText::new("Colours come from the current tool presets.")
                     .size(10.5)
-                    .color(MUTED),
+                    .color(pal().muted),
             );
         });
     }
@@ -2459,9 +2582,9 @@ impl YouPdfApp {
             .order(Order::Foreground)
             .show(ctx, |ui| {
                 Frame::none()
-                    .fill(CHROME_BG)
+                    .fill(pal().chrome_bg)
                     .rounding(Rounding::same(8.0))
-                    .stroke(Stroke::new(1.0_f32, SEPARATOR))
+                    .stroke(Stroke::new(1.0_f32, pal().separator))
                     .inner_margin(Margin::symmetric(10.0, 8.0))
                     .show(ui, |ui| {
                         // Type de marque (surligneur) ou de forme : le même
@@ -2517,7 +2640,7 @@ impl YouPdfApp {
                         if tool != 3 && tool != 8 {
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new("Width").size(11.0).color(MUTED));
+                                ui.label(RichText::new("Width").size(11.0).color(pal().muted));
                                 ui.add(
                                     egui::Slider::new(&mut self.annot_width, 0.5..=8.0)
                                         .fixed_decimals(1),
@@ -2526,7 +2649,7 @@ impl YouPdfApp {
                         }
                         if wants_opacity {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new("Opacity").size(11.0).color(MUTED));
+                                ui.label(RichText::new("Opacity").size(11.0).color(pal().muted));
                                 ui.add(
                                     egui::Slider::new(&mut self.annot_opacity, 0.1..=1.0)
                                         .fixed_decimals(2),
@@ -2547,7 +2670,7 @@ impl YouPdfApp {
                             ui.label(
                                 RichText::new("Color applies to new text")
                                     .size(10.0)
-                                    .color(MUTED),
+                                    .color(pal().muted),
                             );
                         }
                         if ui.button("Done").clicked() {
@@ -2913,7 +3036,7 @@ impl YouPdfApp {
     fn title_bar(&mut self, ctx: &egui::Context) {
         TopBottomPanel::top("titlebar")
             .exact_height(TITLE_H)
-            .frame(Frame::none().fill(CHROME_BG))
+            .frame(Frame::none().fill(pal().chrome_bg))
             .show(ctx, |ui| {
                 // Drag fenêtre : interaction posée en premier = priorité basse,
                 // les boutons ajoutés ensuite restent cliquables.
@@ -2935,7 +3058,7 @@ impl YouPdfApp {
                     let mut close = None;
                     for (idx, tab) in self.tabs.iter().enumerate() {
                         let selected = idx == self.active;
-                        let color = if selected { ICON_BRIGHT } else { MUTED };
+                        let color = if selected { pal().icon_bright } else { pal().muted };
                         let label = if tab.dirty {
                             format!("{} •", shorten(&tab.title, 22))
                         } else {
@@ -2955,7 +3078,7 @@ impl YouPdfApp {
                             ui.allocate_exact_size(vec2(width, 30.0), Sense::click());
 
                         if selected {
-                            ui.painter().rect_filled(rect, Rounding::same(8.0), WIDGET_BG);
+                            ui.painter().rect_filled(rect, Rounding::same(8.0), pal().widget_bg);
                         } else if resp.hovered() {
                             ui.painter().rect_filled(
                                 rect,
@@ -2986,7 +3109,7 @@ impl YouPdfApp {
                             icon_close(
                                 ui.painter(),
                                 x_rect,
-                                if x_resp.hovered() { ICON_BRIGHT } else { MUTED },
+                                if x_resp.hovered() { pal().icon_bright } else { pal().muted },
                             );
                             if x_resp.clicked() {
                                 close = Some(idx);
@@ -3009,7 +3132,7 @@ impl YouPdfApp {
                         // Avatar maison (identité YouPDF).
                         let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
                         ui.painter()
-                            .circle_filled(rect.center(), 10.5, ACCENT);
+                            .circle_filled(rect.center(), 10.5, pal().accent);
                         ui.painter().text(
                             rect.center(),
                             Align2::CENTER_CENTER,
@@ -3041,7 +3164,7 @@ impl YouPdfApp {
         SidePanel::left("rail")
             .exact_width(RAIL_W)
             .resizable(false)
-            .frame(Frame::none().fill(CHROME_BG))
+            .frame(Frame::none().fill(pal().chrome_bg))
             .show(ctx, |ui| {
                 ui.add_space(10.0);
                 ui.vertical_centered(|ui| {
@@ -3085,13 +3208,13 @@ impl YouPdfApp {
                 ui.label(
                     RichText::new("No annotations yet")
                         .size(12.0)
-                        .color(MUTED),
+                        .color(pal().muted),
                 );
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new("Use Comment mode to add one")
                         .size(11.0)
-                        .color(MUTED),
+                        .color(pal().muted),
                 );
             });
             return;
@@ -3128,7 +3251,7 @@ impl YouPdfApp {
                         .allocate_exact_size(vec2(PANEL_W - 24.0, 44.0), Sense::click());
                     if resp.hovered() {
                         ui.painter()
-                            .rect_filled(rect, Rounding::same(6.0), WIDGET_BG);
+                            .rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
                     }
                     let swatch = Rect::from_center_size(
                         pos2(rect.min.x + 16.0, rect.center().y),
@@ -3144,21 +3267,21 @@ impl YouPdfApp {
                         Align2::LEFT_CENTER,
                         format!("{kind} · p.{page}"),
                         FontId::proportional(11.5),
-                        ICON_BRIGHT,
+                        pal().icon_bright,
                     );
                     ui.painter().text(
                         pos2(rect.min.x + 28.0, rect.min.y + 28.0),
                         Align2::LEFT_CENTER,
                         shorten(text, 26),
                         FontId::proportional(11.0),
-                        MUTED,
+                        pal().muted,
                     );
                     ui.painter().text(
                         pos2(rect.max.x - 10.0, rect.min.y + 12.0),
                         Align2::RIGHT_CENTER,
                         when.get(..10).unwrap_or(""),
                         FontId::proportional(9.5),
-                        MUTED,
+                        pal().muted,
                     );
                     let x_rect = Rect::from_center_size(
                         pos2(rect.max.x - 16.0, rect.max.y - 12.0),
@@ -3168,7 +3291,7 @@ impl YouPdfApp {
                     icon_close(
                         ui.painter(),
                         x_rect,
-                        if x_resp.hovered() { ICON_BRIGHT } else { MUTED },
+                        if x_resp.hovered() { pal().icon_bright } else { pal().muted },
                     );
                     if x_resp.clicked() {
                         remove = Some(*idx);
@@ -3197,7 +3320,7 @@ impl YouPdfApp {
         SidePanel::left("content")
             .exact_width(PANEL_W)
             .resizable(false)
-            .frame(Frame::none().fill(CANVAS_BG).stroke(Stroke::new(1.0_f32, SEPARATOR)))
+            .frame(Frame::none().fill(pal().canvas_bg).stroke(Stroke::new(1.0_f32, pal().separator)))
             .show(ctx, |ui| {
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
@@ -3218,7 +3341,7 @@ impl YouPdfApp {
                             icon_grid(
                                 ui.painter(),
                                 rect.shrink(7.0),
-                                if resp.hovered() { ICON_BRIGHT } else { ICON },
+                                if resp.hovered() { pal().icon_bright } else { pal().icon },
                             );
                             if resp.clicked() {
                                 self.organize_open = true;
@@ -3241,7 +3364,7 @@ impl YouPdfApp {
                             icon_funnel(
                                 ui.painter(),
                                 rect.shrink(7.0),
-                                if resp.hovered() || active { ICON_BRIGHT } else { ICON },
+                                if resp.hovered() || active { pal().icon_bright } else { pal().icon },
                             );
                             if resp.clicked() {
                                 ui.memory_mut(|m| m.toggle_popup(Id::new("search_filters")));
@@ -3258,7 +3381,7 @@ impl YouPdfApp {
                                     ui.label(
                                         RichText::new("Search options")
                                             .size(11.0)
-                                            .color(MUTED),
+                                            .color(pal().muted),
                                     );
                                     ui.add_space(4.0);
                                     refilter |= ui
@@ -3280,7 +3403,7 @@ impl YouPdfApp {
                 ui.painter().hline(
                     ui.max_rect().x_range(),
                     sep_y,
-                    Stroke::new(1.0_f32, SEPARATOR),
+                    Stroke::new(1.0_f32, pal().separator),
                 );
                 ui.add_space(10.0);
                 match panel {
@@ -3329,7 +3452,7 @@ impl YouPdfApp {
                         ui.painter().rect_filled(
                             img_rect.expand(5.0),
                             Rounding::same(4.0),
-                            THUMB_TINT,
+                            pal().thumb_tint,
                         );
                     } else if resp.hovered() {
                         ui.painter().rect_filled(
@@ -3353,7 +3476,7 @@ impl YouPdfApp {
                         ui.painter().rect_stroke(
                             img_rect.expand(5.0),
                             4.0,
-                            Stroke::new(1.0_f32, ACCENT),
+                            Stroke::new(1.0_f32, pal().accent),
                         );
                     }
                     ui.painter().text(
@@ -3361,7 +3484,7 @@ impl YouPdfApp {
                         Align2::CENTER_CENTER,
                         page.to_string(),
                         FontId::proportional(11.0),
-                        if selected { ACCENT } else { MUTED },
+                        if selected { pal().accent } else { pal().muted },
                     );
                     if resp.clicked() {
                         jump = Some(page as usize);
@@ -3396,7 +3519,7 @@ impl YouPdfApp {
                 Align2::CENTER_CENTER,
                 "Aa",
                 FontId::proportional(12.0),
-                if resp.hovered() { ICON_BRIGHT } else { ICON },
+                if resp.hovered() { pal().icon_bright } else { pal().icon },
             );
             if resp.clicked() {
                 self.replace_open = !self.replace_open;
@@ -3491,7 +3614,7 @@ impl YouPdfApp {
                             icon_trash(
                                 ui.painter(),
                                 rect.shrink(7.0),
-                                if resp.hovered() { ICON_BRIGHT } else { ICON },
+                                if resp.hovered() { pal().icon_bright } else { pal().icon },
                             );
                             if resp.clicked() {
                                 clear_history = true;
@@ -3503,13 +3626,13 @@ impl YouPdfApp {
                         let (rect, resp) =
                             ui.allocate_exact_size(vec2(PANEL_W - 24.0, 28.0), Sense::click());
                         ui.painter()
-                            .rect_filled(rect, Rounding::same(6.0), WIDGET_BG);
+                            .rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
                         ui.painter().text(
                             pos2(rect.min.x + 10.0, rect.center().y),
                             Align2::LEFT_CENTER,
                             shorten(query, 22),
                             FontId::proportional(11.5),
-                            ICON_BRIGHT,
+                            pal().icon_bright,
                         );
                         let x_rect = Rect::from_center_size(
                             pos2(rect.max.x - 14.0, rect.center().y),
@@ -3520,7 +3643,7 @@ impl YouPdfApp {
                         icon_close(
                             ui.painter(),
                             x_rect,
-                            if x_resp.hovered() { ICON_BRIGHT } else { MUTED },
+                            if x_resp.hovered() { pal().icon_bright } else { pal().muted },
                         );
                         if x_resp.clicked() {
                             forget = Some(idx);
@@ -3562,7 +3685,7 @@ impl YouPdfApp {
                                 icon_caret_up(
                                     ui.painter(),
                                     rect.shrink(8.0),
-                                    if resp.hovered() { ICON_BRIGHT } else { ICON },
+                                    if resp.hovered() { pal().icon_bright } else { pal().icon },
                                 );
                                 if resp.clicked() {
                                     step = Some(-1);
@@ -3582,9 +3705,9 @@ impl YouPdfApp {
                                 rect,
                                 Rounding::same(6.0),
                                 if active == Some(idx) {
-                                    HOVER_BG
+                                    pal().hover_bg
                                 } else {
-                                    WIDGET_BG
+                                    pal().widget_bg
                                 },
                             );
                         }
@@ -3593,14 +3716,14 @@ impl YouPdfApp {
                             Align2::LEFT_CENTER,
                             format!("#{}", result.page),
                             FontId::proportional(11.5),
-                            ACCENT,
+                            pal().accent,
                         );
                         ui.painter().text(
                             pos2(rect.min.x + 40.0, rect.center().y),
                             Align2::LEFT_CENTER,
                             shorten(result.context.trim(), 24),
                             FontId::proportional(11.0),
-                            MUTED,
+                            pal().muted,
                         );
                         if resp.clicked() {
                             jump = Some(idx);
@@ -3697,7 +3820,7 @@ impl YouPdfApp {
                             format!("{count} of {total} page(s) selected")
                         })
                         .size(11.0)
-                        .color(MUTED),
+                        .color(pal().muted),
                     );
                     if ui.small_button("Select all").clicked() {
                         selected = (1..=total).collect();
@@ -3706,9 +3829,9 @@ impl YouPdfApp {
                         selected.clear();
                     }
                     ui.add_space(8.0);
-                    ui.label(RichText::new("Split every").size(11.0).color(MUTED));
+                    ui.label(RichText::new("Split every").size(11.0).color(pal().muted));
                     ui.add(egui::DragValue::new(&mut split_per).range(1..=200).speed(0.2));
-                    ui.label(RichText::new("page(s)").size(11.0).color(MUTED));
+                    ui.label(RichText::new("page(s)").size(11.0).color(pal().muted));
                 });
                 ui.add_space(6.0);
                 ui.separator();
@@ -3732,7 +3855,7 @@ impl YouPdfApp {
                                     img_rect.expand(3.0),
                                     Rounding::same(3.0),
                                     if picked {
-                                        THUMB_TINT
+                                        pal().thumb_tint
                                     } else {
                                         Color32::from_rgb(0x28, 0x28, 0x28)
                                     },
@@ -3751,7 +3874,7 @@ impl YouPdfApp {
                                     ui.painter().rect_stroke(
                                         img_rect.expand(3.0),
                                         3.0,
-                                        Stroke::new(1.5_f32, ACCENT),
+                                        Stroke::new(1.5_f32, pal().accent),
                                     );
                                 }
                                 ui.painter().text(
@@ -3759,13 +3882,13 @@ impl YouPdfApp {
                                     Align2::CENTER_CENTER,
                                     page.to_string(),
                                     FontId::proportional(11.0),
-                                    if picked { ACCENT } else { MUTED },
+                                    if picked { pal().accent } else { pal().muted },
                                 );
                                 if page as usize == current {
                                     ui.painter().circle_filled(
                                         pos2(rect.min.x + 8.0, rect.min.y + 8.0),
                                         3.0,
-                                        ACCENT,
+                                        pal().accent,
                                     );
                                 }
                                 if resp.clicked() {
@@ -3962,7 +4085,7 @@ impl YouPdfApp {
                 ui.label(
                     RichText::new(format!("{areas} area(s) will be blacked out permanently."))
                         .size(12.5)
-                        .color(ICON_BRIGHT),
+                        .color(pal().icon_bright),
                 );
                 ui.add_space(6.0);
                 ui.label(
@@ -3970,7 +4093,7 @@ impl YouPdfApp {
                         "Redaction replaces each marked page with an image: the text                          underneath is destroyed, not hidden, and cannot be recovered.                          Annotations overlapping a marked area are deleted.",
                     )
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
                 ui.add_space(8.0);
                 ui.checkbox(
@@ -3985,7 +4108,7 @@ impl YouPdfApp {
                     if ui
                         .add(
                             egui::Button::new(RichText::new("Apply").color(Color32::WHITE))
-                                .fill(REDACT_RED),
+                                .fill(pal().redact_red),
                         )
                         .clicked()
                     {
@@ -4021,20 +4144,20 @@ impl YouPdfApp {
             .order(Order::Foreground)
             .show(ctx, |ui| {
                 let inner = Frame::none()
-                    .fill(WIDGET_BG)
+                    .fill(pal().widget_bg)
                     .rounding(Rounding::same(8.0))
                     .inner_margin(Margin::symmetric(10.0, 5.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             let (rect, _) =
                                 ui.allocate_exact_size(vec2(15.0, 15.0), Sense::hover());
-                            icon_tools(ui.painter(), rect, ICON_BRIGHT);
+                            icon_tools(ui.painter(), rect, pal().icon_bright);
                             ui.add_space(6.0);
-                            ui.label(RichText::new("Tools").size(12.5).color(ICON_BRIGHT));
+                            ui.label(RichText::new("Tools").size(12.5).color(pal().icon_bright));
                             ui.add_space(4.0);
                             let (rect, _) =
                                 ui.allocate_exact_size(vec2(9.0, 9.0), Sense::hover());
-                            icon_chevron(ui.painter(), rect, MUTED);
+                            icon_chevron(ui.painter(), rect, pal().muted);
                         });
                     });
                 let rect = inner.response.rect;
@@ -4056,7 +4179,7 @@ impl YouPdfApp {
                 .order(Order::Foreground)
                 .show(ctx, |ui| {
                     Frame::none()
-                        .fill(WIDGET_BG)
+                        .fill(pal().widget_bg)
                         .rounding(Rounding::same(8.0))
                         .inner_margin(Margin::symmetric(4.0, 4.0))
                         .show(ui, |ui| {
@@ -4164,7 +4287,7 @@ impl YouPdfApp {
                 .order(Order::Foreground)
                 .show(ctx, |ui| {
                     Frame::none()
-                        .fill(WIDGET_BG)
+                        .fill(pal().widget_bg)
                         .rounding(Rounding::same(8.0))
                         .inner_margin(Margin::symmetric(4.0, 4.0))
                         .show(ui, |ui| {
@@ -4194,9 +4317,9 @@ impl YouPdfApp {
                 .order(Order::Foreground)
                 .show(ctx, |ui| {
                     Frame::none()
-                        .fill(CHROME_BG)
+                        .fill(pal().chrome_bg)
                         .rounding(Rounding::same(8.0))
-                        .stroke(Stroke::new(1.0_f32, SEPARATOR))
+                        .stroke(Stroke::new(1.0_f32, pal().separator))
                         .inner_margin(Margin::symmetric(4.0, 4.0))
                         .show(ui, |ui| {
                             for (idx, (label, shortcut, entry)) in TOOLS_MENU.iter().enumerate() {
@@ -4208,7 +4331,7 @@ impl YouPdfApp {
                                     ui.painter().hline(
                                         ui.max_rect().x_range(),
                                         sep,
-                                        Stroke::new(1.0_f32, SEPARATOR),
+                                        Stroke::new(1.0_f32, pal().separator),
                                     );
                                     ui.add_space(4.0);
                                 }
@@ -4252,7 +4375,7 @@ impl YouPdfApp {
             .order(Order::Foreground)
             .show(ctx, |ui| {
                 Frame::none()
-                    .fill(WIDGET_BG)
+                    .fill(pal().widget_bg)
                     .rounding(Rounding::same(8.0))
                     .inner_margin(Margin::symmetric(6.0, 4.0))
                     .show(ui, |ui| {
@@ -4271,11 +4394,11 @@ impl YouPdfApp {
                                 let (rect, resp) =
                                     ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
                                 let color = if !can_undo {
-                                    MUTED
+                                    pal().muted
                                 } else if resp.hovered() {
-                                    ICON_BRIGHT
+                                    pal().icon_bright
                                 } else {
-                                    ICON
+                                    pal().icon
                                 };
                                 icon_undo(ui.painter(), rect.shrink(6.0), color);
                                 resp
@@ -4287,11 +4410,11 @@ impl YouPdfApp {
                                 let (rect, resp) =
                                     ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
                                 let color = if !can_redo {
-                                    MUTED
+                                    pal().muted
                                 } else if resp.hovered() {
-                                    ICON_BRIGHT
+                                    pal().icon_bright
                                 } else {
-                                    ICON
+                                    pal().icon
                                 };
                                 icon_redo(ui.painter(), rect.shrink(6.0), color);
                                 resp
@@ -4302,7 +4425,7 @@ impl YouPdfApp {
                             let more = {
                                 let (rect, resp) =
                                     ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
-                                let color = if resp.hovered() { ICON_BRIGHT } else { MUTED };
+                                let color = if resp.hovered() { pal().icon_bright } else { pal().muted };
                                 icon_ellipsis(ui.painter(), rect.shrink(6.0), color);
                                 resp
                             };
@@ -4322,9 +4445,9 @@ impl YouPdfApp {
                 .order(Order::Foreground)
                 .show(ctx, |ui| {
                     Frame::none()
-                        .fill(CHROME_BG)
+                        .fill(pal().chrome_bg)
                         .rounding(Rounding::same(8.0))
-                        .stroke(Stroke::new(1.0_f32, SEPARATOR))
+                        .stroke(Stroke::new(1.0_f32, pal().separator))
                         .inner_margin(Margin::symmetric(4.0, 4.0))
                         .show(ui, |ui| {
                             if menu_row(ui, "Save", "⌘S") {
@@ -4344,12 +4467,12 @@ impl YouPdfApp {
                             ui.painter().hline(
                                 ui.max_rect().x_range(),
                                 sep,
-                                Stroke::new(1.0_f32, SEPARATOR),
+                                Stroke::new(1.0_f32, pal().separator),
                             );
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(10.0);
-                                ui.label(RichText::new("File").size(10.0).color(MUTED));
+                                ui.label(RichText::new("File").size(10.0).color(pal().muted));
                             });
                             if menu_row(ui, "New blank page", "") {
                                 action = Some(MenuAction::NewBlank);
@@ -4374,12 +4497,12 @@ impl YouPdfApp {
                             ui.painter().hline(
                                 ui.max_rect().x_range(),
                                 sep,
-                                Stroke::new(1.0_f32, SEPARATOR),
+                                Stroke::new(1.0_f32, pal().separator),
                             );
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(10.0);
-                                ui.label(RichText::new("Document").size(10.0).color(MUTED));
+                                ui.label(RichText::new("Document").size(10.0).color(pal().muted));
                             });
                             if menu_row(ui, "Watermark…", "") {
                                 action = Some(MenuAction::Watermark);
@@ -4429,7 +4552,7 @@ impl YouPdfApp {
                             ui.add_space(4.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(10.0);
-                                ui.label(RichText::new("Save as").size(10.0).color(MUTED));
+                                ui.label(RichText::new("Save as").size(10.0).color(pal().muted));
                             });
                             for level in [
                                 Conformance::PdfA2b,
@@ -4448,12 +4571,12 @@ impl YouPdfApp {
                             ui.painter().hline(
                                 ui.max_rect().x_range(),
                                 sep,
-                                Stroke::new(1.0_f32, SEPARATOR),
+                                Stroke::new(1.0_f32, pal().separator),
                             );
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(10.0);
-                                ui.label(RichText::new("View").size(10.0).color(MUTED));
+                                ui.label(RichText::new("View").size(10.0).color(pal().muted));
                             });
                             for (mark, layout) in [
                                 ("Single page", PageLayout::Single),
@@ -4472,11 +4595,21 @@ impl YouPdfApp {
                                 action = Some(MenuAction::Slideshow);
                             }
                             ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.add_space(10.0);
+                                ui.label(RichText::new("Theme").size(10.0).color(pal().muted));
+                            });
+                            for theme in Theme::ALL {
+                                if menu_row_checked(ui, theme.label(), self.theme == theme) {
+                                    action = Some(MenuAction::Theme(theme));
+                                }
+                            }
+                            ui.add_space(4.0);
                             let sep = ui.cursor().top();
                             ui.painter().hline(
                                 ui.max_rect().x_range(),
                                 sep,
-                                Stroke::new(1.0_f32, SEPARATOR),
+                                Stroke::new(1.0_f32, pal().separator),
                             );
                             ui.add_space(4.0);
                             if menu_row(ui, "Properties…", "⌘D") {
@@ -4545,6 +4678,7 @@ impl YouPdfApp {
                     MenuAction::ImagePdf => self.image_pdf_save(ctx),
                     MenuAction::GenerateOutline => self.generate_bookmarks(ctx),
                     MenuAction::ClearOutline => self.clear_bookmarks(ctx),
+                    MenuAction::Theme(theme) => self.theme = theme,
                 }
             }
         }
@@ -4640,8 +4774,8 @@ impl YouPdfApp {
             .show(ctx, |ui| {
                 let mut row = |label: &str, value: &str| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(label).size(12.0).color(MUTED));
-                        ui.label(RichText::new(value).size(12.0).color(ICON_BRIGHT));
+                        ui.label(RichText::new(label).size(12.0).color(pal().muted));
+                        ui.label(RichText::new(value).size(12.0).color(pal().icon_bright));
                     });
                 };
                 row("File", &tab.title);
@@ -4706,31 +4840,31 @@ impl YouPdfApp {
             .show(ctx, |ui| {
                 ui.set_max_width(360.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Text").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Text").size(12.0).color(pal().muted));
                     ui.add(TextEdit::singleline(&mut self.watermark.text).desired_width(230.0));
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Size").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Size").size(12.0).color(pal().muted));
                     ui.add(
                         egui::DragValue::new(&mut self.watermark.font_size).range(6.0..=200.0),
                     );
-                    ui.label(RichText::new("Angle").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Angle").size(12.0).color(pal().muted));
                     ui.add(
                         egui::DragValue::new(&mut self.watermark.rotation_deg).range(-90.0..=90.0),
                     );
                     ui.checkbox(&mut self.watermark.tiled, "Tiled");
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Opacity").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Opacity").size(12.0).color(pal().muted));
                     ui.add(
                         egui::Slider::new(&mut self.watermark.opacity, 0.05..=1.0).show_value(false),
                     );
                     ui.label(
                         RichText::new(format!("{:.0} %", self.watermark.opacity * 100.0))
                             .size(12.0)
-                            .color(ICON_BRIGHT),
+                            .color(pal().icon_bright),
                     );
-                    ui.label(RichText::new("Grey").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Grey").size(12.0).color(pal().muted));
                     let mut grey = self.watermark.color[0];
                     if ui
                         .add(egui::Slider::new(&mut grey, 0..=255).show_value(false))
@@ -4740,13 +4874,13 @@ impl YouPdfApp {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Pages").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
                     let mut all = self.watermark_from.is_none();
                     if ui.checkbox(&mut all, format!("All ({total})")).changed() {
                         self.watermark_from = if all { None } else { Some(1) };
                     }
                     if let Some(from) = self.watermark_from.as_mut() {
-                        ui.label(RichText::new("then from").size(12.0).color(MUTED));
+                        ui.label(RichText::new("then from").size(12.0).color(pal().muted));
                         ui.add(egui::DragValue::new(from).range(1..=total));
                     }
                 });
@@ -4818,21 +4952,21 @@ impl YouPdfApp {
                          footer centre.",
                     )
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
                 ui.add_space(4.0);
                 for (label, slots) in [
                     ("Header", &mut self.header_footer.header),
                     ("Footer", &mut self.header_footer.footer),
                 ] {
-                    ui.label(RichText::new(label).size(11.5).color(ICON_BRIGHT));
+                    ui.label(RichText::new(label).size(11.5).color(pal().icon_bright));
                     egui::Grid::new(format!("hf-grid-{label}"))
                         .num_columns(3)
                         .spacing([8.0, 4.0])
                         .show(ui, |ui| {
-                            ui.label(RichText::new("Left").size(11.0).color(MUTED));
-                            ui.label(RichText::new("Centre").size(11.0).color(MUTED));
-                            ui.label(RichText::new("Right").size(11.0).color(MUTED));
+                            ui.label(RichText::new("Left").size(11.0).color(pal().muted));
+                            ui.label(RichText::new("Centre").size(11.0).color(pal().muted));
+                            ui.label(RichText::new("Right").size(11.0).color(pal().muted));
                             ui.end_row();
                             ui.add(TextEdit::singleline(&mut slots.left).desired_width(140.0));
                             ui.add(TextEdit::singleline(&mut slots.center).desired_width(140.0));
@@ -4842,7 +4976,7 @@ impl YouPdfApp {
                     ui.add_space(4.0);
                 }
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Page numbers").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Page numbers").size(12.0).color(pal().muted));
                     for (text, style) in [
                         ("None", None),
                         ("1", Some(NumberStyle::Numeric)),
@@ -4858,22 +4992,22 @@ impl YouPdfApp {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Start at").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Start at").size(12.0).color(pal().muted));
                     ui.add(egui::DragValue::new(&mut self.header_footer.start_page).range(1..=total));
                     ui.checkbox(&mut self.header_footer.skip_first_page, "Skip first page");
-                    ui.label(RichText::new("Size").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Size").size(12.0).color(pal().muted));
                     ui.add(egui::DragValue::new(&mut self.header_footer.font_size).range(4.0..=36.0));
-                    ui.label(RichText::new("Margin").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Margin").size(12.0).color(pal().muted));
                     ui.add(egui::DragValue::new(&mut self.header_footer.margin).range(0.0..=120.0));
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Pages").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
                     let mut all = self.header_footer_from.is_none();
                     if ui.checkbox(&mut all, format!("All ({total})")).changed() {
                         self.header_footer_from = if all { None } else { Some(1) };
                     }
                     if let Some(from) = self.header_footer_from.as_mut() {
-                        ui.label(RichText::new("then from").size(12.0).color(MUTED));
+                        ui.label(RichText::new("then from").size(12.0).color(pal().muted));
                         ui.add(egui::DragValue::new(from).range(1..=total));
                     }
                 });
@@ -4942,11 +5076,11 @@ impl YouPdfApp {
                         "Streams are deflated and unreachable objects are dropped.                          Images are not resampled and fonts are not subset, so a file                          made of scans barely shrinks.",
                     )
                     .size(12.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
                 if let Some(report) = self.compress_report.clone() {
                     ui.add_space(6.0);
-                    ui.label(RichText::new(report).size(12.0).color(ICON_BRIGHT));
+                    ui.label(RichText::new(report).size(12.0).color(pal().icon_bright));
                 }
                 ui.add_space(8.0);
                 if ui.button("Save compressed copy…").clicked() {
@@ -5031,7 +5165,7 @@ impl YouPdfApp {
             .show(ctx, |ui| {
                 ui.set_max_width(420.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Encryption").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Encryption").size(12.0).color(pal().muted));
                     for strength in [EncryptionStrength::Aes256, EncryptionStrength::Rc4_128] {
                         if ui
                             .selectable_label(
@@ -5045,7 +5179,7 @@ impl YouPdfApp {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Open password").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Open password").size(12.0).color(pal().muted));
                     ui.add(
                         TextEdit::singleline(&mut self.protect.user_password)
                             .password(true)
@@ -5053,7 +5187,7 @@ impl YouPdfApp {
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Permissions password").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Permissions password").size(12.0).color(pal().muted));
                     ui.add(
                         TextEdit::singleline(&mut self.protect.owner_password)
                             .password(true)
@@ -5061,7 +5195,7 @@ impl YouPdfApp {
                     );
                 });
                 ui.add_space(6.0);
-                ui.label(RichText::new("Allowed actions").size(12.0).color(MUTED));
+                ui.label(RichText::new("Allowed actions").size(12.0).color(pal().muted));
                 egui::Grid::new("protect-perms")
                     .num_columns(3)
                     .spacing([14.0, 4.0])
@@ -5087,7 +5221,7 @@ impl YouPdfApp {
                         "The copy is encrypted on disk; the document in the window stays open                          and unencrypted.",
                     )
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
                 ui.add_space(6.0);
                 if ui.button("Save encrypted copy…").clicked() {
@@ -5159,7 +5293,7 @@ impl YouPdfApp {
                          Negative values grow the page.",
                     )
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
                 ui.add_space(6.0);
                 egui::Grid::new("crop-grid")
@@ -5172,7 +5306,7 @@ impl YouPdfApp {
                             ("Top", &mut self.crop.top),
                             ("Bottom", &mut self.crop.bottom),
                         ] {
-                            ui.label(RichText::new(label).size(12.0).color(MUTED));
+                            ui.label(RichText::new(label).size(12.0).color(pal().muted));
                             ui.add(
                                 egui::DragValue::new(value).range(-500.0..=500.0).speed(0.5),
                             );
@@ -5254,11 +5388,11 @@ impl YouPdfApp {
                          the document.",
                     )
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Colour").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Colour").size(12.0).color(pal().muted));
                     let [mut r, mut g, mut b] = self.background.color;
                     let mut changed = false;
                     changed |= ui
@@ -5281,7 +5415,7 @@ impl YouPdfApp {
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Opacity").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Opacity").size(12.0).color(pal().muted));
                     ui.add(
                         egui::Slider::new(&mut self.background.opacity, 0.05..=1.0)
                             .show_value(false),
@@ -5298,7 +5432,7 @@ impl YouPdfApp {
                                 .unwrap_or_else(|| "No image (colour fill)".to_owned()),
                         )
                         .size(11.0)
-                        .color(MUTED),
+                        .color(pal().muted),
                     );
                     if self.background.image.is_some() && ui.small_button("Remove").clicked() {
                         self.background.image = None;
@@ -5306,18 +5440,18 @@ impl YouPdfApp {
                 });
                 if self.background.image.is_some() {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Image scale").size(12.0).color(MUTED));
+                        ui.label(RichText::new("Image scale").size(12.0).color(pal().muted));
                         ui.add(egui::Slider::new(&mut self.background.scale, 0.2..=2.0));
                     });
                 }
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Pages").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
                     let mut all = self.background_from.is_none();
                     if ui.checkbox(&mut all, format!("All ({total})")).changed() {
                         self.background_from = if all { None } else { Some(1) };
                     }
                     if let Some(from) = self.background_from.as_mut() {
-                        ui.label(RichText::new("from").size(12.0).color(MUTED));
+                        ui.label(RichText::new("from").size(12.0).color(pal().muted));
                         ui.add(egui::DragValue::new(from).range(1..=total));
                     }
                 });
@@ -5397,40 +5531,40 @@ impl YouPdfApp {
                          document control.",
                     )
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
                 ui.add_space(6.0);
                 egui::Grid::new("bates-grid")
                     .num_columns(2)
                     .spacing([8.0, 4.0])
                     .show(ui, |ui| {
-                        ui.label(RichText::new("Prefix").size(12.0).color(MUTED));
+                        ui.label(RichText::new("Prefix").size(12.0).color(pal().muted));
                         ui.add(
                             TextEdit::singleline(&mut self.bates.prefix).desired_width(160.0),
                         );
                         ui.end_row();
-                        ui.label(RichText::new("Suffix").size(12.0).color(MUTED));
+                        ui.label(RichText::new("Suffix").size(12.0).color(pal().muted));
                         ui.add(
                             TextEdit::singleline(&mut self.bates.suffix).desired_width(160.0),
                         );
                         ui.end_row();
-                        ui.label(RichText::new("Start at").size(12.0).color(MUTED));
+                        ui.label(RichText::new("Start at").size(12.0).color(pal().muted));
                         ui.add(egui::DragValue::new(&mut self.bates.start).range(0..=999_999));
                         ui.end_row();
-                        ui.label(RichText::new("Digits").size(12.0).color(MUTED));
+                        ui.label(RichText::new("Digits").size(12.0).color(pal().muted));
                         ui.add(egui::DragValue::new(&mut self.bates.digits).range(1..=12));
                         ui.end_row();
-                        ui.label(RichText::new("Font size").size(12.0).color(MUTED));
+                        ui.label(RichText::new("Font size").size(12.0).color(pal().muted));
                         ui.add(
                             egui::DragValue::new(&mut self.bates.font_size).range(4.0..=72.0),
                         );
                         ui.end_row();
-                        ui.label(RichText::new("Margin").size(12.0).color(MUTED));
+                        ui.label(RichText::new("Margin").size(12.0).color(pal().muted));
                         ui.add(egui::DragValue::new(&mut self.bates.margin).range(0.0..=200.0));
                         ui.end_row();
                     });
                 ui.add_space(4.0);
-                ui.label(RichText::new("Position").size(12.0).color(MUTED));
+                ui.label(RichText::new("Position").size(12.0).color(pal().muted));
                 ui.horizontal_wrapped(|ui| {
                     for (position, label) in BATES_POSITIONS {
                         if ui
@@ -5442,13 +5576,13 @@ impl YouPdfApp {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Pages").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
                     let mut all = self.bates_from.is_none();
                     if ui.checkbox(&mut all, format!("All ({total})")).changed() {
                         self.bates_from = if all { None } else { Some(1) };
                     }
                     if let Some(from) = self.bates_from.as_mut() {
-                        ui.label(RichText::new("from").size(12.0).color(MUTED));
+                        ui.label(RichText::new("from").size(12.0).color(pal().muted));
                         ui.add(egui::DragValue::new(from).range(1..=total));
                     }
                 });
@@ -5527,7 +5661,7 @@ impl YouPdfApp {
                             name.clone().unwrap_or_else(|| "No file chosen".to_owned()),
                         )
                         .size(12.0)
-                        .color(if name.is_some() { ICON_BRIGHT } else { MUTED }),
+                        .color(if name.is_some() { pal().icon_bright } else { pal().muted }),
                     );
                 });
                 ui.add_space(6.0);
@@ -5548,7 +5682,7 @@ impl YouPdfApp {
                             report.identical_lines
                         ))
                         .size(12.0)
-                        .color(ICON_BRIGHT),
+                        .color(pal().icon_bright),
                     );
                     ui.add_space(4.0);
                     ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
@@ -5557,12 +5691,12 @@ impl YouPdfApp {
                                 DifferenceKind::Added => {
                                     ("+", Color32::from_rgb(0x7A, 0xC0, 0x7A))
                                 }
-                                DifferenceKind::Removed => ("-", REDACT_RED),
-                                DifferenceKind::Modified => ("~", ACCENT),
+                                DifferenceKind::Removed => ("-", pal().redact_red),
+                                DifferenceKind::Modified => ("~", pal().accent),
                                 DifferenceKind::PageAdded => {
                                     ("+ page", Color32::from_rgb(0x7A, 0xC0, 0x7A))
                                 }
-                                DifferenceKind::PageRemoved => ("- page", REDACT_RED),
+                                DifferenceKind::PageRemoved => ("- page", pal().redact_red),
                             };
                             let text = diff
                                 .after
@@ -5648,11 +5782,11 @@ impl YouPdfApp {
                         "Tesseract (not installed)"
                     })
                     .size(12.0)
-                    .color(if installed { ICON_BRIGHT } else { REDACT_RED }),
+                    .color(if installed { pal().icon_bright } else { pal().redact_red }),
                 );
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Language").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Language").size(12.0).color(pal().muted));
                     ui.add(TextEdit::singleline(&mut self.ocr_language).desired_width(90.0));
                     if !languages.is_empty() {
                         let mut picked: Option<String> = None;
@@ -5674,7 +5808,7 @@ impl YouPdfApp {
                     }
                 });
                 ui.add_space(6.0);
-                ui.label(RichText::new("Output").size(12.0).color(MUTED));
+                ui.label(RichText::new("Output").size(12.0).color(pal().muted));
                 for &(mode, label, detail) in OcrMode::ALL {
                     if ui
                         .selectable_label(self.ocr_mode == mode, format!("{label} — {detail}"))
@@ -5691,7 +5825,7 @@ impl YouPdfApp {
                          take a while on a long scan.",
                     )
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
                 ui.add_space(6.0);
                 if ui
@@ -5702,7 +5836,7 @@ impl YouPdfApp {
                 }
                 if let Some(report) = &self.ocr_report {
                     ui.add_space(6.0);
-                    ui.label(RichText::new(report).size(11.0).color(ICON_BRIGHT));
+                    ui.label(RichText::new(report).size(11.0).color(pal().icon_bright));
                 }
             });
 
@@ -5753,9 +5887,9 @@ impl YouPdfApp {
             .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.set_max_width(380.0);
-                ui.label(RichText::new("Blank document").size(12.0).color(MUTED));
+                ui.label(RichText::new("Blank document").size(12.0).color(pal().muted));
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Pages").size(12.0).color(MUTED));
+                    ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
                     ui.add(egui::DragValue::new(&mut self.create_pages).range(1..=500));
                     if ui.button("Create blank").clicked() {
                         make_blank = true;
@@ -5764,13 +5898,13 @@ impl YouPdfApp {
                 ui.add_space(10.0);
                 ui.separator();
                 ui.add_space(10.0);
-                ui.label(RichText::new("From images").size(12.0).color(MUTED));
+                ui.label(RichText::new("From images").size(12.0).color(pal().muted));
                 ui.label(
                     RichText::new(
                         "One page per image, in the order chosen. PNG and JPEG are read.",
                     )
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
                 ui.add_space(4.0);
                 if ui.button("Choose images…").clicked() {
@@ -5962,7 +6096,7 @@ impl YouPdfApp {
                 ui.label(
                     RichText::new(format!("{name} is protected. Enter its password."))
                         .size(12.0)
-                        .color(ICON_BRIGHT),
+                        .color(pal().icon_bright),
                 );
                 ui.add_space(6.0);
                 let resp = ui.add(
@@ -5976,7 +6110,7 @@ impl YouPdfApp {
                 }
                 if let Some(err) = &prompt.error {
                     ui.add_space(4.0);
-                    ui.label(RichText::new(err).size(11.0).color(REDACT_RED));
+                    ui.label(RichText::new(err).size(11.0).color(pal().redact_red));
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -6132,6 +6266,27 @@ impl YouPdfApp {
             });
     }
 
+    /// Applique le thème choisi : palette du chrome, puis réglages egui quand
+    /// le thème a changé.
+    fn sync_theme(&mut self, ctx: &egui::Context) {
+        PALETTE.with(|cell| cell.set(self.theme.palette()));
+        if self.theme != self.applied_theme {
+            self.applied_theme = self.theme;
+            apply_theme(ctx, self.theme);
+        }
+    }
+
+    /// Fond du canevas : la teinte du thème pour le réglage par défaut, le
+    /// choix explicite du panneau Aspect sinon.
+    fn canvas_background(&self) -> Color32 {
+        let style = self.canvas_style.min(CANVAS_STYLES.len() - 1);
+        if style == 0 {
+            pal().canvas_bg
+        } else {
+            CANVAS_STYLES[style]
+        }
+    }
+
     /// Fenêtre « Mesure » : nature, échelle, unité, activation.
     fn measure_window(&mut self, ctx: &egui::Context) {
         if !self.measure_open {
@@ -6148,7 +6303,7 @@ impl YouPdfApp {
                 ui.set_max_width(340.0);
                 ui.checkbox(&mut self.measure_active, "Draw on the page");
                 ui.add_space(6.0);
-                ui.label(RichText::new("Kind").size(12.0).color(MUTED));
+                ui.label(RichText::new("Kind").size(12.0).color(pal().muted));
                 for kind in [
                     MeasureKind::Distance,
                     MeasureKind::Perimeter,
@@ -6166,14 +6321,14 @@ impl YouPdfApp {
                     .num_columns(2)
                     .spacing([8.0, 4.0])
                     .show(ui, |ui| {
-                        ui.label(RichText::new("Scale").size(12.0).color(MUTED));
+                        ui.label(RichText::new("Scale").size(12.0).color(pal().muted));
                         ui.add(
                             egui::DragValue::new(&mut self.measure_scale)
                                 .range(0.01..=10_000.0)
                                 .speed(1.0),
                         );
                         ui.end_row();
-                        ui.label(RichText::new("Unit").size(12.0).color(MUTED));
+                        ui.label(RichText::new("Unit").size(12.0).color(pal().muted));
                         ui.add(
                             TextEdit::singleline(&mut self.measure_unit).desired_width(80.0),
                         );
@@ -6186,7 +6341,7 @@ impl YouPdfApp {
                          at 1:1.",
                     )
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
                 ui.add_space(4.0);
                 ui.label(
@@ -6195,7 +6350,7 @@ impl YouPdfApp {
                          rectangle.",
                     )
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
                 ui.add_space(8.0);
                 if ui.button("Remove all measurements").clicked() {
@@ -6361,7 +6516,7 @@ impl YouPdfApp {
                         self.extract_pairs.len()
                     ))
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
                 ui.add_space(6.0);
                 ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
@@ -6369,11 +6524,11 @@ impl YouPdfApp {
                         ui.label(
                             RichText::new(format!("Table {} — page {}", idx + 1, table.page))
                                 .size(11.5)
-                                .color(ICON_BRIGHT),
+                                .color(pal().icon_bright),
                         );
                         for row in &table.rows {
                             ui.label(
-                                RichText::new(row.join("  |  ")).size(11.0).color(ICON_BRIGHT),
+                                RichText::new(row.join("  |  ")).size(11.0).color(pal().icon_bright),
                             );
                         }
                         ui.add_space(6.0);
@@ -6382,7 +6537,7 @@ impl YouPdfApp {
                         ui.label(
                             RichText::new(format!("p{}  {} = {}", pair.page, pair.key, pair.value))
                                 .size(11.0)
-                                .color(ICON_BRIGHT),
+                                .color(pal().icon_bright),
                         );
                     }
                 });
@@ -6471,7 +6626,7 @@ impl YouPdfApp {
             .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.set_max_width(520.0);
-                ui.label(RichText::new("Files").size(12.0).color(MUTED));
+                ui.label(RichText::new("Files").size(12.0).color(pal().muted));
                 ui.horizontal(|ui| {
                     if ui.button("Add PDFs…").clicked() {
                         add_files = true;
@@ -6479,7 +6634,7 @@ impl YouPdfApp {
                     if ui.button("Clear").clicked() {
                         clear = true;
                     }
-                    ui.label(RichText::new(format!("{files} file(s)")).size(11.0).color(MUTED));
+                    ui.label(RichText::new(format!("{files} file(s)")).size(11.0).color(pal().muted));
                 });
                 ScrollArea::vertical().max_height(130.0).show(ui, |ui| {
                     for path in &self.batch_files {
@@ -6487,11 +6642,11 @@ impl YouPdfApp {
                             .file_name()
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_default();
-                        ui.label(RichText::new(name).size(11.0).color(ICON_BRIGHT));
+                        ui.label(RichText::new(name).size(11.0).color(pal().icon_bright));
                     }
                 });
                 ui.add_space(6.0);
-                ui.label(RichText::new("Output folder").size(12.0).color(MUTED));
+                ui.label(RichText::new("Output folder").size(12.0).color(pal().muted));
                 ui.horizontal(|ui| {
                     if ui.button("Choose…").clicked() {
                         choose_dir = true;
@@ -6499,14 +6654,14 @@ impl YouPdfApp {
                     ui.label(
                         RichText::new(dir.clone().unwrap_or_else(|| "Not chosen".to_owned()))
                             .size(11.0)
-                            .color(MUTED),
+                            .color(pal().muted),
                     );
                 });
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new("Operations, applied in this order").size(12.0).color(MUTED),
+                    RichText::new("Operations, applied in this order").size(12.0).color(pal().muted),
                 );
                 ui.checkbox(&mut self.batch_text, "Export the text (plain text)");
                 ui.checkbox(&mut self.batch_images, "Export the pages as PNG (150 dpi)");
@@ -6537,7 +6692,7 @@ impl YouPdfApp {
                         ui.label(
                             RichText::new(self.batch_report.clone())
                                 .size(11.0)
-                                .color(ICON_BRIGHT),
+                                .color(pal().icon_bright),
                         );
                     });
                 }
@@ -6858,7 +7013,7 @@ impl YouPdfApp {
                             ui.painter().rect_stroke(
                                 rect,
                                 Rounding::ZERO,
-                                Stroke::new(1.5_f32, REDACT_RED),
+                                Stroke::new(1.5_f32, pal().redact_red),
                             );
                         }
                         if search_rects_page == Some(page) {
@@ -6876,7 +7031,7 @@ impl YouPdfApp {
                                 ui.painter().rect_filled(
                                     rect.expand(1.0),
                                     Rounding::same(2.0),
-                                    SEARCH_MATCH,
+                                    pal().search_match,
                                 );
                             }
                         }
@@ -6915,7 +7070,7 @@ impl YouPdfApp {
                                 ui.painter().rect_stroke(
                                     field,
                                     2.0,
-                                    Stroke::new(1.0_f32, ACCENT),
+                                    Stroke::new(1.0_f32, pal().accent),
                                 );
                                 let ink = Color32::from_rgb(
                                     d.fragment.color[0],
@@ -6974,7 +7129,7 @@ impl YouPdfApp {
                                     );
                                     let lit = hover.map(|p| r.contains(p)).unwrap_or(false);
                                     let stroke = if lit {
-                                        Stroke::new(1.5_f32, ACCENT)
+                                        Stroke::new(1.5_f32, pal().accent)
                                     } else {
                                         Stroke::new(
                                             1.0_f32,
@@ -7017,7 +7172,7 @@ impl YouPdfApp {
                                     ui.painter().rect_stroke(
                                         r,
                                         2.0,
-                                        Stroke::new(1.5_f32, ACCENT),
+                                        Stroke::new(1.5_f32, pal().accent),
                                     );
                                 }
                             }
@@ -7036,7 +7191,7 @@ impl YouPdfApp {
                                         ink_current.iter().map(|p| to_screen(*p)).collect();
                                     ui.painter().add(Shape::line(
                                         pts,
-                                        Stroke::new(annot_width * scale.max(0.4), ACCENT),
+                                        Stroke::new(annot_width * scale.max(0.4), pal().accent),
                                     ));
                                 }
                             }
@@ -7094,7 +7249,7 @@ impl YouPdfApp {
                                     ui.painter().rect_stroke(
                                         rect,
                                         Rounding::ZERO,
-                                        Stroke::new(1.5_f32, REDACT_RED),
+                                        Stroke::new(1.5_f32, pal().redact_red),
                                     );
                                 }
                             }
@@ -7120,7 +7275,7 @@ impl YouPdfApp {
                                     ui.painter().rect_stroke(
                                         rect,
                                         Rounding::ZERO,
-                                        Stroke::new(1.5_f32, ACCENT),
+                                        Stroke::new(1.5_f32, pal().accent),
                                     );
                                 }
                             }
@@ -7155,7 +7310,7 @@ impl YouPdfApp {
                                     ui.painter().rect_stroke(
                                         rect,
                                         Rounding::same(2.0),
-                                        Stroke::new(1.5_f32, ACCENT),
+                                        Stroke::new(1.5_f32, pal().accent),
                                     );
                                 }
                             }
@@ -7300,12 +7455,12 @@ impl YouPdfApp {
                     ui.label(
                         RichText::new("Free, local-first PDF editing")
                             .size(13.0)
-                            .color(MUTED),
+                            .color(pal().muted),
                     );
                     ui.add_space(22.0);
                     let button = ui.add_sized(
                         vec2(160.0, 32.0),
-                        Button::new(RichText::new("Open PDF").size(14.0)).fill(ACCENT),
+                        Button::new(RichText::new("Open PDF").size(14.0)).fill(pal().accent),
                     );
                     if button.clicked() {
                         self.open_dialog();
@@ -7314,7 +7469,7 @@ impl YouPdfApp {
                     ui.label(
                         RichText::new("or drop a file anywhere")
                             .size(11.0)
-                            .color(MUTED),
+                            .color(pal().muted),
                     );
 
                     if self.recents.is_empty() {
@@ -7365,7 +7520,7 @@ impl YouPdfApp {
                                 Align2::LEFT_CENTER,
                                 shorten(&name, 46),
                                 FontId::proportional(12.5),
-                                if exists { ICON_BRIGHT } else { MUTED },
+                                if exists { pal().icon_bright } else { pal().muted },
                             );
                             ui.painter().text(
                                 pos2(rect.min.x + 14.0, rect.min.y + 32.0),
@@ -7376,7 +7531,7 @@ impl YouPdfApp {
                                     "File not found".to_owned()
                                 },
                                 FontId::proportional(10.5),
-                                MUTED,
+                                pal().muted,
                             );
 
                             let forget_rect = Rect::from_center_size(
@@ -7390,7 +7545,7 @@ impl YouPdfApp {
                                 Align2::CENTER_CENTER,
                                 if forget_resp.hovered() { "✕" } else { "" },
                                 FontId::proportional(12.0),
-                                ICON,
+                                pal().icon,
                             );
                             if forget_resp.clicked() {
                                 forget = Some(path.clone());
@@ -7442,7 +7597,7 @@ impl YouPdfApp {
                     ui.label(
                         RichText::new("What YouPDF just did")
                             .size(11.0)
-                            .color(MUTED),
+                            .color(pal().muted),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.small_button("Clear").clicked() {
@@ -7455,7 +7610,7 @@ impl YouPdfApp {
                     ui.label(
                         RichText::new("Nothing yet.")
                             .size(11.5)
-                            .color(MUTED),
+                            .color(pal().muted),
                     );
                     return;
                 }
@@ -7471,7 +7626,7 @@ impl YouPdfApp {
                         };
                         ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new(text).size(11.5));
-                            ui.label(RichText::new(when).size(10.0).color(MUTED));
+                            ui.label(RichText::new(when).size(10.0).color(pal().muted));
                         });
                         ui.add_space(2.0);
                     }
@@ -7527,13 +7682,13 @@ impl YouPdfApp {
                                 ui.painter().rect_filled(
                                     rect,
                                     Rounding::same(5.0),
-                                    HOVER_BG,
+                                    pal().hover_bg,
                                 );
                             }
                             icon_minus(
                                 ui.painter(),
                                 rect.shrink(2.0),
-                                if minus.hovered() { ICON_BRIGHT } else { ICON },
+                                if minus.hovered() { pal().icon_bright } else { pal().icon },
                             );
                             if minus.clicked() {
                                 delta = -1.0;
@@ -7543,14 +7698,14 @@ impl YouPdfApp {
                             let (rect, page_resp) =
                                 ui.allocate_exact_size(vec2(46.0, 20.0), Sense::click());
                             if page_resp.hovered() {
-                                ui.painter().rect_filled(rect, Rounding::same(5.0), HOVER_BG);
+                                ui.painter().rect_filled(rect, Rounding::same(5.0), pal().hover_bg);
                             }
                             ui.painter().text(
                                 rect.center(),
                                 Align2::CENTER_CENTER,
                                 format!("{page} / {total}"),
                                 FontId::proportional(11.0),
-                                if page_resp.hovered() { ICON_BRIGHT } else { MUTED },
+                                if page_resp.hovered() { pal().icon_bright } else { pal().muted },
                             );
                             let just_opened = page_resp.clicked();
                             if just_opened {
@@ -7566,7 +7721,7 @@ impl YouPdfApp {
                                 |ui| {
                                     ui.set_min_width(130.0);
                                     ui.label(
-                                        RichText::new("Go to page").size(11.0).color(MUTED),
+                                        RichText::new("Go to page").size(11.0).color(pal().muted),
                                     );
                                     ui.add_space(4.0);
                                     let field = ui.add(
@@ -7602,7 +7757,7 @@ impl YouPdfApp {
                                         .layout_no_wrap(
                                             text.clone(),
                                             FontId::proportional(11.0),
-                                            MUTED,
+                                            pal().muted,
                                         )
                                         .size()
                                         .x
@@ -7612,14 +7767,14 @@ impl YouPdfApp {
                                 Sense::click(),
                             );
                             if zoom_resp.hovered() {
-                                ui.painter().rect_filled(rect, Rounding::same(5.0), HOVER_BG);
+                                ui.painter().rect_filled(rect, Rounding::same(5.0), pal().hover_bg);
                             }
                             ui.painter().text(
                                 rect.center(),
                                 Align2::CENTER_CENTER,
                                 &text,
                                 FontId::proportional(11.0),
-                                if zoom_resp.hovered() { ICON_BRIGHT } else { MUTED },
+                                if zoom_resp.hovered() { pal().icon_bright } else { pal().muted },
                             );
                             if zoom_resp.clicked() {
                                 ui.memory_mut(|m| m.toggle_popup(Id::new("zoom_menu")));
@@ -7642,16 +7797,16 @@ impl YouPdfApp {
                             );
 
                             ui.add_space(6.0);
-                            ui.label(RichText::new(engine).size(10.0).color(MUTED));
+                            ui.label(RichText::new(engine).size(10.0).color(pal().muted));
                             let (rect, plus) = ui
                                 .allocate_exact_size(vec2(20.0, 20.0), Sense::click());
                             if plus.hovered() {
-                                ui.painter().rect_filled(rect, Rounding::same(5.0), HOVER_BG);
+                                ui.painter().rect_filled(rect, Rounding::same(5.0), pal().hover_bg);
                             }
                             icon_plus(
                                 ui.painter(),
                                 rect.shrink(2.0),
-                                if plus.hovered() { ICON_BRIGHT } else { ICON },
+                                if plus.hovered() { pal().icon_bright } else { pal().icon },
                             );
                             if plus.clicked() {
                                 delta = 1.0;
@@ -7705,7 +7860,7 @@ impl YouPdfApp {
                     .inner_margin(Margin::symmetric(12.0, 6.0))
                     .show(ui, |ui| {
                         ui.add(
-                            egui::Label::new(RichText::new(&text).size(11.5).color(ICON_BRIGHT))
+                            egui::Label::new(RichText::new(&text).size(11.5).color(pal().icon_bright))
                                 .extend(),
                         );
                     });
@@ -7806,6 +7961,7 @@ impl eframe::App for YouPdfApp {
             self.reset_document_session();
         }
         self.ensure_annots();
+        self.sync_theme(ctx);
         if self.slideshow {
             self.slideshow_view(ctx);
             return;
@@ -7815,7 +7971,7 @@ impl eframe::App for YouPdfApp {
         self.rail(ctx);
         self.side_panel(ctx);
         CentralPanel::default()
-            .frame(Frame::none().fill(CANVAS_STYLES[self.canvas_style.min(CANVAS_STYLES.len() - 1)]))
+            .frame(Frame::none().fill(self.canvas_background()))
             .show(ctx, |ui| {
                 if self.home_open || self.tabs.is_empty() {
                     self.empty_state(ui);
@@ -7858,33 +8014,41 @@ impl eframe::App for YouPdfApp {
 // Thème
 // --------------------------------------------------------------------------
 
-fn apply_theme(ctx: &egui::Context) {
-    // Police d'icônes Phosphor (MIT) ajoutée à la famille proportionnelle.
+/// Police d'icônes Phosphor (MIT) ajoutée à la famille proportionnelle.
+fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
     ctx.set_fonts(fonts);
+}
 
-    let mut visuals = egui::Visuals::dark();
-    visuals.panel_fill = CANVAS_BG;
-    visuals.window_fill = CHROME_BG;
-    visuals.extreme_bg_color = WIDGET_BG;
-    visuals.faint_bg_color = WIDGET_BG;
-    visuals.selection.bg_fill = ACCENT;
+/// Réglages egui d'un thème : fonds et widgets tirés de sa palette.
+fn apply_theme(ctx: &egui::Context, theme: Theme) {
+    let palette = theme.palette();
+    let mut visuals = match theme {
+        Theme::Dark | Theme::Starry => egui::Visuals::dark(),
+        Theme::Light | Theme::Mint => egui::Visuals::light(),
+    };
+    visuals.panel_fill = palette.canvas_bg;
+    visuals.window_fill = palette.chrome_bg;
+    visuals.extreme_bg_color = palette.widget_bg;
+    visuals.faint_bg_color = palette.widget_bg;
+    visuals.selection.bg_fill = palette.accent;
     visuals.selection.stroke = Stroke::new(1.5_f32, Color32::WHITE);
-    visuals.widgets.noninteractive.bg_fill = CANVAS_BG;
-    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, SEPARATOR);
-    visuals.widgets.inactive.bg_fill = WIDGET_BG;
-    visuals.widgets.inactive.weak_bg_fill = WIDGET_BG;
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, Color32::from_gray(0x5A));
+    visuals.widgets.noninteractive.bg_fill = palette.canvas_bg;
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, palette.separator);
+    visuals.widgets.inactive.bg_fill = palette.widget_bg;
+    visuals.widgets.inactive.weak_bg_fill = palette.widget_bg;
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.separator);
     visuals.widgets.inactive.rounding = Rounding::same(6.0);
-    visuals.widgets.hovered.bg_fill = HOVER_BG;
-    visuals.widgets.hovered.weak_bg_fill = HOVER_BG;
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, Color32::from_gray(0x6E));
+    visuals.widgets.hovered.bg_fill = palette.hover_bg;
+    visuals.widgets.hovered.weak_bg_fill = palette.hover_bg;
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, palette.accent);
     visuals.widgets.hovered.rounding = Rounding::same(6.0);
-    visuals.widgets.active.bg_fill = ACCENT;
-    visuals.widgets.active.weak_bg_fill = ACCENT;
+    visuals.widgets.active.bg_fill = palette.accent;
+    visuals.widgets.active.weak_bg_fill = palette.accent;
     visuals.widgets.active.bg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
     visuals.widgets.active.rounding = Rounding::same(6.0);
+    visuals.hyperlink_color = palette.accent;
     ctx.set_visuals(visuals);
 
     ctx.style_mut(|style| {
@@ -7909,11 +8073,17 @@ fn pill_button(
     primary: bool,
     selected: bool,
 ) -> egui::Response {
-    let text_color = Color32::WHITE;
+    // Texte blanc sur l'accent ; la teinte du thème ailleurs, pour rester
+    // lisible quand le thème est clair.
+    let text_color = if primary || selected {
+        Color32::WHITE
+    } else {
+        pal().icon_bright
+    };
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
         FontId::proportional(12.5),
-        if primary || selected { Color32::WHITE } else { ICON_BRIGHT },
+        text_color,
     );
     let width = 12.0
         + 15.0
@@ -7923,9 +8093,9 @@ fn pill_button(
         + 12.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 26.0), Sense::click());
     if primary || selected {
-        ui.painter().rect_filled(rect, Rounding::same(6.0), ACCENT);
+        ui.painter().rect_filled(rect, Rounding::same(6.0), pal().accent);
     } else if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(6.0), HOVER_BG);
+        ui.painter().rect_filled(rect, Rounding::same(6.0), pal().hover_bg);
     }
     let icon_rect = Rect::from_center_size(
         pos2(rect.min.x + 12.0 + 7.5, rect.center().y),
@@ -7945,7 +8115,7 @@ fn pill_button(
             pos2(rect.max.x - 12.0 - 5.0, rect.center().y),
             vec2(9.0, 9.0),
         );
-        icon_chevron(ui.painter(), ch_rect, MUTED);
+        icon_chevron(ui.painter(), ch_rect, pal().muted);
     }
     resp
 }
@@ -7961,21 +8131,29 @@ fn icon_pill(
     let width = if chevron { 38.0 } else { 30.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 26.0), Sense::click());
     if primary || selected {
-        ui.painter().rect_filled(rect, Rounding::same(6.0), ACCENT);
+        ui.painter().rect_filled(rect, Rounding::same(6.0), pal().accent);
     } else if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(6.0), HOVER_BG);
+        ui.painter().rect_filled(rect, Rounding::same(6.0), pal().hover_bg);
     }
     let icon_rect = Rect::from_center_size(
         pos2(rect.min.x + 13.0, rect.center().y),
         vec2(15.0, 15.0),
     );
-    draw(ui.painter(), icon_rect, Color32::WHITE);
+    draw(
+        ui.painter(),
+        icon_rect,
+        if primary || selected {
+            Color32::WHITE
+        } else {
+            pal().icon
+        },
+    );
     if chevron {
         let ch_rect = Rect::from_center_size(
             pos2(rect.max.x - 11.0, rect.center().y),
             vec2(8.0, 8.0),
         );
-        icon_chevron(ui.painter(), ch_rect, MUTED);
+        icon_chevron(ui.painter(), ch_rect, pal().muted);
     }
     resp
 }
@@ -7986,13 +8164,13 @@ fn icon_pill(
 fn menu_row_checked(ui: &mut egui::Ui, label: &str, checked: bool) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(210.0, 26.0), Sense::click());
     if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(5.0), HOVER_BG);
+        ui.painter().rect_filled(rect, Rounding::same(5.0), pal().hover_bg);
     }
     if checked {
         glyph(
             ui.painter(),
             Rect::from_center_size(pos2(rect.min.x + 18.0, rect.center().y), vec2(15.0, 15.0)),
-            ACCENT,
+            pal().accent,
             ph::CHECK,
         );
     }
@@ -8001,7 +8179,7 @@ fn menu_row_checked(ui: &mut egui::Ui, label: &str, checked: bool) -> bool {
         Align2::LEFT_CENTER,
         label,
         FontId::proportional(12.5),
-        ICON_BRIGHT,
+        pal().icon_bright,
     );
     resp.clicked()
 }
@@ -8010,21 +8188,21 @@ fn menu_row_checked(ui: &mut egui::Ui, label: &str, checked: bool) -> bool {
 fn menu_row(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(210.0, 26.0), Sense::click());
     if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(5.0), HOVER_BG);
+        ui.painter().rect_filled(rect, Rounding::same(5.0), pal().hover_bg);
     }
     ui.painter().text(
         pos2(rect.min.x + 10.0, rect.center().y),
         Align2::LEFT_CENTER,
         label,
         FontId::proportional(12.5),
-        ICON_BRIGHT,
+        pal().icon_bright,
     );
     ui.painter().text(
         pos2(rect.max.x - 10.0, rect.center().y),
         Align2::RIGHT_CENTER,
         shortcut,
         FontId::proportional(11.0),
-        MUTED,
+        pal().muted,
     );
     resp.clicked()
 }
@@ -8096,16 +8274,16 @@ fn rail_button(
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(38.0, 38.0), Sense::click());
     if selected {
-        ui.painter().rect_filled(rect, Rounding::same(8.0), ACCENT);
+        ui.painter().rect_filled(rect, Rounding::same(8.0), pal().accent);
     } else if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(8.0), WIDGET_BG);
+        ui.painter().rect_filled(rect, Rounding::same(8.0), pal().widget_bg);
     }
     let color = if selected {
         Color32::WHITE
     } else if resp.hovered() {
-        ICON_BRIGHT
+        pal().icon_bright
     } else {
-        ICON
+        pal().icon
     };
     draw(ui.painter(), rect.shrink(9.0), color);
     resp
@@ -8121,9 +8299,9 @@ fn icon_button(
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
     if selected || resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(6.0), WIDGET_BG);
+        ui.painter().rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
     }
-    let color = if resp.hovered() { ICON_BRIGHT } else { ICON };
+    let color = if resp.hovered() { pal().icon_bright } else { pal().icon };
     draw(ui.painter(), rect.shrink(6.0), color);
     resp
 }
@@ -8137,12 +8315,12 @@ fn panel_action(
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 28.0), Sense::click());
     if selected {
-        ui.painter().rect_filled(rect, Rounding::same(6.0), WIDGET_BG);
+        ui.painter().rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
     } else if resp.hovered() {
         ui.painter()
             .rect_filled(rect, Rounding::same(6.0), Color32::from_rgb(0x33, 0x33, 0x33));
     }
-    let color = if selected || resp.hovered() { ICON_BRIGHT } else { ICON };
+    let color = if selected || resp.hovered() { pal().icon_bright } else { pal().icon };
     draw(ui.painter(), rect.shrink(8.0), color);
     resp
 }
@@ -8435,9 +8613,9 @@ fn organize_button(ui: &mut egui::Ui, icon: IconFn, label: &str) -> bool {
     ui.painter().rect_filled(
         rect,
         Rounding::same(6.0),
-        if resp.hovered() { HOVER_BG } else { WIDGET_BG },
+        if resp.hovered() { pal().hover_bg } else { pal().widget_bg },
     );
-    let color = if resp.hovered() { ICON_BRIGHT } else { ICON };
+    let color = if resp.hovered() { pal().icon_bright } else { pal().icon };
     icon(
         ui.painter(),
         Rect::from_center_size(pos2(rect.min.x + 15.0, rect.center().y), vec2(14.0, 14.0)),
@@ -8503,9 +8681,9 @@ fn format_size(bytes: usize) -> String {
 fn panel_hint(ui: &mut egui::Ui, title: &str, detail: &str) {
     ui.add_space(14.0);
     ui.vertical_centered(|ui| {
-        ui.label(RichText::new(title).size(12.0).color(MUTED));
+        ui.label(RichText::new(title).size(12.0).color(pal().muted));
         ui.add_space(4.0);
-        ui.label(RichText::new(detail).size(11.0).color(MUTED));
+        ui.label(RichText::new(detail).size(11.0).color(pal().muted));
     });
 }
 
@@ -8695,7 +8873,7 @@ fn draw_annots(
         }
 
         if selected == Some(idx) {
-            painter.rect_stroke(r.expand(3.0), 2.0, Stroke::new(1.5_f32, ACCENT));
+            painter.rect_stroke(r.expand(3.0), 2.0, Stroke::new(1.5_f32, pal().accent));
         }
     }
 }
