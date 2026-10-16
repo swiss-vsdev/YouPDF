@@ -128,3 +128,29 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
   marks, form field, selection, ticked pages, search results) is cleared on a tab switch,
   Backspace no longer deletes an annotation while typing, Command-F opens the search box, a filled
   form field refreshes its page, and compressed or encrypted copies carry the pending annotations.
+- 2026-10-16 (missing-features pass 1): the reference app's menus were walked against YouPDF and the
+  gap was filled in four engine commits plus one interface commit. `convert` gained CSV, XML and RTF
+  text exports and per-page image export; `crop` gained crop and reset; `create` gained blank
+  documents, PDFs built from images and document splicing; `watermark` gained page backgrounds
+  (colour or image, painted behind the content) and Bates numbering; `protect` gained
+  `file_is_encrypted`, `open_protected` and `save_decrypted`, so a protected file can be reopened
+  and an unprotected copy written. The interface now reaches all of it from the tools menu and the
+  overflow menu, with new windows for crop, background, Bates, compare, OCR and create, a password
+  prompt for protected files, print through `lp`, reveal in the file manager, and image export at a
+  chosen resolution. Verified with `cargo clippy --workspace --all-targets` (clean), 75 core tests,
+  and a smoke run that opened every window (no error line, one Tesseract probe).
+
+  Still missing after this pass, in rough priority order:
+  1. Form field properties (name, tooltip, required, read-only, options) and FDF/XFDF/CSV/JSON
+     form data import/export.
+  2. Batch processing (the reference app's Traitement par lots: convert, OCR, combine, insert,
+     create, watermark, background, header/footer, Bates, compress, encrypt, remove, print).
+  3. Auto bookmarks from the text, and data extraction (tables, key/value pairs).
+  4. Measure tools (distance, perimeter, area).
+  5. PDF/A, PDF/X, PDF/E and image-PDF output; Word/Excel/PowerPoint export (needs a ZIP/DOCX
+     writer, the `docx-rs` chain is still unresolvable).
+  6. Themes beyond dark (light, mint, starry), slideshow, and an i18n layer — the reference app
+     ships 12+ languages; YouPDF strings are English literals today.
+  7. The optional AI panel (providers exist in `YouPDF_OLD`) and signature requests.
+  Out of scope by design: cloud sync, eIDAS signature requests, screen capture, scanner import,
+  dictation and emoji — they need a cloud service or OS facilities the brief forbids or excludes.
