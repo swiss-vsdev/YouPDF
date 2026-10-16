@@ -18,7 +18,7 @@
 //! | `/Ch`        | Liste déroulante       |
 //! | `/Sig`       | Champ de signature     |
 
-use lopdf::{Dictionary, Object};
+use lopdf::{Dictionary, Object, ObjectId, Stream};
 
 use youpdf_shared::{Error, Result};
 
@@ -86,6 +86,74 @@ pub struct FormField {
     pub read_only: bool,
     /// Numéro de page (1-indexé), si le champ en a une.
     pub page: Option<usize>,
+}
+
+/// Description d'un champ de formulaire à créer.
+///
+/// Les coordonnées sont en repère PDF (origine en bas à gauche), comme
+/// partout ailleurs dans le cœur : `[x1, y1, x2, y2]`.
+#[derive(Debug, Clone)]
+pub struct NewFormField {
+    /// Nom du champ (`/T`), tel qu'il apparaît dans le panneau.
+    pub name: String,
+    /// Type du champ.
+    pub kind: FormFieldKind,
+    /// Numéro de page (1-indexé).
+    pub page: u32,
+    /// Rectangle du champ.
+    pub rect: [f32; 4],
+    /// Choix proposés (listes déroulantes seulement).
+    pub options: Vec<String>,
+    /// Valeur initiale : texte saisi, ou état coché pour une case.
+    pub value: Option<String>,
+    /// Champ texte multiligne.
+    pub multiline: bool,
+    /// Champ en lecture seule.
+    pub read_only: bool,
+}
+
+impl NewFormField {
+    /// Champ texte d'une ligne.
+    pub fn text(page: u32, rect: [f32; 4], name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: FormFieldKind::Text,
+            page,
+            rect,
+            options: Vec::new(),
+            value: None,
+            multiline: false,
+            read_only: false,
+        }
+    }
+
+    /// Case à cocher.
+    pub fn checkbox(page: u32, rect: [f32; 4], name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: FormFieldKind::Checkbox,
+            page,
+            rect,
+            options: Vec::new(),
+            value: None,
+            multiline: false,
+            read_only: false,
+        }
+    }
+
+    /// Liste déroulante.
+    pub fn choice(page: u32, rect: [f32; 4], name: impl Into<String>, options: &[&str]) -> Self {
+        Self {
+            name: name.into(),
+            kind: FormFieldKind::Choice,
+            page,
+            rect,
+            options: options.iter().map(|o| (*o).to_string()).collect(),
+            value: None,
+            multiline: false,
+            read_only: false,
+        }
+    }
 }
 
 impl Document {
@@ -283,6 +351,267 @@ impl Document {
         // Marquer le document comme ayant des changements (côté appelant).
 
         tracing::debug!(field = %field.name, "champ rempli");
+        Ok(())
+    }
+
+    /// Crée un champ de formulaire et l'inscrit dans `/AcroForm`.
+    ///
+    /// Le champ reçoit une apparence (`/AP`) pour que les lecteurs qui
+    /// n'ont pas de générateur d'apparences l'affichent quand même, et
+    /// `/NeedAppearances` reste vrai pour ceux qui en ont un.
+    pub fn create_form_field(&mut self, field: &NewFormField) -> Result<FormField> {
+        if field.name.trim().is_empty() {
+            return Err(Error::InvalidInput(
+                "un champ de formulaire doit avoir un nom".to_string(),
+            ));
+        }
+        let [x1, y1, x2, y2] = field.rect;
+        let rect = [
+            x1.min(x2),
+            y1.min(y2),
+            x1.max(x2),
+            y1.max(y2),
+        ];
+        let w = (rect[2] - rect[0]).max(4.0);
+        let h = (rect[3] - rect[1]).max(4.0);
+
+        let page_id = self
+            .page_id(field.page)
+            .map_err(|e| Error::Pdf(format!("page {} : {e}", field.page)))?;
+        let font = self.ensure_appearance_font()?;
+
+        // Flags de champ (`/Ff`).
+        let mut flags: i64 = match field.kind {
+            FormFieldKind::Text => {
+                if field.multiline {
+                    1 << 12
+                } else {
+                    0
+                }
+            }
+            FormFieldKind::Radio => 1 << 15,
+            FormFieldKind::Choice => 1 << 17,
+            FormFieldKind::MultiChoice => (1 << 17) | (1 << 21),
+            _ => 0,
+        };
+        if field.read_only {
+            // Bit 1 : lecture seule.
+            flags |= 1;
+        }
+
+        let ft: &[u8] = match field.kind {
+            FormFieldKind::Text => b"Tx",
+            FormFieldKind::Checkbox | FormFieldKind::Radio => b"Btn",
+            FormFieldKind::Choice | FormFieldKind::MultiChoice => b"Ch",
+            FormFieldKind::Signature => b"Sig",
+            FormFieldKind::Other(ref other) => {
+                return Err(Error::InvalidInput(format!(
+                    "type de champ non créable : {other}"
+                )))
+            }
+        };
+
+        // Apparence : un XObject formulaire par état. Une case a deux
+        // états (`/Off` et `/Yes`), les autres un seul.
+        let font_obj = Object::Reference(font);
+        let (ap_obj, is_choice_state) = match field.kind {
+            FormFieldKind::Checkbox | FormFieldKind::Radio => {
+                let off = self.add_appearance(font_obj.clone(), w, h, None, false)?;
+                let on = self.add_appearance(font_obj.clone(), w, h, None, true)?;
+                let mut states = Dictionary::new();
+                states.set("Off", Object::Reference(off));
+                states.set("Yes", Object::Reference(on));
+                (
+                    Object::Dictionary(states),
+                    true,
+                )
+            }
+            _ => {
+                let value = field.value.as_deref();
+                let id = self.add_appearance(font_obj.clone(), w, h, value, false)?;
+                (Object::Reference(id), false)
+            }
+        };
+
+        let mut widget = Dictionary::new();
+        widget.set("Type", Object::Name(b"Annot".to_vec()));
+        widget.set("Subtype", Object::Name(b"Widget".to_vec()));
+        widget.set("FT", Object::Name(ft.to_vec()));
+        widget.set(
+            "T",
+            Object::string_literal(crate::edit::encode_pdf_literal(&field.name)),
+        );
+        widget.set(
+            "Rect",
+            Object::Array(vec![
+                Object::Real(rect[0]),
+                Object::Real(rect[1]),
+                Object::Real(rect[2]),
+                Object::Real(rect[3]),
+            ]),
+        );
+        widget.set("P", Object::Reference(page_id));
+        widget.set("F", Object::Integer(4));
+        if flags != 0 {
+            widget.set("Ff", Object::Integer(flags));
+        }
+        widget.set("DA", Object::string_literal(b"/Helv 0 Tf 0 g".to_vec()));
+        let mut mk = Dictionary::new();
+        mk.set(
+            "BG",
+            Object::Array(vec![Object::Real(1.0), Object::Real(1.0), Object::Real(1.0)]),
+        );
+        mk.set(
+            "BC",
+            Object::Array(vec![Object::Real(0.5), Object::Real(0.5), Object::Real(0.5)]),
+        );
+        widget.set("MK", Object::Dictionary(mk));
+        if is_choice_state {
+            let state = field.value.clone().unwrap_or_else(|| "Off".to_string());
+            widget.set("V", Object::Name(state.as_bytes().to_vec()));
+            widget.set("AS", Object::Name(state.as_bytes().to_vec()));
+        } else if let Some(value) = field.value.as_deref() {
+            widget.set(
+                "V",
+                Object::string_literal(crate::edit::encode_pdf_literal(value)),
+            );
+        }
+        if !field.options.is_empty() {
+            let opts: Vec<Object> = field
+                .options
+                .iter()
+                .map(|o| Object::string_literal(crate::edit::encode_pdf_literal(o)))
+                .collect();
+            widget.set("Opt", Object::Array(opts));
+        }
+        let mut ap = Dictionary::new();
+        ap.set("N", ap_obj);
+        widget.set("AP", Object::Dictionary(ap));
+
+        let widget_id = self.inner_mut().add_object(Object::Dictionary(widget));
+
+        // Page : le widget rejoint les annotations de la page.
+        let mut annots = self.page_annots(page_id);
+        annots.push(Object::Reference(widget_id));
+        self.set_page_annots(page_id, &annots)?;
+
+        self.register_acroform_field(widget_id, font)?;
+        self.touch();
+
+        Ok(FormField {
+            object_id: widget_id,
+            name: field.name.clone(),
+            kind: field.kind.clone(),
+            value: field.value.clone(),
+            options: field.options.clone(),
+            read_only: field.read_only,
+            page: Some(field.page as usize),
+        })
+    }
+
+    /// Ajoute un XObject d'apparence (fond blanc, cadre, croix ou texte).
+    fn add_appearance(
+        &mut self,
+        font: Object,
+        w: f32,
+        h: f32,
+        value: Option<&str>,
+        checked: bool,
+    ) -> Result<ObjectId> {
+        // Fond et cadre, puis croix ou valeur selon le cas.
+        let mut ops: Vec<u8> = Vec::new();
+        ops.extend_from_slice(format!("1 1 1 rg 0 0 {w:.2} {h:.2} re f\n").as_bytes());
+        ops.extend_from_slice(
+            format!(
+                "0.5 0.5 0.5 RG 0.7 w 0.35 0.35 {:.2} {:.2} re S\n",
+                (w - 0.7).max(0.1),
+                (h - 0.7).max(0.1)
+            )
+            .as_bytes(),
+        );
+        if checked {
+            ops.extend_from_slice(b"0 0 0 RG 1.2 w\n");
+            ops.extend_from_slice(
+                format!("1.5 1.5 m {:.2} {:.2} l S\n", w - 1.5, h - 1.5).as_bytes(),
+            );
+            ops.extend_from_slice(
+                format!("1.5 {:.2} m {:.2} 1.5 l S\n", h - 1.5, w - 1.5).as_bytes(),
+            );
+        }
+        if let Some(value) = value {
+            if !value.is_empty() {
+                let size = (h * 0.6).clamp(6.0, 12.0);
+                ops.extend_from_slice(format!("BT /Helv {size:.1} Tf 0 g 2 2 Td ").as_bytes());
+                crate::annotate::push_text_literal(&mut ops, value);
+                ops.extend_from_slice(b" Tj ET\n");
+            }
+        }
+
+        let mut xobject = Dictionary::new();
+        xobject.set("Type", Object::Name(b"XObject".to_vec()));
+        xobject.set("Subtype", Object::Name(b"Form".to_vec()));
+        xobject.set("FormType", Object::Integer(1));
+        xobject.set(
+            "BBox",
+            Object::Array(vec![
+                Object::Real(0.0),
+                Object::Real(0.0),
+                Object::Real(w),
+                Object::Real(h),
+            ]),
+        );
+        let mut fonts = Dictionary::new();
+        fonts.set("Helv", font);
+        let mut resources = Dictionary::new();
+        resources.set("Font", Object::Dictionary(fonts));
+        xobject.set("Resources", Object::Dictionary(resources));
+        Ok(self.inner_mut().add_object(Stream::new(xobject, ops)))
+    }
+
+    /// Inscrit le widget dans `/Fields` de `/AcroForm`, en créant le
+    /// dictionnaire s'il n'existe pas encore.
+    fn register_acroform_field(&mut self, widget_id: ObjectId, font: ObjectId) -> Result<()> {
+        let root_id = self
+            .inner()
+            .trailer
+            .get(b"Root")
+            .ok()
+            .and_then(|o| o.as_reference().ok())
+            .ok_or_else(|| Error::Pdf("catalogue absent".to_string()))?;
+
+        // Base : le dictionnaire existant, cloné pour éviter les emprunts
+        // croisés pendant la réécriture.
+        let base = self.acroform_dict().cloned();
+        let mut acro = base.unwrap_or_default();
+        let mut fields = acro
+            .get(b"Fields")
+            .ok()
+            .and_then(|o| o.as_array().ok())
+            .cloned()
+            .unwrap_or_default();
+        fields.push(Object::Reference(widget_id));
+        acro.set("Fields", Object::Array(fields));
+        if acro.get(b"DR").is_err() {
+            let mut fonts = Dictionary::new();
+            fonts.set("Helv", Object::Reference(font));
+            let mut dr = Dictionary::new();
+            dr.set("Font", Object::Dictionary(fonts));
+            acro.set("DR", Object::Dictionary(dr));
+        }
+        if acro.get(b"DA").is_err() {
+            acro.set("DA", Object::string_literal(b"/Helv 0 Tf 0 g".to_vec()));
+        }
+        acro.set("NeedAppearances", Object::Boolean(true));
+
+        let acro_id = self.inner_mut().add_object(Object::Dictionary(acro));
+        let catalog = self
+            .inner_mut()
+            .get_object_mut(root_id)
+            .map_err(|e| Error::Pdf(format!("catalogue : {e}")))?;
+        let dict = catalog
+            .as_dict_mut()
+            .map_err(|e| Error::Pdf(format!("catalogue : {e}")))?;
+        dict.set("AcroForm", Object::Reference(acro_id));
         Ok(())
     }
 
