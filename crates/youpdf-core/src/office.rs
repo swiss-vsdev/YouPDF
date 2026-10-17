@@ -1,0 +1,452 @@
+//! Export PDF → Word (`.docx`), Excel (`.xlsx`) et PowerPoint (`.pptx`).
+//!
+//! Les parties OOXML (Office Open XML) sont écrites à la main puis
+//! empaquetées avec la crate `zip`. Aucune dépendance `docx-rs` : chaque
+//! format reste autonome et la surface de dépendances est minimale.
+//!
+//! ## Ce que l'export transporte
+//!
+//! Seule la couche texte est exportée :
+//!
+//! - **Word** : un paragraphe par ligne, saut de page entre les pages PDF ;
+//! - **Excel** : une ligne de feuille par ligne de texte ;
+//! - **PowerPoint** : une diapositive par page PDF, chaque ligne dans un
+//!   cadre de texte.
+//!
+//! Les images, les tableaux et la mise en page ne sont pas reconstruits.
+
+use std::io::Write;
+use std::path::Path;
+
+use youpdf_shared::{Error, Result};
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipWriter};
+
+use crate::document::Document;
+
+/// Format Office proposé à l'export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfficeFormat {
+    /// Word (`.docx`).
+    Word,
+    /// Excel (`.xlsx`).
+    Excel,
+    /// PowerPoint (`.pptx`).
+    PowerPoint,
+}
+
+impl OfficeFormat {
+    /// Nom affiché dans l'interface.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            OfficeFormat::Word => "Word (.docx)",
+            OfficeFormat::Excel => "Excel (.xlsx)",
+            OfficeFormat::PowerPoint => "PowerPoint (.pptx)",
+        }
+    }
+
+    /// Extension de fichier suggérée (sans point).
+    pub fn extension(&self) -> &'static str {
+        match self {
+            OfficeFormat::Word => "docx",
+            OfficeFormat::Excel => "xlsx",
+            OfficeFormat::PowerPoint => "pptx",
+        }
+    }
+
+    /// Tous les formats, dans l'ordre d'affichage.
+    pub const ALL: [OfficeFormat; 3] = [
+        OfficeFormat::Word,
+        OfficeFormat::Excel,
+        OfficeFormat::PowerPoint,
+    ];
+}
+
+/// Une partie du paquet OOXML : chemin dans l'archive et contenu XML.
+type Part = (String, String);
+
+impl Document {
+    /// Exporte la couche texte du document vers un fichier Office.
+    ///
+    /// Les pages sans texte extractible (scan non océrisé) produisent une
+    /// section vide plutôt qu'une erreur : un document mixte s'exporte
+    /// quand même.
+    pub fn export_office(&self, path: impl AsRef<Path>, format: OfficeFormat) -> Result<()> {
+        let path = path.as_ref();
+        let pages = self.office_pages();
+        let parts = match format {
+            OfficeFormat::Word => word_parts(&pages),
+            OfficeFormat::Excel => excel_parts(&pages),
+            OfficeFormat::PowerPoint => powerpoint_parts(&pages),
+        };
+        write_zip(path, &parts)
+    }
+
+    /// Lignes de texte par page, `\u{c}` normalisé en `\n` et caractères
+    /// interdits en XML retirés.
+    fn office_pages(&self) -> Vec<Vec<String>> {
+        let total = self.page_count() as u32;
+        let mut pages = Vec::with_capacity(total as usize);
+        for number in 1..=total {
+            let text = self.page_text(number).unwrap_or_default();
+            let text = text.replace('\u{c}', "\n");
+            pages.push(text.split('\n').map(sanitize_xml).collect());
+        }
+        pages
+    }
+}
+
+/// Écrit une archive ZIP contenant chaque partie en DEFLATE.
+fn write_zip(path: &Path, parts: &[Part]) -> Result<()> {
+    let file = std::fs::File::create(path)?;
+    let mut zip = ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    for (name, content) in parts {
+        zip.start_file(name.as_str(), options)
+            .map_err(|e| Error::Pdf(format!("écriture de {name} : {e}")))?;
+        zip.write_all(content.as_bytes())?;
+    }
+    zip.finish()
+        .map_err(|e| Error::Pdf(format!("finalisation de l'archive Office : {e}")))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Word (.docx)
+// ---------------------------------------------------------------------------
+
+/// Assemble les parties du paquet Word.
+fn word_parts(pages: &[Vec<String>]) -> Vec<Part> {
+    vec![
+        ("[Content_Types].xml".to_string(), word_content_types()),
+        (
+            "_rels/.rels".to_string(),
+            root_rels("word/document.xml"),
+        ),
+        ("word/document.xml".to_string(), word_document(pages)),
+        ("word/styles.xml".to_string(), word_styles()),
+        (
+            "word/_rels/document.xml.rels".to_string(),
+            document_rels(),
+        ),
+    ]
+}
+
+/// `[Content_Types].xml` d'un document Word.
+fn word_content_types() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>"#
+        .to_string()
+}
+
+/// `word/document.xml` : un paragraphe par ligne, saut de page entre les pages.
+fn word_document(pages: &[Vec<String>]) -> String {
+    let mut body = String::new();
+    for (page_index, page) in pages.iter().enumerate() {
+        if page_index > 0 {
+            body.push_str(r#"<w:p><w:r><w:br w:type="page"/></w:r></w:p>"#);
+        }
+        if page.is_empty() {
+            body.push_str("<w:p/>");
+            continue;
+        }
+        for line in page {
+            body.push_str(r#"<w:p><w:r><w:t xml:space="preserve">"#);
+            body.push_str(&escape_xml(line));
+            body.push_str("</w:t></w:r></w:p>");
+        }
+    }
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1417" w:right="1417" w:bottom="1417" w:left="1417"/></w:sectPr></w:body></w:document>"#
+    )
+}
+
+/// `word/styles.xml` : style `Normal` minimal.
+fn word_styles() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style></w:styles>"#
+        .to_string()
+}
+
+/// `word/_rels/document.xml.rels` : lien vers les styles.
+fn document_rels() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#
+        .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Excel (.xlsx)
+// ---------------------------------------------------------------------------
+
+/// Assemble les parties du paquet Excel : une feuille, une chaîne partagée par
+/// ligne non vide.
+fn excel_parts(pages: &[Vec<String>]) -> Vec<Part> {
+    let mut rows = String::new();
+    let mut shared = String::new();
+    let mut shared_count = 0usize;
+    let mut row_index = 0usize;
+
+    for page in pages {
+        for line in page {
+            row_index += 1;
+            if line.is_empty() {
+                rows.push_str(&format!("<row r=\"{row_index}\"/>"));
+                continue;
+            }
+            rows.push_str(&format!(
+                "<row r=\"{row_index}\"><c r=\"A{row_index}\" t=\"s\"><v>{shared_count}</v></c></row>"
+            ));
+            shared.push_str(r#"<si><t xml:space="preserve">"#);
+            shared.push_str(&escape_xml(line));
+            shared.push_str("</t></si>");
+            shared_count += 1;
+        }
+    }
+
+    let sheet = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{rows}</sheetData></worksheet>"#
+    );
+    let strings = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{shared_count}" uniqueCount="{shared_count}">{shared}</sst>"#
+    );
+
+    vec![
+        ("[Content_Types].xml".to_string(), excel_content_types()),
+        ("_rels/.rels".to_string(), root_rels("xl/workbook.xml")),
+        ("xl/workbook.xml".to_string(), excel_workbook()),
+        (
+            "xl/_rels/workbook.xml.rels".to_string(),
+            excel_workbook_rels(),
+        ),
+        ("xl/worksheets/sheet1.xml".to_string(), sheet),
+        ("xl/sharedStrings.xml".to_string(), strings),
+    ]
+}
+
+/// `[Content_Types].xml` d'un classeur Excel.
+fn excel_content_types() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>"#
+        .to_string()
+}
+
+/// `xl/workbook.xml` : une feuille nommée `Sheet1`.
+fn excel_workbook() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#
+        .to_string()
+}
+
+/// `xl/_rels/workbook.xml.rels` : feuille + chaînes partagées.
+fn excel_workbook_rels() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>"#
+        .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// PowerPoint (.pptx)
+// ---------------------------------------------------------------------------
+
+/// Assemble les parties du paquet PowerPoint : une diapositive par page.
+fn powerpoint_parts(pages: &[Vec<String>]) -> Vec<Part> {
+    // Un PDF a toujours au moins une page ; on garantit la même chose ici.
+    let fallback = vec![Vec::new()];
+    let pages: &[Vec<String>] = if pages.is_empty() { &fallback } else { pages };
+    let slide_count = pages.len();
+
+    let mut parts = vec![
+        (
+            "[Content_Types].xml".to_string(),
+            powerpoint_content_types(slide_count),
+        ),
+        (
+            "_rels/.rels".to_string(),
+            root_rels("ppt/presentation.xml"),
+        ),
+        (
+            "ppt/presentation.xml".to_string(),
+            powerpoint_presentation(slide_count),
+        ),
+        (
+            "ppt/_rels/presentation.xml.rels".to_string(),
+            powerpoint_presentation_rels(slide_count),
+        ),
+        (
+            "ppt/slideMasters/slideMaster1.xml".to_string(),
+            slide_master(),
+        ),
+        (
+            "ppt/slideMasters/_rels/slideMaster1.xml.rels".to_string(),
+            slide_master_rels(),
+        ),
+        (
+            "ppt/slideLayouts/slideLayout1.xml".to_string(),
+            slide_layout(),
+        ),
+        (
+            "ppt/slideLayouts/_rels/slideLayout1.xml.rels".to_string(),
+            slide_layout_rels(),
+        ),
+        ("ppt/theme/theme1.xml".to_string(), theme()),
+    ];
+
+    for (index, page) in pages.iter().enumerate() {
+        let number = index + 1;
+        parts.push((format!("ppt/slides/slide{number}.xml"), slide(page)));
+        parts.push((
+            format!("ppt/slides/_rels/slide{number}.xml.rels"),
+            slide_rels(),
+        ));
+    }
+
+    parts
+}
+
+/// `[Content_Types].xml` d'une présentation PowerPoint.
+fn powerpoint_content_types(slide_count: usize) -> String {
+    let mut out = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>"#,
+    );
+    for number in 1..=slide_count {
+        out.push_str(&format!(
+            "<Override PartName=\"/ppt/slides/slide{number}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
+        ));
+    }
+    out.push_str("</Types>");
+    out
+}
+
+/// `ppt/presentation.xml` : liste du masque et des diapositives.
+fn powerpoint_presentation(slide_count: usize) -> String {
+    let mut slides = String::new();
+    for number in 1..=slide_count {
+        let id = 255 + number;
+        let rel = number + 1;
+        slides.push_str(&format!("<p:sldId id=\"{id}\" r:id=\"rId{rel}\"/>"));
+    }
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst>{slides}</p:sldIdLst><p:sldSz cx="9144000" cy="6858000"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+    )
+}
+
+/// `ppt/_rels/presentation.xml.rels` : masque puis diapositives.
+fn powerpoint_presentation_rels(slide_count: usize) -> String {
+    let mut out = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>"#,
+    );
+    for number in 1..=slide_count {
+        let rel = number + 1;
+        out.push_str(&format!(
+            "<Relationship Id=\"rId{rel}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/slide{number}.xml\"/>"
+        ));
+    }
+    out.push_str("</Relationships>");
+    out
+}
+
+/// `ppt/slideMasters/slideMaster1.xml`.
+fn slide_master() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst><p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles></p:sldMaster>"#
+        .to_string()
+}
+
+/// `ppt/slideMasters/_rels/slideMaster1.xml.rels` : disposition + thème.
+fn slide_master_rels() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/></Relationships>"#
+        .to_string()
+}
+
+/// `ppt/slideLayouts/slideLayout1.xml` : disposition vide.
+fn slide_layout() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" type="blank" preserve="1"><p:cSld name="Blank"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>"#
+        .to_string()
+}
+
+/// `ppt/slideLayouts/_rels/slideLayout1.xml.rels` : lien vers le masque.
+fn slide_layout_rels() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/></Relationships>"#
+        .to_string()
+}
+
+/// `ppt/slides/slideN.xml` : chaque ligne devient un paragraphe d'un cadre.
+fn slide(lines: &[String]) -> String {
+    let mut body = String::new();
+    if lines.is_empty() {
+        body.push_str("<a:p/>");
+    } else {
+        for line in lines {
+            body.push_str("<a:p><a:r><a:t>");
+            body.push_str(&escape_xml(line));
+            body.push_str("</a:t></a:r></a:p>");
+        }
+    }
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="2" name="Content"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="457200" y="457200"/><a:ext cx="8229600" cy="5943600"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr wrap="square"/><a:lstStyle/>{body}</p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>"#
+    )
+}
+
+/// `ppt/slides/_rels/slideN.xml.rels` : lien vers la disposition.
+fn slide_rels() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>"#
+        .to_string()
+}
+
+/// `ppt/theme/theme1.xml` : thème « Office » minimal mais complet.
+fn theme() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme"><a:themeElements><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2><a:accent1><a:srgbClr val="4472C4"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2><a:accent3><a:srgbClr val="A5A5A5"/></a:accent3><a:accent4><a:srgbClr val="FFC000"/></a:accent4><a:accent5><a:srgbClr val="5B9BD5"/></a:accent5><a:accent6><a:srgbClr val="70AD47"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Office"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:lumMod val="110000"/><a:satMod val="105000"/><a:tint val="67000"/></a:schemeClr></a:gs><a:gs pos="50000"><a:schemeClr val="phClr"><a:lumMod val="105000"/><a:satMod val="103000"/><a:tint val="73000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:lumMod val="105000"/><a:satMod val="109000"/><a:tint val="81000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:satMod val="103000"/><a:lumMod val="102000"/><a:tint val="94000"/></a:schemeClr></a:gs><a:gs pos="50000"><a:schemeClr val="phClr"><a:satMod val="110000"/><a:lumMod val="100000"/><a:shade val="100000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:lumMod val="99000"/><a:satMod val="120000"/><a:shade val="78000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill></a:fillStyleLst><a:lnStyleLst><a:ln w="6350" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/><a:miter lim="800000"/></a:ln><a:ln w="12700" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/><a:miter lim="800000"/></a:ln><a:ln w="19050" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/><a:miter lim="800000"/></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst><a:outerShdw blurRad="57150" dist="19050" dir="5400000" algn="ctr" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="63000"/></a:srgbClr></a:outerShdw></a:effectLst></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"><a:tint val="95000"/><a:satMod val="170000"/></a:schemeClr></a:solidFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:tint val="93000"/><a:satMod val="150000"/><a:shade val="98000"/><a:lumMod val="102000"/></a:schemeClr></a:gs><a:gs pos="50000"><a:schemeClr val="phClr"><a:tint val="98000"/><a:satMod val="130000"/><a:shade val="90000"/><a:lumMod val="103000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:shade val="63000"/><a:satMod val="120000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/></a:theme>"#
+        .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Communs
+// ---------------------------------------------------------------------------
+
+/// `_rels/.rels` : relation racine vers le document principal du paquet.
+fn root_rels(target: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="{target}"/></Relationships>"#
+    )
+}
+
+/// Échappe un texte pour XML (`&`, `<`, `>`, `"`, `'`).
+fn escape_xml(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Retire les caractères interdits en XML 1.0 (contrôles C0 sauf tabulation,
+/// saut de ligne et retour chariot).
+fn sanitize_xml(text: &str) -> String {
+    text.chars().filter(|&c| is_xml_char(c)).collect()
+}
+
+/// Vrai si `c` est autorisé dans un document XML 1.0.
+fn is_xml_char(c: char) -> bool {
+    c == '\t' || c == '\n' || c == '\r' || c >= ' '
+}

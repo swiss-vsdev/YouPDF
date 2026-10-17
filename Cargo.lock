@@ -4665,8 +4665,10 @@ dependencies = [
  "egui",
  "egui-phosphor",
  "rfd",
+ "tokio",
  "tracing",
  "tracing-subscriber",
+ "youpdf-ai",
  "youpdf-core",
  "youpdf-shared",
 ]
@@ -4686,6 +4688,7 @@ dependencies = [
  "lopdf",
  "md-5",
  "pdfium-render",
+ "quick-xml",
  "serde",
  "sha2",
  "tempfile",
@@ -4693,6 +4696,7 @@ dependencies = [
  "tracing",
  "uuid",
  "youpdf-shared",
+ "zip",
 ]
 
 [[package]]
