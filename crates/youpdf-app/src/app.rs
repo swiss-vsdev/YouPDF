@@ -307,6 +307,40 @@ fn mode_tools(mode: usize) -> &'static [ModeTool] {
     }
 }
 
+/// Écart relatif toléré entre l'échelle rastérisée et l'échelle demandée
+/// avant de re-rendre la page, une fois le zoom au repos.
+///
+/// Sans cela, un zoom qui reste dans le même palier laisserait une image
+/// jusqu'à √2 trop molle.
+const RENDER_TOLERANCE: f32 = 0.10;
+
+/// Une page déjà rastérisée, avec l'échelle exacte employée.
+struct CachedPage {
+    texture: TextureHandle,
+    /// Échelle réellement employée pour la rastérisation (`logical_scale * ppp`).
+    scale: f32,
+}
+
+/// Palier de vignette : hors de la pyramide de zoom, une vignette ne doit
+/// jamais être servie à la place d'une page rendue.
+const THUMBNAIL_STEP: i32 = -1;
+
+/// Délai de repos après le dernier changement de zoom avant de rastériser la
+/// page à la finesse demandée.
+const ZOOM_SETTLE_SECS: f64 = 0.12;
+
+/// Palier de rendu : une pyramide de pas √2 (1×, 1,41×, 2×…).
+///
+/// Un palier reste valable tant que l'échelle demandée ne s'en écarte pas
+/// d'un facteur √2. Entre deux paliers on étire le bitmap voisin, ce qui ne
+/// se voit pas une fois filtré, au lieu de rastériser chaque page à chaque
+/// cran de molette — c'est ce qui faisait ramer le zoom.
+fn render_step(scale: f32, ppp: f32) -> i32 {
+    // Décalage constant : les paliers restent positifs et `THUMBNAIL_STEP`
+    // (-1) ne peut pas être confondu avec un palier de page.
+    ((scale * ppp).max(0.01).log2() * 2.0).round() as i32 + 20
+}
+
 /// Entrée du menu `Outils`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ToolsEntry {
@@ -501,8 +535,10 @@ struct Tab {
     zoom: Option<f32>,
     /// Vrai quand l'ajustement automatique garde toute la page visible.
     zoom_fit_page: bool,
-    /// Bitmaps déjà rendus ; clé `(page, bucket)`, bucket 1 = vignette.
-    cache: HashMap<(u32, u32), TextureHandle>,
+    /// Bitmaps déjà rendus ; clé `(page, palier)`. Voir `render_step` : les
+    /// paliers sont ceux de la pyramide de zoom, `THUMBNAIL_STEP` pour les
+    /// vignettes.
+    cache: HashMap<(u32, i32), CachedPage>,
     /// Modifications non enregistrées.
     dirty: bool,
     /// Modifications qui ne sont pas de simples annotations (texte, champs,
@@ -533,6 +569,20 @@ struct Tab {
 impl Tab {
     fn total(&self) -> usize {
         self.doc.page_count()
+    }
+
+    /// Le palier demandé manque-t-il, ou est-il trop loin de l'échelle voulue ?
+    ///
+    /// Sert à décider si la page mérite une rastérisation une fois le zoom au
+    /// repos. Pendant un geste, seule la présence du palier compte.
+    fn needs_render(&self, page: u32, step: i32, target_scale: f32) -> bool {
+        match self.cache.get(&(page, step)) {
+            None => true,
+            Some(cached) => {
+                target_scale > 0.0
+                    && (cached.scale - target_scale).abs() / target_scale > RENDER_TOLERANCE
+            }
+        }
     }
 }
 
@@ -758,6 +808,11 @@ pub struct YouPdfApp {
     jump: Option<usize>,
     /// Dernière échelle « ajuster à la largeur » : base des pas de zoom.
     last_fit: f32,
+    /// Un réglage de zoom vient d'être demandé : le canevas horodate le
+    /// geste et diffère le rendu net tant que l'utilisateur bouge encore.
+    zoom_dirty: bool,
+    /// Instant du dernier changement de zoom (voir `ZOOM_SETTLE_SECS`).
+    zoom_moved_at: f64,
 }
 
 impl YouPdfApp {
@@ -905,6 +960,8 @@ impl YouPdfApp {
             render_status: String::new(),
             jump: None,
             last_fit: 1.0,
+            zoom_dirty: false,
+            zoom_moved_at: 0.0,
         };
 
         if let Some(path) = initial {
@@ -2802,6 +2859,7 @@ impl YouPdfApp {
                 tab.zoom_fit_page = false;
             }
         }
+        self.zoom_dirty = true;
     }
 
     /// Applique un réglage de zoom nommé.
@@ -2822,6 +2880,7 @@ impl YouPdfApp {
                 }
             }
         }
+        self.zoom_dirty = true;
     }
 
     fn zoom_by(&mut self, factor: f32) {
@@ -3067,40 +3126,95 @@ impl YouPdfApp {
     // -- Rendu des pages ---------------------------------------------------
 
     /// Texture d'une page, nette sur écrans HiDPI.
+    ///
+    /// `allow_render` est faux pendant un geste de zoom : le palier exact
+    /// n'existe pas encore, on étire alors le palier voisin déjà en cache au
+    /// lieu de rastériser. Le rendu net est demandé après le geste.
     #[allow(clippy::too_many_arguments)]
     fn page_texture(
         ctx: &egui::Context,
         renderer: &dyn Renderer,
         tab: &mut Tab,
         page: u32,
-        bucket: u32,
+        step: i32,
         logical_scale: f32,
         ppp: f32,
+        allow_render: bool,
         status_holder: &mut String,
     ) -> Option<TextureHandle> {
-        let key = (page, bucket);
-        if let Some(tex) = tab.cache.get(&key) {
-            return Some(tex.clone());
+        let key = (page, step);
+        let target_scale = logical_scale * ppp;
+        if let Some(cached) = tab.cache.get(&key) {
+            // Au repos, on affine : un palier rendu à une échelle trop
+            // éloignée de celle demandée est redessiné. Pendant un geste,
+            // l'existant suffit.
+            let stale = (cached.scale - target_scale).abs() / target_scale.max(0.001)
+                > RENDER_TOLERANCE;
+            if !stale || !allow_render {
+                return Some(cached.texture.clone());
+            }
+        }
+
+        if !allow_render {
+            // Palier voisin : la pyramide a un pas de √2, donc au plus un
+            // facteur √2 d'étirement, invisible une fois filtré.
+            let nearest = tab
+                .cache
+                .keys()
+                .filter(|(p, s)| *p == page && *s >= 0)
+                .min_by_key(|(_, s)| ((*s - step).abs(), *s))
+                .copied()
+                .and_then(|k| tab.cache.get(&k).map(|c| c.texture.clone()));
+            if let Some(tex) = nearest {
+                return Some(tex);
+            }
+            // Rien en cache pour cette page : elle entre à l'écran. Étirer un
+            // néant afficherait une page blanche, on la rastérise donc
+            // malgré le geste en cours.
         }
 
         let options = RenderOptions {
-            scale: logical_scale * ppp,
+            scale: target_scale,
             ..Default::default()
         };
         match renderer.render_page(&tab.doc, page, &options) {
             Ok(bitmap) => {
                 tracing::info!(
-                    "render page {page} bucket {bucket}: bitmap {}x{} (scale {:.3})",
+                    "render page {page} step {step}: bitmap {}x{} (scale {:.3})",
                     bitmap.width,
                     bitmap.height,
                     logical_scale * ppp
                 );
+                let image = bitmap.to_egui_image();
                 let handle = ctx.load_texture(
-                    format!("p{page}b{bucket}"),
-                    bitmap.to_egui_image(),
+                    format!("p{page}s{step}"),
+                    image,
                     TextureOptions::LINEAR,
                 );
-                tab.cache.insert(key, handle.clone());
+                tab.cache.insert(
+                    key,
+                    CachedPage {
+                        texture: handle.clone(),
+                        scale: target_scale,
+                    },
+                );
+
+                // On ne garde que les trois paliers les plus proches de la
+                // page : au-delà ils ne servent plus à étirer, et une longue
+                // séance de zoom en accumulerait des dizaines.
+                let mut steps: Vec<i32> = tab
+                    .cache
+                    .keys()
+                    .filter(|(p, s)| *p == page && *s >= 0)
+                    .map(|(_, s)| *s)
+                    .collect();
+                if steps.len() > 3 {
+                    steps.sort_by_key(|s| (*s - step).abs());
+                    for stale in steps.into_iter().skip(3) {
+                        tab.cache.remove(&(page, stale));
+                    }
+                }
+
                 Some(handle)
             }
             Err(err) => {
@@ -3542,7 +3656,7 @@ impl YouPdfApp {
                     }
 
                     if let Some(tex) =
-                        Self::page_texture(&ctx, renderer, tab, page, 1, scale, ppp, status)
+                        Self::page_texture(&ctx, renderer, tab, page, THUMBNAIL_STEP, scale, ppp, true, status)
                     {
                         ui.painter().image(
                             tex.id(),
@@ -3940,7 +4054,15 @@ impl YouPdfApp {
                                     },
                                 );
                                 if let Some(tex) = Self::page_texture(
-                                    ctx, renderer, tab, page, 1, scale, ppp, status,
+                                    ctx,
+                                    renderer,
+                                    tab,
+                                    page,
+                                    THUMBNAIL_STEP,
+                                    scale,
+                                    ppp,
+                                    true,
+                                    status,
                                 ) {
                                     ui.painter().image(
                                         tex.id(),
@@ -6941,8 +7063,21 @@ impl YouPdfApp {
         // Pincement / ⌘-molette = zoom (egui agrège les deux).
         let zoom_delta = ui.input(|i| i.zoom_delta());
         if (zoom_delta - 1.0).abs() > 0.0001 {
+            self.zoom_dirty = true;
             self.zoom_by(zoom_delta);
         }
+        // Horodatage du geste : il gèle la rastérisation, on étire le palier
+        // voisin, puis le rendu net arrive une fois la main levée.
+        if self.zoom_dirty {
+            self.zoom_dirty = false;
+            self.zoom_moved_at = ui.input(|i| i.time);
+        }
+        let now = ui.input(|i| i.time);
+        if now - self.zoom_moved_at < ZOOM_SETTLE_SECS + 0.15 {
+            // La trame nette est encore due : on la programme.
+            ui.ctx().request_repaint();
+        }
+        let zoom_settled = now - self.zoom_moved_at >= ZOOM_SETTLE_SECS;
 
         let active = self.active;
         let mut jump = self.jump.take();
@@ -7061,6 +7196,25 @@ impl YouPdfApp {
                     }
                 }
 
+                // Une seule page rastérisée par trame, et seulement une fois
+                // le zoom au repos : la page courante d'abord, puis les
+                // autres pages visibles au fil des trames suivantes.
+                let pending_render: Option<u32> = if zoom_settled {
+                    let mut visible: Vec<(u32, i32, f32)> = placed
+                        .iter()
+                        .filter(|(_, _, page_rect, _, _)| clip.intersects(*page_rect))
+                        .map(|(page, _, _, _, scale)| (*page, render_step(*scale, ppp), *scale * ppp))
+                        .collect();
+                    visible.sort_by_key(|(page, _, _)| if *page == tab.page as u32 { 0 } else { 1 });
+                    visible
+                        .into_iter()
+                        .find(|(page, step, target)| !tab.needs_render(*page, *step, *target))
+                        .map(|(page, _, _)| page)
+                } else {
+                    None
+                };
+                let mut rendered_pending = false;
+
                 for (page, rect, page_rect, row_id, scale) in placed {
                     let size = page_rect.size();
                     let resp = ui.interact(rect, row_id.with(page), sense);
@@ -7089,10 +7243,14 @@ impl YouPdfApp {
                             );
                         }
 
-                        let bucket = (scale * ppp * 100.0).round() as u32;
+                        let step = render_step(scale, ppp);
+                        let wanted = pending_render == Some(page);
                         if let Some(tex) = Self::page_texture(
-                            &ctx, renderer, tab, page, bucket, scale, ppp, status,
+                            &ctx, renderer, tab, page, step, scale, ppp, wanted, status,
                         ) {
+                            if wanted {
+                                rendered_pending = true;
+                            }
                             ui.painter().image(
                                 tex.id(),
                                 page_rect,
@@ -7443,6 +7601,13 @@ impl YouPdfApp {
                     tab.page = page;
                 } else if let Some(page) = first_visible {
                     tab.page = page;
+                }
+
+                // Le rendu net d'une page vient d'aboutir : la trame suivante
+                // s'occupe de la page visible suivante. Si le rendu échoue, on
+                // ne redemande rien — sinon on tournerait à vide.
+                if rendered_pending {
+                    ctx.request_repaint();
                 }
 
                 // ponytail: cache borné par nettoyage grossier, LRU plus tard.
