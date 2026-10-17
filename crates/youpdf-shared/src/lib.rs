@@ -11,4 +11,4 @@ pub mod error;
 pub mod theme;
 
 pub use error::{Error, Result};
-pub use theme::Theme;
+pub use theme::{pal, set_palette, Palette, Theme};
