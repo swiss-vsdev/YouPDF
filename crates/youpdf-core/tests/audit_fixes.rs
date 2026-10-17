@@ -149,7 +149,7 @@ fn patched_text_is_winansi_not_utf8() {
     let mut doc = Document::from_bytes(&doc_with_f1("Helvetica")).unwrap();
     let frags = doc.extract_text_fragments(1).expect("fragments");
     assert!(!frags.is_empty(), "aucun fragment extrait");
-    doc.replace_text_fragment(&frags[0], "café").unwrap();
+    doc.replace_text_fragment(&frags[0], "café", None).unwrap();
     let bytes = doc.to_bytes().unwrap();
     assert!(
         bytes.windows(4).any(|w| w == b"caf\xe9"),
@@ -158,6 +158,33 @@ fn patched_text_is_winansi_not_utf8() {
     assert!(
         !bytes.windows(6).any(|w| w == b"caf\xc3\xa9"),
         "du UTF-8 s'est glissé dans un littéral WinAnsi (→ « cafÃ© »)"
+    );
+}
+
+/// Le patch de réécriture doit poser la couleur demandée pour le fond et
+/// reposer explicitement celle du texte : sans cela, il hérite de la couleur
+/// de remplissage laissée par le contenu de la page (blanc par défaut), ce qui
+/// rend le texte réécrit illisible sur une page teintée ou masque mal le fond.
+#[test]
+fn replace_text_paints_the_requested_colours() {
+    let mut doc = Document::from_bytes(&doc_with_f1("Helvetica")).unwrap();
+    let frags = doc.extract_text_fragments(1).expect("fragments");
+    assert!(!frags.is_empty(), "aucun fragment extrait");
+    let mut fragment = frags[0].clone();
+    fragment.color = [10, 20, 30];
+
+    doc.replace_text_fragment(&fragment, "test", Some([0.5, 0.25, 1.0]))
+        .unwrap();
+
+    let bytes = doc.to_bytes().unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        text.contains("0.50 0.25 1.00 rg"),
+        "le fond demandé n'apparaît pas dans le patch"
+    );
+    assert!(
+        text.contains("0.039 0.078 0.118 rg"),
+        "la couleur du texte n'est pas reposée explicitement"
     );
 }
 

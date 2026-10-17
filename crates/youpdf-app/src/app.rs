@@ -28,7 +28,7 @@ use youpdf_core::{
     DifferenceKind, Document, EncryptionOptions, EncryptionStrength, ExtractedTable,
     FieldProperties, FormDataFormat, FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue,
     MeasureKind, Measurement, NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineItem,
-    OutlineStyle, PageRange,
+    OutlineStyle, PageRange, PageBitmap,
     PdfiumRenderer, RedactionRegion, RenderOptions, Renderer, SearchIndex, SearchOptions,
     SearchResult, TextFormat, TextFragment, Watermark, STAMP_NAMES,
 };
@@ -539,6 +539,9 @@ struct Tab {
     /// paliers sont ceux de la pyramide de zoom, `THUMBNAIL_STEP` pour les
     /// vignettes.
     cache: HashMap<(u32, i32), CachedPage>,
+    /// Dernière page rastérisée (numéro, échelle, pixels). Sert uniquement à
+    /// lire la couleur du fond de page sous un bloc de texte réécrit.
+    last_bitmap: Option<(u32, f32, PageBitmap)>,
     /// Modifications non enregistrées.
     dirty: bool,
     /// Modifications qui ne sont pas de simples annotations (texte, champs,
@@ -569,6 +572,13 @@ struct Tab {
 impl Tab {
     fn total(&self) -> usize {
         self.doc.page_count()
+    }
+
+    /// Le rendu en cache n'est plus d'actualité : les bitmaps et la couleur de
+    /// fond lue jusque-là sont périmés.
+    fn invalidate_render(&mut self) {
+        self.cache.clear();
+        self.last_bitmap = None;
     }
 
     /// Le palier demandé manque-t-il, ou est-il trop loin de l'échelle voulue ?
@@ -1052,6 +1062,7 @@ impl YouPdfApp {
             zoom: None,
             zoom_fit_page: false,
             cache: HashMap::new(),
+            last_bitmap: None,
             dirty: false,
             structural_dirty: false,
             annots,
@@ -2059,7 +2070,7 @@ impl YouPdfApp {
                             }
                             tab.dirty = true;
                             tab.structural_dirty = true;
-                            tab.cache.clear();
+                            tab.invalidate_render();
                             self.toast(ctx, format!("Field {} updated", props.name));
                         }
                         Err(err) => self.toast(ctx, format!("Field update failed: {err}")),
@@ -2087,7 +2098,7 @@ impl YouPdfApp {
                     tab.dirty = true;
                     tab.structural_dirty = true;
                     // La page est déjà rendue avec l'ancienne valeur.
-                    tab.cache.clear();
+                    tab.invalidate_render();
                     self.toast(ctx, format!("Field {} updated", field.name));
                 }
                 Err(err) => self.toast(ctx, format!("Field update failed: {err}")),
@@ -2525,6 +2536,63 @@ impl YouPdfApp {
         }
     }
 
+    /// Couleur du fond de page autour d'un bloc, en repère affiché.
+    ///
+    /// Le masque de réécriture doit se fondre dans la page : blanc sur une
+    /// page blanche, beige sur une page beige. On échantillonne six points au
+    /// bord du bloc, à l'écart des glyphes, et on prend la médiane par canal —
+    /// un point isolé tombé sur un filet ou un glyphe voisin ne décide donc
+    /// pas seul. Sans bitmap disponible, on répond blanc.
+    fn mask_color(&self, page: usize, rect: [f32; 4]) -> [u8; 3] {
+        const WHITE: [u8; 3] = [255, 255, 255];
+        let Some((bitmap_page, scale, bitmap)) = self
+            .tabs
+            .get(self.active)
+            .and_then(|tab| tab.last_bitmap.as_ref())
+        else {
+            return WHITE;
+        };
+        if *bitmap_page != page as u32 || *scale <= 0.0 || bitmap.width == 0 || bitmap.height == 0 {
+            return WHITE;
+        }
+
+        // Hauteur de la page en points du repère affiché.
+        let page_h = bitmap.height as f32 / *scale;
+        let [x1, y1, x2, y2] = rect;
+        let mut samples: Vec<[u8; 3]> = Vec::with_capacity(6);
+
+        // Deux rangées : juste au-dessus du bloc, juste en dessous.
+        for y in [y2 + 2.0_f32, y1 - 2.0] {
+            for t in [0.2_f32, 0.5, 0.8] {
+                let x = x1 + (x2 - x1) * t;
+                let px = (x * scale) as i64;
+                let py = ((page_h - y) * scale) as i64;
+                if px < 0 || py < 0 || px >= bitmap.width as i64 || py >= bitmap.height as i64 {
+                    continue;
+                }
+                let idx = (py as usize * bitmap.width as usize + px as usize) * 4;
+                if idx + 2 < bitmap.pixels.len() {
+                    samples.push([
+                        bitmap.pixels[idx],
+                        bitmap.pixels[idx + 1],
+                        bitmap.pixels[idx + 2],
+                    ]);
+                }
+            }
+        }
+        if samples.is_empty() {
+            return WHITE;
+        }
+
+        let mut out = WHITE;
+        for (channel, slot) in out.iter_mut().enumerate() {
+            let mut values: Vec<u8> = samples.iter().map(|s| s[channel]).collect();
+            values.sort_unstable();
+            *slot = values[values.len() / 2];
+        }
+        out
+    }
+
     /// Ouvre la réécriture du bloc de texte touché.
     fn edit_text_at(&mut self, page: usize, point: [f32; 2], ctx: &egui::Context) {
         self.ensure_fragments();
@@ -2565,13 +2633,18 @@ impl YouPdfApp {
         if draft.buffer == draft.fragment.text {
             return;
         }
+        // Couleur du fond sous le bloc : le patch écrit par le cœur doit se
+        // fondre dans la page, pas poser un rectangle blanc.
+        let bg = self.mask_color(draft.fragment.page, draft.fragment.rect);
         let replaced = match self.tabs.get_mut(self.active) {
             Some(tab) => {
                 // Le fragment vit en repère affiché, la réécriture attend le
                 // repère page.
                 let mut fragment = draft.fragment.clone();
                 fragment.rect = rect_to_page(&tab.doc, fragment.page, fragment.rect);
-                tab.doc.replace_text_fragment(&fragment, &draft.buffer)
+                let background = Some([bg[0] as f32 / 255.0, bg[1] as f32 / 255.0, bg[2] as f32 / 255.0]);
+                tab.doc
+                    .replace_text_fragment(&fragment, &draft.buffer, background)
             }
             None => return,
         };
@@ -2833,7 +2906,7 @@ impl YouPdfApp {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             tab.dirty = true;
             tab.structural_dirty = true;
-            tab.cache.clear();
+            tab.invalidate_render();
             // Les annotations en attente ne vivent qu'en mémoire : les
             // marquer « à recharger » les remplacerait par celles du
             // document, c'est-à-dire par rien.
@@ -3000,7 +3073,7 @@ impl YouPdfApp {
                     if new_text == fragment.text {
                         continue;
                     }
-                    if tab.doc.replace_text_fragment(&fragment, &new_text).is_ok() {
+                    if tab.doc.replace_text_fragment(&fragment, &new_text, None).is_ok() {
                         changed += 1;
                     }
                 }
@@ -3008,7 +3081,7 @@ impl YouPdfApp {
             if changed > 0 {
                 tab.dirty = true;
                 tab.structural_dirty = true;
-                tab.cache.clear();
+                tab.invalidate_render();
             }
         }
         if changed > 0 {
@@ -3186,6 +3259,11 @@ impl YouPdfApp {
                     logical_scale * ppp
                 );
                 let image = bitmap.to_egui_image();
+                // La page en cours d'affichage garde ses pixels : la
+                // réécriture y lit la couleur du fond.
+                if page as usize == tab.page {
+                    tab.last_bitmap = Some((page, target_scale, bitmap));
+                }
                 let handle = ctx.load_texture(
                     format!("p{page}s{step}"),
                     image,
@@ -7095,6 +7173,12 @@ impl YouPdfApp {
         // le canevas emprunte déjà `self.tabs`, et le champ posé sur la page
         // doit pouvoir modifier son tampon pendant la boucle.
         let mut draft = self.edit_text.take();
+        // Couleur du fond sous le bloc réécrit : lue avant que `self.tabs` ne
+        // soit emprunté, `self` n'est plus accessible dans la boucle.
+        let mask_bg = match draft.as_ref() {
+            Some(d) => self.mask_color(d.fragment.page, d.fragment.rect),
+            None => [255, 255, 255],
+        };
         let mut edit_commit = false;
         let mut edit_cancel = false;
         let renderer = &*self.renderer;
@@ -7327,13 +7411,24 @@ impl YouPdfApp {
                                         page_rect.max.y - y1 * scale,
                                     ),
                                 );
-                                let height = (d.fragment.font_size * scale * 1.3).max(20.0);
+                                // Un seul masque, au moins aussi grand que le
+                                // bloc d'origine *et* que le champ : sinon les
+                                // jambages dépassent au-dessus et en dessous,
+                                // et une réécriture plus longue que l'original
+                                // déborde du blanc. La couleur suit la page.
+                                let height =
+                                    (block.height().max(d.fragment.font_size * scale) * 1.3)
+                                        .max(20.0);
                                 let field = Rect::from_min_size(
                                     pos2(block.min.x - 3.0, block.center().y - height / 2.0),
                                     vec2(block.width().max(140.0) + 6.0, height),
                                 );
-                                ui.painter()
-                                    .rect_filled(field, Rounding::same(2.0), Color32::WHITE);
+                                let mask = block.expand(2.0).union(field);
+                                ui.painter().rect_filled(
+                                    mask,
+                                    Rounding::same(2.0),
+                                    Color32::from_rgb(mask_bg[0], mask_bg[1], mask_bg[2]),
+                                );
                                 ui.painter().rect_stroke(
                                     field,
                                     2.0,
