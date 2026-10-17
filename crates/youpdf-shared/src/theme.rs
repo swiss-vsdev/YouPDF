@@ -1,211 +1,218 @@
-//! Jetons de thème pour l'interface.
+//! Jetons de thème de l'interface.
 //!
-//! Les quatre thèmes officiels de YouPDF. Chaque thème est une valeur
-//! constante. On n'utilise **jamais** de couleur en dur ailleurs dans le
-//! code : tout passe par ces jetons.
+//! Les quatre thèmes de YouPDF. Une palette est un jeu de couleurs constant ;
+//! le thème actif est rangé dans une variable locale au fil d'exécution, lue
+//! par tout le chrome à travers [`pal`]. C'est ce qui permet de changer de
+//! thème sans redémarrer.
+//!
+//! **Aucune couleur en dur ailleurs que dans ce fichier** : tout le chrome
+//! passe par les jetons de [`Palette`].
 
-use egui::{Color32, Context, Margin, Rounding, Stroke, Visuals};
+use std::cell::Cell;
 
-/// Palette complète d'un thème.
-///
-/// Tous les champs sont `const` : un thème est créé à la compilation.
-#[derive(Debug, Clone, Copy)]
-pub struct Theme {
-    /// Nom lisible (affiché dans les préférences).
-    pub name: &'static str,
-    /// Vrai si le thème est sombre — ajuste les visuels natifs d'egui.
-    pub is_dark: bool,
+use egui::{Color32, Context, Rounding, Stroke, Visuals};
 
-    /// Fond général de la fenêtre.
-    pub bg: Color32,
-    /// Fond des panneaux (barres, sidebar, inspecteur).
-    pub panel: Color32,
-    /// Variante légèrement plus foncée/claire pour les zones secondaires.
-    pub panel_alt: Color32,
-    /// Fond de la zone de rendu du PDF (canvas central).
-    pub canvas: Color32,
-
-    /// Texte principal.
-    pub text: Color32,
-    /// Texte secondaire (labels, aides).
-    pub text_weak: Color32,
-
-    /// Couleur d'accent (boutons actifs, sélection).
+/// Couleurs de l'interface, choisies par le thème.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Palette {
+    /// Fond du canevas, quand l'utilisateur n'a pas choisi d'autre fond.
+    pub canvas_bg: Color32,
+    /// Fond des barres, panneaux et menus.
+    pub chrome_bg: Color32,
+    /// Fond des contrôles au repos.
+    pub widget_bg: Color32,
+    /// Fond des contrôles survolés ou ouverts.
+    pub hover_bg: Color32,
+    /// Couleur d'accent (sélection, boutons actifs, liens).
     pub accent: Color32,
-    /// Accent atténué (survol).
-    pub accent_weak: Color32,
-
+    /// Texte secondaire, libellés d'aide.
+    pub muted: Color32,
+    /// Icônes au repos.
+    pub icon: Color32,
+    /// Icônes et texte mis en avant.
+    pub icon_bright: Color32,
+    /// Teinte des vignettes de page (le papier est toujours clair).
+    pub thumb_tint: Color32,
     /// Bordures et séparateurs.
-    pub border: Color32,
+    pub separator: Color32,
+    /// Rouge des marques de caviardage.
+    pub redact_red: Color32,
+    /// Jaune des correspondances de recherche.
+    pub search_match: Color32,
+}
 
-    /// États sémantiques.
-    pub success: Color32,
-    pub warning: Color32,
-    pub error: Color32,
+/// Thème de l'interface.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Theme {
+    /// Sombre, la palette d'origine.
+    #[default]
+    Dark,
+    /// Clair : chrome et canevas clairs.
+    Light,
+    /// Menthe : vert d'eau, pour un écran clair teinté.
+    Mint,
+    /// Nuit étoilée : bleu très sombre, canevas noir.
+    Starry,
 }
 
 impl Theme {
-    // ---- Thèmes officiels ------------------------------------------------
+    /// Tous les thèmes, dans l'ordre d'affichage.
+    pub const ALL: [Theme; 4] = [Theme::Dark, Theme::Light, Theme::Mint, Theme::Starry];
 
-    /// Vert doux — teinte reposante pour de longues sessions de lecture.
-    pub const SOFT_GREEN: Self = Self {
-        name: "Vert doux",
-        is_dark: false,
-        bg: Color32::from_rgb(0xEE, 0xF3, 0xEC),
-        panel: Color32::from_rgb(0xF7, 0xFA, 0xF5),
-        panel_alt: Color32::from_rgb(0xE4, 0xEC, 0xE1),
-        canvas: Color32::from_rgb(0xDA, 0xE3, 0xD6),
-        text: Color32::from_rgb(0x1F, 0x2B, 0x20),
-        text_weak: Color32::from_rgb(0x5C, 0x6B, 0x5E),
-        accent: Color32::from_rgb(0x3E, 0x8E, 0x5A),
-        accent_weak: Color32::from_rgb(0xC5, 0xDE, 0xCB),
-        border: Color32::from_rgb(0xC8, 0xD4, 0xC3),
-        success: Color32::from_rgb(0x3E, 0x8E, 0x5A),
-        warning: Color32::from_rgb(0xC9, 0x8A, 0x2B),
-        error: Color32::from_rgb(0xB0, 0x3A, 0x3A),
-    };
+    /// Nom affiché dans le menu.
+    pub fn label(self) -> &'static str {
+        match self {
+            Theme::Dark => "Dark",
+            Theme::Light => "Light",
+            Theme::Mint => "Mint",
+            Theme::Starry => "Starry",
+        }
+    }
 
-    /// Aspect papier — pour retrouver une sensation de lecture imprimée.
-    pub const PAPER: Self = Self {
-        name: "Papier",
-        is_dark: false,
-        bg: Color32::from_rgb(0xF5, 0xF1, 0xE8),
-        panel: Color32::from_rgb(0xFA, 0xF7, 0xF0),
-        panel_alt: Color32::from_rgb(0xEC, 0xE6, 0xD8),
-        canvas: Color32::from_rgb(0xE0, 0xD8, 0xC5),
-        text: Color32::from_rgb(0x2E, 0x29, 0x22),
-        text_weak: Color32::from_rgb(0x6F, 0x66, 0x58),
-        accent: Color32::from_rgb(0x8B, 0x5E, 0x2A),
-        accent_weak: Color32::from_rgb(0xDD, 0xCC, 0xAC),
-        border: Color32::from_rgb(0xD3, 0xC9, 0xB2),
-        success: Color32::from_rgb(0x5E, 0x7A, 0x3F),
-        warning: Color32::from_rgb(0xB5, 0x82, 0x28),
-        error: Color32::from_rgb(0xA8, 0x40, 0x35),
-    };
+    /// Vrai si le thème est sombre : ajuste les visuels natifs d'egui.
+    pub fn is_dark(self) -> bool {
+        matches!(self, Theme::Dark | Theme::Starry)
+    }
 
-    /// Mode clair neutre.
-    pub const LIGHT: Self = Self {
-        name: "Clair",
-        is_dark: false,
-        bg: Color32::from_rgb(0xFA, 0xFA, 0xFA),
-        panel: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-        panel_alt: Color32::from_rgb(0xF2, 0xF2, 0xF3),
-        canvas: Color32::from_rgb(0xE6, 0xE6, 0xE8),
-        text: Color32::from_rgb(0x14, 0x14, 0x16),
-        text_weak: Color32::from_rgb(0x70, 0x70, 0x76),
-        accent: Color32::from_rgb(0x3D, 0x63, 0xE0),
-        accent_weak: Color32::from_rgb(0xD3, 0xDE, 0xFB),
-        border: Color32::from_rgb(0xDD, 0xDD, 0xE0),
-        success: Color32::from_rgb(0x1E, 0x8A, 0x4C),
-        warning: Color32::from_rgb(0xC7, 0x7A, 0x00),
-        error: Color32::from_rgb(0xC0, 0x39, 0x39),
-    };
+    /// Palette associée.
+    pub fn palette(self) -> Palette {
+        match self {
+            Theme::Dark => DARK,
+            Theme::Light => LIGHT,
+            Theme::Mint => MINT,
+            Theme::Starry => STARRY,
+        }
+    }
 
-    /// Mode sombre — contraste doux, pas de noir pur.
-    pub const DARK: Self = Self {
-        name: "Sombre",
-        is_dark: true,
-        bg: Color32::from_rgb(0x1A, 0x1B, 0x1E),
-        panel: Color32::from_rgb(0x22, 0x23, 0x27),
-        panel_alt: Color32::from_rgb(0x2B, 0x2C, 0x31),
-        canvas: Color32::from_rgb(0x12, 0x13, 0x15),
-        text: Color32::from_rgb(0xE8, 0xE8, 0xEC),
-        text_weak: Color32::from_rgb(0x9A, 0x9B, 0xA2),
-        accent: Color32::from_rgb(0x6E, 0x8F, 0xF2),
-        accent_weak: Color32::from_rgb(0x2C, 0x38, 0x5C),
-        border: Color32::from_rgb(0x35, 0x36, 0x3C),
-        success: Color32::from_rgb(0x4C, 0xAF, 0x6E),
-        warning: Color32::from_rgb(0xE0, 0xA9, 0x3C),
-        error: Color32::from_rgb(0xE0, 0x6C, 0x6C),
-    };
-
-    /// Thème clair, neutre, à l'aspect d'un éditeur de bureau moderne
-    /// (blanc, gris clair, accent bleu). Les couleurs sont originales.
-    pub const NEUTRAL: Self = Self {
-        name: "Neutre",
-        is_dark: false,
-        bg: Color32::from_rgb(0xF4, 0xF5, 0xF7),
-        panel: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-        panel_alt: Color32::from_rgb(0xEE, 0xEF, 0xF2),
-        canvas: Color32::from_rgb(0xE2, 0xE4, 0xE9),
-        text: Color32::from_rgb(0x1C, 0x1D, 0x22),
-        text_weak: Color32::from_rgb(0x6B, 0x6D, 0x76),
-        accent: Color32::from_rgb(0x3B, 0x6B, 0xD6),
-        accent_weak: Color32::from_rgb(0xD6, 0xDE, 0xF6),
-        border: Color32::from_rgb(0xD5, 0xD7, 0xDF),
-        success: Color32::from_rgb(0x2E, 0xA0, 0x5C),
-        warning: Color32::from_rgb(0xD0, 0x8A, 0x24),
-        error: Color32::from_rgb(0xC8, 0x3F, 0x3F),
-    };
-
-    /// Tous les thèmes disponibles, dans l'ordre d'affichage.
-    pub const ALL: &'static [Theme] =
-        &[Self::SOFT_GREEN, Self::PAPER, Self::LIGHT, Self::DARK, Self::NEUTRAL];
-
-    // ---- Application -----------------------------------------------------
-
-    /// Applique le thème à tout le contexte egui.
+    /// Applique le thème au contexte egui.
     ///
-    /// Effet secondaire volontairement unique : après cet appel, aucune
-    /// autre partie du code n'a besoin de connaître les couleurs.
-    pub fn apply(&self, ctx: &Context) {
-        let mut visuals = if self.is_dark {
+    /// Le chrome de YouPDF se peint lui-même avec [`pal`] ; cet appel règle
+    /// les visuels natifs d'egui (fenêtres, menus, champs, infobulles) sur la
+    /// même palette.
+    pub fn apply(self, ctx: &Context) {
+        let palette = self.palette();
+        let mut visuals = if self.is_dark() {
             Visuals::dark()
         } else {
             Visuals::light()
         };
 
-        visuals.panel_fill = self.panel;
-        visuals.window_fill = self.bg;
-        visuals.extreme_bg_color = self.canvas;
-        visuals.faint_bg_color = self.panel_alt;
-        visuals.override_text_color = Some(self.text);
+        visuals.panel_fill = palette.canvas_bg;
+        visuals.window_fill = palette.chrome_bg;
+        visuals.extreme_bg_color = palette.widget_bg;
+        visuals.faint_bg_color = palette.widget_bg;
+        visuals.override_text_color = Some(palette.icon_bright);
+        visuals.selection.bg_fill = palette.accent;
+        visuals.selection.stroke = Stroke::new(1.5_f32, Color32::WHITE);
+        visuals.hyperlink_color = palette.accent;
+        visuals.window_rounding = Rounding::same(10.0);
+        visuals.menu_rounding = Rounding::same(8.0);
 
         let widgets = &mut visuals.widgets;
-
-        widgets.noninteractive.bg_fill = self.panel;
-        widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, self.text);
-        widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, self.border);
-        widgets.noninteractive.rounding = Rounding::same(6.0);
-
-        widgets.inactive.bg_fill = self.panel_alt;
-        widgets.inactive.fg_stroke = Stroke::new(1.0_f32, self.text);
-        widgets.inactive.bg_stroke = Stroke::new(1.0_f32, self.border);
+        widgets.noninteractive.bg_fill = palette.canvas_bg;
+        widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, palette.muted);
+        widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, palette.separator);
+        widgets.inactive.bg_fill = palette.widget_bg;
+        widgets.inactive.weak_bg_fill = palette.widget_bg;
+        widgets.inactive.fg_stroke = Stroke::new(1.0_f32, palette.icon_bright);
+        widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.separator);
         widgets.inactive.rounding = Rounding::same(6.0);
-
-        widgets.hovered.bg_fill = self.accent_weak;
-        widgets.hovered.fg_stroke = Stroke::new(1.5_f32, self.accent);
-        widgets.hovered.bg_stroke = Stroke::new(1.0_f32, self.accent);
+        widgets.hovered.bg_fill = palette.hover_bg;
+        widgets.hovered.weak_bg_fill = palette.hover_bg;
+        widgets.hovered.fg_stroke = Stroke::new(1.0_f32, palette.icon_bright);
+        widgets.hovered.bg_stroke = Stroke::new(1.0_f32, palette.accent);
         widgets.hovered.rounding = Rounding::same(6.0);
-
-        widgets.active.bg_fill = self.accent;
+        widgets.active.bg_fill = palette.accent;
+        widgets.active.weak_bg_fill = palette.accent;
         widgets.active.fg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
-        widgets.active.bg_stroke = Stroke::new(1.0_f32, self.accent);
+        widgets.active.bg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
         widgets.active.rounding = Rounding::same(6.0);
-
-        widgets.open.bg_fill = self.panel_alt;
-        widgets.open.fg_stroke = Stroke::new(1.0_f32, self.text);
+        widgets.open.bg_fill = palette.hover_bg;
+        widgets.open.fg_stroke = Stroke::new(1.0_f32, palette.icon_bright);
         widgets.open.rounding = Rounding::same(6.0);
-
-        visuals.selection.bg_fill = self.accent;
-        visuals.selection.stroke = Stroke::new(1.0_f32, Color32::WHITE);
-        visuals.window_rounding = Rounding::same(8.0);
-        visuals.menu_rounding = Rounding::same(6.0);
 
         ctx.set_visuals(visuals);
 
-        // Espacements : légèrement plus généreux que le défaut egui.
-        let mut style = (*ctx.style()).clone();
-        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        style.spacing.button_padding = egui::vec2(10.0, 6.0);
-        style.spacing.menu_margin = Margin::same(6.0);
-        style.spacing.indent = 18.0;
-        ctx.set_style(style);
+        ctx.style_mut(|style| {
+            style.spacing.button_padding = egui::vec2(8.0, 4.0);
+            style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        });
     }
 }
 
-impl Default for Theme {
-    fn default() -> Self {
-        Self::SOFT_GREEN
-    }
+const DARK: Palette = Palette {
+    canvas_bg: Color32::from_rgb(0x30, 0x30, 0x30),
+    chrome_bg: Color32::from_rgb(0x28, 0x28, 0x28),
+    widget_bg: Color32::from_rgb(0x38, 0x38, 0x38),
+    hover_bg: Color32::from_rgb(0x48, 0x48, 0x48),
+    accent: Color32::from_rgb(0x7A, 0x7E, 0xF6),
+    muted: Color32::from_rgb(0xA0, 0xA0, 0xA0),
+    icon: Color32::from_rgb(0xC8, 0xC8, 0xC8),
+    icon_bright: Color32::from_rgb(0xE8, 0xE8, 0xE8),
+    thumb_tint: Color32::from_rgb(0xE8, 0xE8, 0xF8),
+    separator: Color32::from_rgb(0x3A, 0x3A, 0x3A),
+    redact_red: Color32::from_rgb(0xE0, 0x4F, 0x5F),
+    search_match: Color32::from_rgba_premultiplied(0x50, 0x40, 0x05, 0x6E),
+};
+
+const LIGHT: Palette = Palette {
+    canvas_bg: Color32::from_rgb(0xEC, 0xEC, 0xEE),
+    chrome_bg: Color32::from_rgb(0xF6, 0xF6, 0xF8),
+    widget_bg: Color32::from_rgb(0xE4, 0xE4, 0xE8),
+    hover_bg: Color32::from_rgb(0xD4, 0xD4, 0xDA),
+    accent: Color32::from_rgb(0x5B, 0x5F, 0xE0),
+    muted: Color32::from_rgb(0x66, 0x66, 0x6E),
+    icon: Color32::from_rgb(0x44, 0x44, 0x4C),
+    icon_bright: Color32::from_rgb(0x1E, 0x1E, 0x24),
+    thumb_tint: Color32::from_rgb(0x30, 0x30, 0x38),
+    separator: Color32::from_rgb(0xD0, 0xD0, 0xD6),
+    redact_red: Color32::from_rgb(0xC8, 0x38, 0x48),
+    search_match: Color32::from_rgba_premultiplied(0xF0, 0xD0, 0x40, 0x9C),
+};
+
+const MINT: Palette = Palette {
+    canvas_bg: Color32::from_rgb(0xDF, 0xEE, 0xE7),
+    chrome_bg: Color32::from_rgb(0xF0, 0xFA, 0xF4),
+    widget_bg: Color32::from_rgb(0xDC, 0xEC, 0xE3),
+    hover_bg: Color32::from_rgb(0xC8, 0xE0, 0xD3),
+    accent: Color32::from_rgb(0x18, 0x9E, 0x77),
+    muted: Color32::from_rgb(0x4E, 0x6B, 0x5D),
+    icon: Color32::from_rgb(0x2E, 0x4A, 0x3D),
+    icon_bright: Color32::from_rgb(0x14, 0x2C, 0x21),
+    thumb_tint: Color32::from_rgb(0x1E, 0x3A, 0x2C),
+    separator: Color32::from_rgb(0xC2, 0xDA, 0xCD),
+    redact_red: Color32::from_rgb(0xC8, 0x38, 0x48),
+    search_match: Color32::from_rgba_premultiplied(0xF5, 0xD8, 0x50, 0x9C),
+};
+
+const STARRY: Palette = Palette {
+    canvas_bg: Color32::from_rgb(0x08, 0x0A, 0x18),
+    chrome_bg: Color32::from_rgb(0x12, 0x16, 0x2A),
+    widget_bg: Color32::from_rgb(0x1C, 0x22, 0x3C),
+    hover_bg: Color32::from_rgb(0x2A, 0x32, 0x52),
+    accent: Color32::from_rgb(0x8E, 0x9B, 0xFF),
+    muted: Color32::from_rgb(0x9A, 0xA4, 0xC8),
+    icon: Color32::from_rgb(0xC2, 0xCA, 0xEA),
+    icon_bright: Color32::from_rgb(0xEE, 0xF2, 0xFF),
+    thumb_tint: Color32::from_rgb(0xE0, 0xE8, 0xFF),
+    separator: Color32::from_rgb(0x26, 0x2E, 0x4C),
+    redact_red: Color32::from_rgb(0xFF, 0x6B, 0x7A),
+    search_match: Color32::from_rgba_premultiplied(0x60, 0x50, 0x10, 0x7E),
+};
+
+thread_local! {
+    /// Palette courante, lue par tout le chrome.
+    static PALETTE: Cell<Palette> = const { Cell::new(DARK) };
+}
+
+/// Palette courante.
+pub fn pal() -> Palette {
+    PALETTE.with(Cell::get)
+}
+
+/// Installe une palette comme palette courante.
+///
+/// À appeler au début d'une trame, avant toute peinture.
+pub fn set_palette(palette: Palette) {
+    PALETTE.with(|cell| cell.set(palette));
 }

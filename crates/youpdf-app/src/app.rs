@@ -17,6 +17,7 @@ use egui::{
     TextEdit, TextureHandle, TextureOptions, TopBottomPanel, ViewportCommand,
 };
 use egui_phosphor::regular as ph;
+use youpdf_shared::{pal, set_palette, Theme};
 use youpdf_core::render::NullRenderer;
 use youpdf_core::ocr::{make_searchable, TesseractEngine};
 use youpdf_core::{
@@ -40,136 +41,6 @@ const CANVAS_STYLES: [Color32; 4] = [
     Color32::from_rgb(0x4A, 0x4A, 0x4A),
     Color32::from_rgb(0xD8, 0xD8, 0xD8),
 ];
-
-/// Couleurs de l'interface, choisies par le thème.
-///
-/// La palette est lue à l'exécution (`pal()`) parce que le thème se change
-/// sans redémarrer ; tout le chrome de YouPDF se peint avec elle.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Palette {
-    canvas_bg: Color32,
-    chrome_bg: Color32,
-    widget_bg: Color32,
-    hover_bg: Color32,
-    accent: Color32,
-    muted: Color32,
-    icon: Color32,
-    icon_bright: Color32,
-    thumb_tint: Color32,
-    separator: Color32,
-    redact_red: Color32,
-    search_match: Color32,
-}
-
-/// Thème de l'interface, comme dans le menu Affichage de l'application de
-/// référence.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum Theme {
-    /// Sombre, la palette d'origine.
-    #[default]
-    Dark,
-    /// Clair : chrome et canevas clairs.
-    Light,
-    /// Menthe : vert d'eau, pour un écran clair teinté.
-    Mint,
-    /// Nuit étoilée : bleu très sombre, canevas noir.
-    Starry,
-}
-
-impl Theme {
-    /// Tous les thèmes, dans l'ordre du menu.
-    const ALL: [Theme; 4] = [Theme::Dark, Theme::Light, Theme::Mint, Theme::Starry];
-
-    /// Nom affiché dans le menu.
-    fn label(self) -> &'static str {
-        match self {
-            Theme::Dark => "Dark",
-            Theme::Light => "Light",
-            Theme::Mint => "Mint",
-            Theme::Starry => "Starry",
-        }
-    }
-
-    /// Palette associée.
-    fn palette(self) -> Palette {
-        match self {
-            Theme::Dark => DARK,
-            Theme::Light => LIGHT,
-            Theme::Mint => MINT,
-            Theme::Starry => STARRY,
-        }
-    }
-}
-
-const DARK: Palette = Palette {
-    canvas_bg: Color32::from_rgb(0x30, 0x30, 0x30),
-    chrome_bg: Color32::from_rgb(0x28, 0x28, 0x28),
-    widget_bg: Color32::from_rgb(0x38, 0x38, 0x38),
-    hover_bg: Color32::from_rgb(0x48, 0x48, 0x48),
-    accent: Color32::from_rgb(0x7A, 0x7E, 0xF6),
-    muted: Color32::from_rgb(0xA0, 0xA0, 0xA0),
-    icon: Color32::from_rgb(0xC8, 0xC8, 0xC8),
-    icon_bright: Color32::from_rgb(0xE8, 0xE8, 0xE8),
-    thumb_tint: Color32::from_rgb(0xE8, 0xE8, 0xF8),
-    separator: Color32::from_rgb(0x3A, 0x3A, 0x3A),
-    redact_red: Color32::from_rgb(0xE0, 0x4F, 0x5F),
-    search_match: Color32::from_rgba_premultiplied(0x50, 0x40, 0x05, 0x6E),
-};
-
-const LIGHT: Palette = Palette {
-    canvas_bg: Color32::from_rgb(0xEC, 0xEC, 0xEE),
-    chrome_bg: Color32::from_rgb(0xF6, 0xF6, 0xF8),
-    widget_bg: Color32::from_rgb(0xE4, 0xE4, 0xE8),
-    hover_bg: Color32::from_rgb(0xD4, 0xD4, 0xDA),
-    accent: Color32::from_rgb(0x5B, 0x5F, 0xE0),
-    muted: Color32::from_rgb(0x66, 0x66, 0x6E),
-    icon: Color32::from_rgb(0x44, 0x44, 0x4C),
-    icon_bright: Color32::from_rgb(0x1E, 0x1E, 0x24),
-    thumb_tint: Color32::from_rgb(0x30, 0x30, 0x38),
-    separator: Color32::from_rgb(0xD0, 0xD0, 0xD6),
-    redact_red: Color32::from_rgb(0xC8, 0x38, 0x48),
-    search_match: Color32::from_rgba_premultiplied(0xF0, 0xD0, 0x40, 0x9C),
-};
-
-const MINT: Palette = Palette {
-    canvas_bg: Color32::from_rgb(0xDF, 0xEE, 0xE7),
-    chrome_bg: Color32::from_rgb(0xF0, 0xFA, 0xF4),
-    widget_bg: Color32::from_rgb(0xDC, 0xEC, 0xE3),
-    hover_bg: Color32::from_rgb(0xC8, 0xE0, 0xD3),
-    accent: Color32::from_rgb(0x18, 0x9E, 0x77),
-    muted: Color32::from_rgb(0x4E, 0x6B, 0x5D),
-    icon: Color32::from_rgb(0x2E, 0x4A, 0x3D),
-    icon_bright: Color32::from_rgb(0x14, 0x2C, 0x21),
-    thumb_tint: Color32::from_rgb(0x1E, 0x3A, 0x2C),
-    separator: Color32::from_rgb(0xC2, 0xDA, 0xCD),
-    redact_red: Color32::from_rgb(0xC8, 0x38, 0x48),
-    search_match: Color32::from_rgba_premultiplied(0xF5, 0xD8, 0x50, 0x9C),
-};
-
-const STARRY: Palette = Palette {
-    canvas_bg: Color32::from_rgb(0x08, 0x0A, 0x18),
-    chrome_bg: Color32::from_rgb(0x12, 0x16, 0x2A),
-    widget_bg: Color32::from_rgb(0x1C, 0x22, 0x3C),
-    hover_bg: Color32::from_rgb(0x2A, 0x32, 0x52),
-    accent: Color32::from_rgb(0x8E, 0x9B, 0xFF),
-    muted: Color32::from_rgb(0x9A, 0xA4, 0xC8),
-    icon: Color32::from_rgb(0xC2, 0xCA, 0xEA),
-    icon_bright: Color32::from_rgb(0xEE, 0xF2, 0xFF),
-    thumb_tint: Color32::from_rgb(0xE0, 0xE8, 0xFF),
-    separator: Color32::from_rgb(0x26, 0x2E, 0x4C),
-    redact_red: Color32::from_rgb(0xFF, 0x6B, 0x7A),
-    search_match: Color32::from_rgba_premultiplied(0x60, 0x50, 0x10, 0x7E),
-};
-
-thread_local! {
-    /// Palette courante, lue par tout le chrome.
-    static PALETTE: std::cell::Cell<Palette> = const { std::cell::Cell::new(DARK) };
-}
-
-/// Palette courante.
-fn pal() -> Palette {
-    PALETTE.with(std::cell::Cell::get)
-}
 
 const TITLE_H: f32 = 40.0;
 const RAIL_W: f32 = 52.0;
@@ -6290,7 +6161,7 @@ impl YouPdfApp {
     /// Applique le thème choisi : palette du chrome, puis réglages egui quand
     /// le thème a changé.
     fn sync_theme(&mut self, ctx: &egui::Context) {
-        PALETTE.with(|cell| cell.set(self.theme.palette()));
+        set_palette(self.theme.palette());
         if self.theme != self.applied_theme {
             self.applied_theme = self.theme;
             apply_theme(ctx, self.theme);
@@ -8013,42 +7884,10 @@ fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// Réglages egui d'un thème : fonds et widgets tirés de sa palette.
+/// Réglages egui d'un thème. La palette et les visuels vivent dans
+/// `youpdf_shared::theme` : un seul endroit définit les couleurs.
 fn apply_theme(ctx: &egui::Context, theme: Theme) {
-    let palette = theme.palette();
-    let mut visuals = match theme {
-        Theme::Dark | Theme::Starry => egui::Visuals::dark(),
-        Theme::Light | Theme::Mint => egui::Visuals::light(),
-    };
-    visuals.panel_fill = palette.canvas_bg;
-    visuals.window_fill = palette.chrome_bg;
-    visuals.extreme_bg_color = palette.widget_bg;
-    visuals.faint_bg_color = palette.widget_bg;
-    visuals.selection.bg_fill = palette.accent;
-    visuals.selection.stroke = Stroke::new(1.5_f32, Color32::WHITE);
-    visuals.widgets.noninteractive.bg_fill = palette.canvas_bg;
-    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, palette.separator);
-    visuals.widgets.inactive.bg_fill = palette.widget_bg;
-    visuals.widgets.inactive.weak_bg_fill = palette.widget_bg;
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.separator);
-    visuals.widgets.inactive.rounding = Rounding::same(6.0);
-    visuals.widgets.hovered.bg_fill = palette.hover_bg;
-    visuals.widgets.hovered.weak_bg_fill = palette.hover_bg;
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, palette.accent);
-    visuals.widgets.hovered.rounding = Rounding::same(6.0);
-    visuals.widgets.active.bg_fill = palette.accent;
-    visuals.widgets.active.weak_bg_fill = palette.accent;
-    visuals.widgets.active.bg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
-    visuals.widgets.active.rounding = Rounding::same(6.0);
-    visuals.hyperlink_color = palette.accent;
-    ctx.set_visuals(visuals);
-
-    ctx.style_mut(|style| {
-        style.spacing.button_padding = vec2(8.0, 4.0);
-        style.spacing.item_spacing = vec2(8.0, 6.0);
-        style.visuals.window_rounding = Rounding::same(10.0);
-        style.visuals.menu_rounding = Rounding::same(8.0);
-    });
+    theme.apply(ctx);
 }
 
 // --------------------------------------------------------------------------
