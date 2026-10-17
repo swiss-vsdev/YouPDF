@@ -28,11 +28,24 @@ pub fn build_provider(config: &ProviderConfig) -> Result<Arc<dyn AiProvider>> {
                     config.display_name
                 ))
             })?;
-            Ok(Arc::new(openai_compat::OpenAiCompatProvider::openai(
-                id,
-                config.display_name.clone(),
-                key,
-            )?))
+            // Une URL de base personnalisée est respectée : un proxy d'entreprise
+            // ou une passerelle compatible OpenAI doit pouvoir se substituer à
+            // l'endpoint public.
+            match config.base_url.as_deref().map(str::trim) {
+                Some(base_url) if !base_url.is_empty() => {
+                    Ok(Arc::new(openai_compat::OpenAiCompatProvider::custom(
+                        id,
+                        config.display_name.clone(),
+                        base_url.to_string(),
+                        Some(key),
+                    )?))
+                }
+                _ => Ok(Arc::new(openai_compat::OpenAiCompatProvider::openai(
+                    id,
+                    config.display_name.clone(),
+                    key,
+                )?)),
+            }
         }
 
         ProviderKind::OpenAiCompat => {

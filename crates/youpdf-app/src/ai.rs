@@ -132,8 +132,14 @@ impl AiPanel {
     /// Construit le panneau. Aucun fil n'est démarré ici : le fil de travail
     /// naît à la première demande, jamais quand l'IA est éteinte.
     pub fn new() -> Self {
-        let settings = AppSettings::load().unwrap_or_default();
+        Self::with_settings(AppSettings::load().unwrap_or_default())
+    }
 
+    /// Construit le panneau à partir de réglages déjà chargés.
+    ///
+    /// L'application charge la configuration une seule fois et la partage :
+    /// le thème et le panneau IA lisent le même fichier.
+    pub fn with_settings(settings: AppSettings) -> Self {
         Self {
             open: false,
             settings,
@@ -164,10 +170,33 @@ impl AiPanel {
             self.requests = Some(request_tx);
             self.replies = Some(reply_rx);
         }
-        if let Some(requests) = &self.requests {
-            let _ = requests.send(request);
+        let sent = self
+            .requests
+            .as_ref()
+            .is_some_and(|requests| requests.send(request).is_ok());
+        if sent {
+            self.busy = true;
+        } else {
+            // Le fil de travail est mort (échec de construction du runtime) :
+            // le dire au lieu de laisser « en attente » à l'écran pour toujours.
+            self.requests = None;
+            self.replies = None;
+            self.busy = false;
+            self.status = Some("The AI worker stopped. Reopen the panel to retry.".to_string());
         }
-        self.busy = true;
+    }
+
+    /// Coupe l'IA : jette les canaux du fil de travail.
+    ///
+    /// Le fil se termine de lui-même (son `recv` échoue). Une requête déjà
+    /// partie sur le réseau ne peut pas être rappelée, mais plus rien n'est
+    /// envoyé et sa réponse ne peut plus être livrée.
+    fn disable(&mut self) {
+        self.requests = None;
+        self.replies = None;
+        self.busy = false;
+        self.status = None;
+        self.models.clear();
     }
 
     /// Recueille les réponses du fil de travail.
@@ -185,7 +214,10 @@ impl AiPanel {
                     self.status = Some(format!("{} model(s) available.", models.len()));
                     self.models = models;
                 }
-                AiReply::Chat(text) => self.turns.push(Turn { role: "AI", text }),
+                AiReply::Chat(text) => {
+                    self.status = Some("Done.".to_string());
+                    self.turns.push(Turn { role: "AI", text });
+                }
                 AiReply::Error(message) => self.status = Some(message),
             }
         }
@@ -289,8 +321,7 @@ impl AiPanel {
         if ui.checkbox(&mut enabled, "Enable AI features").changed() {
             self.settings.ai_enabled = enabled;
             if !enabled {
-                self.status = None;
-                self.busy = false;
+                self.disable();
             }
             let _ = self.settings.save();
         }
@@ -338,6 +369,11 @@ impl AiPanel {
             });
         }
         if let Some(id) = chosen {
+            if self.settings.active_provider.as_deref() != Some(id.as_str()) {
+                // Un identifiant de modèle n'a de sens que chez le fournisseur
+                // qui l'a listé : le garder enverrait un modèle inconnu.
+                self.settings.active_model = None;
+            }
             self.settings.active_provider = Some(id);
             self.models.clear();
             self.status = None;
