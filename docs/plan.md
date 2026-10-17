@@ -205,3 +205,60 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
   and the footer have their own three slots instead of sharing one set drawn twice, the interface
   has four themes (Dark, Light, Mint, Starry) read from a runtime palette instead of compile-time
   constants, and View ▸ Theme switches between them.
+
+- 2026-10-17 (AI as bring-your-own, and a fix pass over two audits): the AI panel is now wired
+  into the interface and the whole AI layer is opt-in. `AppSettings.ai_enabled` defaults to false;
+  while it is false nothing at all happens: no provider is built, the OS keyring is never read, no
+  thread is spawned, no tokio runtime exists and no socket is opened. The worker thread is created
+  on the first request rather than at startup, and the provider is built *inside* that thread so
+  the keyring is never touched on the UI thread. Turning the switch off drops the channels and
+  bumps a generation counter; the worker compares each request's enqueue-time generation and
+  abandons anything not yet dispatched. One limitation is stated plainly in the code and here: a
+  request already inside the HTTP call cannot be recalled.
+
+  The panel itself: a master switch, a provider list (Ollama local, OpenAI, Anthropic, OpenRouter,
+  Gemini), a per-provider base URL and model id, an API key stored in the system keyring and never
+  in `settings.json`, a model list, and a task picker (chat, summarize, key points, translate,
+  explain, legal review, financial review). Document text is extracted once per tab, capped at 40
+  pages and 60 000 characters, and is only sent when the user presses a button. A configured base
+  URL is honoured for OpenAI too; a base URL containing credentials is rejected and its password
+  is redacted from the error text; HTTP is only accepted on the loopback interface.
+
+  Two features the plan still listed as missing are now reachable: Office export (Word, Excel,
+  PowerPoint) and compression quality grades (Screen 72 dpi/q55, Ebook 150/q75, Print 300/q88),
+  both hand-rolled in core and wired to the Export and Compress windows. Embedded-image extraction
+  is reachable too (one PNG per embedded image, via `extract_image_png`).
+
+  Two audit rounds ran over the tree (one diff reviewer, one whole-repo auditor, then a
+  verification round). Defects found and fixed, each in a commit:
+
+  - Redaction destroyed page content but left the in-memory annotations, so the next save wrote an
+    annotation back over a redacted area.
+  - Closing a tab recomputed the active index only past the end, so closing a tab below the current
+    one selected the wrong document; and forcing `last_active` skipped the session reset, so the
+    new tab inherited the old tab's redaction marks and search results.
+  - Undo always set the dirty flag, so undoing back to the saved state still prompted on close.
+    A separate structural flag and an annotation baseline now decide.
+  - The theme was hardcoded to Dark and never persisted; the dead per-provider `enabled` field is
+    gone; `AppSettings` derives `Default` as a whole so a partial settings file parses.
+  - Sizes derived from a PDF are validated or computed in `usize`: `width*height*4` overflowed in
+    `u32`; the pdfium page index truncated at 65535 pages; the diff LCS table could allocate
+    hundreds of megabytes; a `/FlateDecode` stream could inflate without bound; a JPEG header could
+    claim huge dimensions and allocate before failing; `/Width` and `/Height` were cast from `i64`
+    unchecked; `load_image_rgb` had no limits.
+  - `compress`/`compress_with` mutated the document outside `inner_mut`, leaving the serialization
+    cache stale so `save` could write pre-change bytes.
+  - `decode_stream_content` treated a stream with no `/Filter` as an error, silently skipping every
+    unfiltered image in the compression pass.
+  - `directories` (which pulls `option-ext`, MPL-2.0) is gone in favour of a hand-rolled config
+    path, so the dependency tree stays MIT/Apache/BSD.
+
+  Still open, in rough priority order:
+  1. An i18n layer. `AppSettings.locale` is stored but unused; strings are English literals and the
+     reference app ships 12+ languages.
+  2. Embedded ICC profile bytes for the declared PDF/A, PDF/X and PDF/E output, and a structure
+     tree if tagged PDF is wanted. The conformance markers are still a declaration, not a
+     validation.
+  3. Font subsetting in the compression pass; today only images are resampled.
+  Out of scope by design, unchanged: cloud sync, eIDAS signature requests, screen capture, scanner
+  import, dictation and emoji.
