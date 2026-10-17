@@ -253,6 +253,44 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
   - `directories` (which pulls `option-ext`, MPL-2.0) is gone in favour of a hand-rolled config
     path, so the dependency tree stays MIT/Apache/BSD.
 
+- 2026-10-17 (zoom lag, the editing mask, and text selection): three reported defects, each in a
+  commit, with a review pass over the three afterwards.
+
+  Zoom re-rasterised every visible page on every step, so a gesture stuttered. The cache is now a
+  √2 render pyramid keyed by `(page, step)`; while a gesture is live the canvas stretches the
+  nearest cached step instead of rendering, and the sharp render is queued for after the gesture
+  ends (`ZOOM_SETTLE_SECS` = 120 ms, `RENDER_TOLERANCE` = 10 %). At rest one visible page is
+  refined per frame, current page first, and a page with no cache at all is still rendered during
+  a gesture so scrolling a fresh page never shows a blank sheet. Thumbnails use a reserved step
+  (-1) so they can never be mistaken for a page step.
+
+  The inline text editor masked the original run badly: a fixed 140 px wide white box instead of
+  the fragment's own rect, so glyphs peeked out above, below and beside it, and the committed patch
+  was always white while the replacement text inherited whatever fill colour the page content had
+  left. The preview mask is now the union of the fragment rect and the edit field, in the page's
+  own background colour: the active tab keeps the last rasterised page (thumbnail renders exempt)
+  and `mask_color_in` samples six points just outside the block and takes the median per channel,
+  so a stray rule or neighbouring glyph cannot decide alone. `replace_text_fragment` takes that
+  background, and re-poses the fragment's own ink explicitly before the `Tj`.
+
+  Text selection did not exist. A primary drag on the page now selects text in the reading states:
+  no mode open (the state the app opens in), or Comment mode with no tool or the Select tool; Edit,
+  Form and Redact modes and the drawing tools keep their drag. Fragments are extracted when a drag
+  starts, so a page costs nothing until it is selected on. The selection is a fragment range ordered
+  the way a reader reads; copying joins blocks on one line with a space and lines with a newline.
+  ⌘/Ctrl+C copies, ⌘/Ctrl+A selects the page, right-click offers both, a plain click clears, and
+  the keyboard shortcuts yield to a focused text field. Deliberate limit, stated in the code: the
+  range cuts at block boundaries, not characters, because the extractor estimates fragment rects
+  from character counts.
+
+  The review pass over those three commits found one real defect and fixed three fragile spots: the
+  pending-render search was negated, so it picked the already-fresh page — the sharp re-render never
+  happened and the app asked for a repaint every frame forever; `last_bitmap` could be overwritten
+  by a sidebar thumbnail; find & replace still painted white on tinted pages; and the reading-order
+  comparator was not transitive when font sizes differ (a ≈ b, b ≈ c, but a < c), which makes
+  `sort_by` yield an unspecified order. It is now a two-pass grouping: sort by ordinate, close a
+  group per line, sort each group by x.
+
   Still open, in rough priority order:
   1. An i18n layer. `AppSettings.locale` is stored but unused; strings are English literals and the
      reference app ships 12+ languages.
