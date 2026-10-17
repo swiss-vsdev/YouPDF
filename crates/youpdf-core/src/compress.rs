@@ -134,9 +134,14 @@ impl Document {
         let path = path.as_ref();
         let before_bytes = self.to_bytes()?.len();
 
-        self.inner.prune_objects();
-        self.inner.renumber_objects();
-        self.inner.compress();
+        // `inner_mut` (et non `&mut self.inner`) : il invalide le cache de
+        // sérialisation. Sans cela, `save` réécrirait les octets d'avant.
+        {
+            let inner = self.inner_mut();
+            inner.prune_objects();
+            inner.renumber_objects();
+            inner.compress();
+        }
 
         self.save(path)?;
 
@@ -161,11 +166,14 @@ impl Document {
         let path = path.as_ref();
         let before_bytes = self.to_bytes()?.len();
 
-        let images_resampled = compress_images(&mut self.inner, options)?;
+        let images_resampled = compress_images(self.inner_mut(), options)?;
 
-        self.inner.prune_objects();
-        self.inner.renumber_objects();
-        self.inner.compress();
+        {
+            let inner = self.inner_mut();
+            inner.prune_objects();
+            inner.renumber_objects();
+            inner.compress();
+        }
 
         self.save(path)?;
 
@@ -368,8 +376,10 @@ fn largest_page_width(document: &LopdfDocument) -> f32 {
 /// Gère le JPEG direct (`DCTDecode`), le zlib d'échantillons bruts
 /// (`FlateDecode`), et le contenu brut (pas de filtre). Retourne `None` pour
 /// tout ce qui n'est pas une image 8 bits RGB/gris exploitable.
-fn decode_stream_content(stream: &lopdf::Stream) -> Option<image::DynamicImage> {
-    let filters = stream.filters().ok()?;
+pub(crate) fn decode_stream_content(stream: &lopdf::Stream) -> Option<image::DynamicImage> {
+    // Un stream sans `/Filter` fait échouer `filters()` : ce n'est pas une
+    // erreur, c'est du contenu brut.
+    let filters = stream.filters().unwrap_or_default();
 
     if filters.is_empty() {
         return raw_samples_to_image(stream, &stream.content);
@@ -380,9 +390,16 @@ fn decode_stream_content(stream: &lopdf::Stream) -> Option<image::DynamicImage> 
     }
 
     if filters.iter().any(|f| f == "FlateDecode") {
-        let mut decoder = ZlibDecoder::new(stream.content.as_slice());
+        // Un flux peut se décompresser en plusieurs gigaoctets (« bombe ») :
+        // on plafonne la sortie avant de décider quoi que ce soit.
+        const MAX_RAW_BYTES: u64 = 256 * 1024 * 1024;
+        let mut decoder =
+            ZlibDecoder::new(stream.content.as_slice()).take(MAX_RAW_BYTES);
         let mut raw = Vec::new();
         if decoder.read_to_end(&mut raw).is_err() {
+            return None;
+        }
+        if raw.len() as u64 >= MAX_RAW_BYTES {
             return None;
         }
         // Certains producteurs emballent un JPEG ou un PNG dans un flux Flate.
@@ -406,11 +423,14 @@ fn raw_samples_to_image(
     stream: &lopdf::Stream,
     raw: &[u8],
 ) -> Option<image::DynamicImage> {
-    let width = stream.dict.get(b"Width").ok()?.as_i64().ok()? as u32;
-    let height = stream.dict.get(b"Height").ok()?.as_i64().ok()? as u32;
-    if width == 0 || height == 0 {
+    let width = stream.dict.get(b"Width").ok()?.as_i64().ok()?;
+    let height = stream.dict.get(b"Height").ok()?.as_i64().ok()?;
+    // Une dimension négative viendrait d'un PDF malformé : `as u32` la
+    // transformerait en valeur énorme et l'allocation suivrait.
+    if width <= 0 || height <= 0 {
         return None;
     }
+    let (width, height) = (width as u32, height as u32);
     let color_space = stream.dict.get(b"ColorSpace").ok()?.as_name_str().ok()?;
     let pixels = width as usize * height as usize;
 

@@ -163,6 +163,10 @@ fn compare_lines(
     differences: &mut Vec<Difference>,
     identical: &mut usize,
 ) {
+    if a.len().saturating_mul(b.len()) > MAX_LCS_CELLS {
+        compare_lines_positional(a, b, page_a, page_b, differences, identical);
+        return;
+    }
     let lcs = compute_lcs(a, b);
     let mut ia = 0usize;
     let mut ib = 0usize;
@@ -265,6 +269,60 @@ fn flush_pending(
             page_b: Some(page_b),
             before: None,
             after: Some(line),
+        });
+    }
+}
+
+/// Nombre maximal de cellules de la table LCS.
+///
+/// La table est `(n + 1) × (m + 1)` : deux pages très denses feraient
+/// grimper l'allocation quadratiquement (une page de 10 000 lignes en face
+/// d'une autre = 800 Mo). Au-delà du plafond, on retombe sur la comparaison
+/// positionnelle, linéaire.
+const MAX_LCS_CELLS: usize = 4_000_000;
+
+/// Repli linéaire quand la table LCS serait trop grande.
+///
+/// Les lignes sont appariées par position ; le surplus d'un côté est
+/// signalé comme ajouté ou retiré. Moins fin qu'un LCS, mais borné.
+fn compare_lines_positional(
+    a: &[String],
+    b: &[String],
+    page_a: usize,
+    page_b: usize,
+    differences: &mut Vec<Difference>,
+    identical: &mut usize,
+) {
+    let common = a.len().min(b.len());
+    for i in 0..common {
+        if a[i] == b[i] {
+            *identical += 1;
+        } else {
+            differences.push(Difference {
+                kind: DifferenceKind::Modified,
+                page_a: Some(page_a),
+                page_b: Some(page_b),
+                before: Some(a[i].clone()),
+                after: Some(b[i].clone()),
+            });
+        }
+    }
+    for line in &a[common..] {
+        differences.push(Difference {
+            kind: DifferenceKind::Removed,
+            page_a: Some(page_a),
+            page_b: Some(page_b),
+            before: Some(line.clone()),
+            after: None,
+        });
+    }
+    for line in &b[common..] {
+        differences.push(Difference {
+            kind: DifferenceKind::Added,
+            page_a: Some(page_a),
+            page_b: Some(page_b),
+            before: None,
+            after: Some(line.clone()),
         });
     }
 }

@@ -266,16 +266,17 @@ impl Document {
                 continue;
             }
 
-            let width = dict
-                .get(b"Width")
-                .ok()
-                .and_then(|o| o.as_i64().ok())
-                .unwrap_or(0) as u32;
-            let height = dict
-                .get(b"Height")
-                .ok()
-                .and_then(|o| o.as_i64().ok())
-                .unwrap_or(0) as u32;
+            // Une dimension absente, nulle ou négative est rejetée : `as u32`
+            // transformerait −1 en 4 milliards, et une allocation suivrait.
+            let dimension = |key: &[u8]| -> Option<u32> {
+                match dict.get(key).ok().and_then(|o| o.as_i64().ok()) {
+                    Some(value) if (1..=100_000).contains(&value) => Some(value as u32),
+                    _ => None,
+                }
+            };
+            let (Some(width), Some(height)) = (dimension(b"Width"), dimension(b"Height")) else {
+                continue;
+            };
 
             let components = match dict.get(b"ColorSpace").ok().and_then(|o| o.as_name().ok()) {
                 Some(b"DeviceGray") => 1,
@@ -307,6 +308,32 @@ impl Document {
             .as_stream()
             .map_err(|e| Error::Pdf(format!("flux image : {e}")))?;
         Ok(stream.content.clone())
+    }
+
+    /// Extrait une image embarquée et la renvoie encodée en PNG.
+    ///
+    /// Le contenu du flux n'est pas toujours un fichier image : `DCTDecode`
+    /// est du JPEG, mais `FlateDecode` cache des échantillons bruts. On passe
+    /// donc par le décodeur commun, puis on ré-encode en PNG.
+    pub fn extract_image_png(&self, info: &ImageInfo) -> Result<Vec<u8>> {
+        let obj = self
+            .inner()
+            .get_object(info.object_id)
+            .map_err(|e| Error::Pdf(format!("objet image : {e}")))?;
+        let stream = obj
+            .as_stream()
+            .map_err(|e| Error::Pdf(format!("flux image : {e}")))?;
+        let image = crate::compress::decode_stream_content(stream).ok_or_else(|| {
+            Error::Pdf(format!(
+                "image {} ({}) non décodable : format non pris en charge",
+                info.resource_name, info.object_id.0
+            ))
+        })?;
+        let mut out = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .map_err(|e| Error::Pdf(format!("encodage PNG : {e}")))?;
+        Ok(out)
     }
 }
 
@@ -694,7 +721,19 @@ pub fn load_image_rgb(
     path: impl AsRef<std::path::Path>,
 ) -> Result<(Vec<u8>, u32, u32)> {
     let path = path.as_ref();
-    let image = image::open(path)
+    let mut reader = image::ImageReader::open(path)
+        .map_err(|e| Error::InvalidInput(format!("{} : {e}", path.display())))?;
+    // Plafonds explicites : une image « bombe » (dimensions énormes annoncées
+    // dans l'en-tête) est refusée au décodage plutôt qu'après allocation.
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(20_000);
+    limits.max_image_height = Some(20_000);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader
+        .with_guessed_format()
+        .map_err(|e| Error::InvalidInput(format!("{} : {e}", path.display())))?
+        .decode()
         .map_err(|e| Error::InvalidInput(format!("{} : {e}", path.display())))?;
     let rgb = image.to_rgb8();
     let (width, height) = rgb.dimensions();

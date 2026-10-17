@@ -239,7 +239,7 @@ impl TesseractEngine {
         let mut file = std::fs::File::create(path).map_err(Error::Io)?;
         write!(file, "P6\n{} {}\n255\n", bitmap.width, bitmap.height).map_err(Error::Io)?;
 
-        let mut rgb = Vec::with_capacity((bitmap.width * bitmap.height * 3) as usize);
+        let mut rgb = Vec::with_capacity(bitmap.width as usize * bitmap.height as usize * 3);
         for chunk in bitmap.pixels.chunks_exact(4) {
             rgb.push(chunk[0]);
             rgb.push(chunk[1]);
@@ -498,6 +498,13 @@ pub fn make_searchable(
         content.extend_from_slice(b"0 g\n");
 
         // Le facteur de conversion entre pixels bitmap et points PDF.
+        // Un bitmap vide diviserait par zéro et poserait un calque texte en
+        // `inf` : mieux vaut ne pas écrire de couche texte du tout.
+        if bitmap.width == 0 || bitmap.height == 0 {
+            return Err(Error::InvalidInput(
+                "rendu de page vide : impossible de poser la couche texte".into(),
+            ));
+        }
         let sx = w_pt / bitmap.width as f32;
         let sy = h_pt / bitmap.height as f32;
 
