@@ -74,9 +74,10 @@ fn parse_base_url_inner(raw: &str, allow_http_anywhere: bool) -> Result<String> 
             // circulerait en clair sur le réseau.
             if !allow_http_anywhere && !is_loopback(url.host_str()) {
                 return Err(Error::Config(format!(
-                    "URL de base refusée : {trimmed:?} utilise HTTP hors machine locale. \
+                    "URL de base refusée : {:?} utilise HTTP hors machine locale. \
                      La clé API partirait en clair sur le réseau — passez en HTTPS, ou \
-                     utilisez une adresse locale (http://localhost:…). "
+                     utilisez une adresse locale (http://localhost:…). ",
+                    redact_url(trimmed)
                 )));
             }
         }
@@ -89,19 +90,33 @@ fn parse_base_url_inner(raw: &str, allow_http_anywhere: bool) -> Result<String> 
 
     if !url.username().is_empty() || url.password().is_some() {
         return Err(Error::Config(format!(
-            "URL de base refusée : {trimmed:?} contient des identifiants. \
-             Ils seraient envoyés dans l'autorisation de base — utilisez un en-tête dédié."
+            "URL de base refusée : {:?} contient des identifiants. \
+             Ils seraient envoyés dans l'autorisation de base — utilisez un en-tête dédié.",
+            redact_url(trimmed)
         )));
     }
 
     if url.host_str().unwrap_or_default().is_empty() {
         return Err(Error::Config(format!(
-            "URL de base sans hôte : {trimmed:?}"
+            "URL de base sans hôte : {:?}",
+            redact_url(trimmed)
         )));
     }
 
     let normalized = url.as_str().trim_end_matches('/').to_string();
     Ok(normalized)
+}
+
+/// Retire les identifiants éventuels (`utilisateur:motdepasse@`) d'une URL
+/// avant de la citer : un message d'erreur ne doit pas recopier un secret
+/// dans l'interface ou les journaux.
+fn redact_url(raw: &str) -> String {
+    match (raw.find("://"), raw.find('@')) {
+        (Some(scheme), Some(at)) if at > scheme + 3 => {
+            format!("{}://{}", &raw[..scheme], &raw[at + 1..])
+        }
+        _ => raw.to_string(),
+    }
 }
 
 /// Vrai si l'hôte désigne la machine courante.

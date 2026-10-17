@@ -37,8 +37,6 @@ pub struct ProviderConfig {
     pub display_name: String,
     /// URL de base personnalisée.
     pub base_url: Option<String>,
-    /// Fournisseur activé ou non.
-    pub enabled: bool,
     /// Modèle par défaut pour ce fournisseur.
     pub default_model: Option<String>,
 }
@@ -55,7 +53,6 @@ impl ProviderConfig {
             kind,
             display_name: display_name.into(),
             base_url: None,
-            enabled: false,
             default_model: None,
         }
     }
@@ -63,20 +60,21 @@ impl ProviderConfig {
 
 /// Configuration globale de l'application.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     /// Interrupteur général de l'IA.
     ///
     /// Faux par défaut : tant qu'il est faux, YouPDF ne construit aucun
     /// fournisseur et n'ouvre aucune connexion réseau. C'est le seul moyen
     /// d'être certain qu'un document ne part nulle part.
-    #[serde(default)]
     pub ai_enabled: bool,
     /// Thème visuel actif (index dans `Theme::ALL`).
     pub theme_index: usize,
     /// Langue d'interface (`fr`, `en`…).
+    ///
+    /// Stockée mais pas encore exploitée : l'interface n'a qu'une langue
+    /// aujourd'hui (voir la liste des travaux restants).
     pub locale: String,
-    /// Zoom par défaut à l'ouverture d'un document.
-    pub default_zoom: f32,
     /// Fournisseurs d'IA configurés.
     pub providers: Vec<ProviderConfig>,
     /// Fournisseur actif.
@@ -91,7 +89,6 @@ impl Default for AppSettings {
             ai_enabled: false,
             theme_index: 0,
             locale: "en".to_string(),
-            default_zoom: 1.0,
             providers: vec![
                 ProviderConfig::for_kind(ProviderKind::Ollama, "ollama", "Ollama (local)"),
                 ProviderConfig::for_kind(ProviderKind::OpenAi, "openai", "OpenAI"),
@@ -107,11 +104,33 @@ impl Default for AppSettings {
 
 impl AppSettings {
     /// Répertoire de configuration de l'application.
+    ///
+    /// Résolu sans dépendance externe : `%APPDATA%` sous Windows,
+    /// `XDG_CONFIG_HOME` (ou `~/.config`) ailleurs, `~/Library/Application
+    /// Support` sous macOS.
     fn config_dir() -> Result<PathBuf> {
-        let dirs = directories::ProjectDirs::from("com", "youpdf", "youpdf").ok_or_else(|| {
-            Error::Config("impossible de déterminer le répertoire de configuration".into())
-        })?;
-        Ok(dirs.config_dir().to_path_buf())
+        if cfg!(windows) {
+            if let Some(appdata) = std::env::var_os("APPDATA") {
+                return Ok(PathBuf::from(appdata).join("youpdf"));
+            }
+        } else if cfg!(target_os = "macos") {
+            if let Some(home) = std::env::var_os("HOME") {
+                return Ok(PathBuf::from(home)
+                    .join("Library")
+                    .join("Application Support")
+                    .join("youpdf"));
+            }
+        } else {
+            if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+                return Ok(PathBuf::from(xdg).join("youpdf"));
+            }
+            if let Some(home) = std::env::var_os("HOME") {
+                return Ok(PathBuf::from(home).join(".config").join("youpdf"));
+            }
+        }
+        Err(Error::Config(
+            "impossible de déterminer le répertoire de configuration".into(),
+        ))
     }
 
     /// Chemin du fichier `settings.json`.
