@@ -220,7 +220,7 @@ impl Document {
     ) -> Result<()> {
         use lopdf::{dictionary, Object, Stream};
 
-        let expected = (width * height * 3) as usize;
+        let expected = width as usize * height as usize * 3;
         if pixels_rgb.len() < expected {
             return Err(Error::InvalidInput(format!(
                 "bitmap trop court : {} octets, attendu {}",

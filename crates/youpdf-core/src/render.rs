@@ -64,7 +64,9 @@ pub struct PageBitmap {
 impl PageBitmap {
     /// Crée un bitmap rempli d'une couleur unie.
     pub fn solid(width: u32, height: u32, rgba: [u8; 4]) -> Self {
-        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        // Calcul en `usize` : `width * height * 4` en `u32` déborde pour une
+        // page de grande taille et donne un tampon tronqué.
+        let mut pixels = vec![0u8; width as usize * height as usize * 4];
         for chunk in pixels.chunks_exact_mut(4) {
             chunk.copy_from_slice(&rgba);
         }
@@ -79,7 +81,7 @@ impl PageBitmap {
     ///
     /// Conversion directe : pdfium produit du BGRA, egui attend du RGBA.
     pub fn to_egui_image(&self) -> egui::ColorImage {
-        let expected = (self.width * self.height * 4) as usize;
+        let expected = self.width as usize * self.height as usize * 4;
         if self.pixels.len() < expected {
             return egui::ColorImage::new(
                 [self.width as usize, self.height as usize],
@@ -270,7 +272,11 @@ impl Renderer for PdfiumRenderer {
             .map_err(|e| Error::Pdf(format!("chargement pdfium : {e}")))?;
 
         let pages = pdf.pages();
-        let index = (page_number.saturating_sub(1)) as u16;
+        // pdfium indexe les pages sur 16 bits : au-delà, la conversion
+        // tronquerait et rendrait la mauvaise page.
+        let index = u16::try_from(page_number.saturating_sub(1)).map_err(|_| {
+            Error::InvalidInput(format!("numéro de page hors limites : {page_number}"))
+        })?;
         let page = pages
             .get(index)
             .map_err(|e| Error::Pdf(format!("page {page_number} introuvable : {e}")))?;
@@ -313,12 +319,20 @@ impl Renderer for NullRenderer {
         options: &RenderOptions,
     ) -> Result<PageBitmap> {
         let (w_pt, h_pt) = doc.page_size(page_number);
-        let w = (w_pt * options.scale).round() as u32;
-        let h = (h_pt * options.scale).round() as u32;
-        if w == 0 || h == 0 {
+        let w = (w_pt * options.scale).round();
+        let h = (h_pt * options.scale).round();
+        // Le facteur d'échelle vient de l'utilisateur : une valeur absurde ou
+        // un MediaBox démesuré produirait une allocation impossible.
+        const MAX_PIXELS: f32 = 20_000.0;
+        if !w.is_finite() || !h.is_finite() || w < 1.0 || h < 1.0 {
             return Err(Error::InvalidInput("échelle de rendu nulle".into()));
         }
-        Ok(PageBitmap::solid(w, h, [250, 250, 248, 255]))
+        if w > MAX_PIXELS || h > MAX_PIXELS {
+            return Err(Error::InvalidInput(format!(
+                "page trop grande pour le rendu : {w:.0}×{h:.0} pixels"
+            )));
+        }
+        Ok(PageBitmap::solid(w as u32, h as u32, [250, 250, 248, 255]))
     }
 
     fn renders_real_content(&self) -> bool {

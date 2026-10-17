@@ -275,7 +275,7 @@ impl Document {
         view: &PageView,
     ) -> Result<()> {
         // Conversion RGBA → RGB.
-        let mut rgb = Vec::with_capacity((width * height * 3) as usize);
+        let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
         for chunk in rgba.chunks_exact(4) {
             rgb.push(chunk[0]);
             rgb.push(chunk[1]);

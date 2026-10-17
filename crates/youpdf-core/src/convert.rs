@@ -270,7 +270,7 @@ impl Document {
                 }
                 ImageFormat::Jpeg => {
                     // JPEG ne transporte pas de canal alpha : on l'abandonne.
-                    let mut rgb = Vec::with_capacity((bitmap.width * bitmap.height * 3) as usize);
+                    let mut rgb = Vec::with_capacity(bitmap.width as usize * bitmap.height as usize * 3);
                     for chunk in bitmap.pixels.chunks_exact(4) {
                         rgb.extend_from_slice(&chunk[..3]);
                     }

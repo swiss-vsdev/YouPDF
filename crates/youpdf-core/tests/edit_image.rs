@@ -92,3 +92,35 @@ fn une_image_decodee_se_pose_sur_la_page() {
         "l'image insérée n'apparaît pas au rendu ({rouges} pixels rouges)"
     );
 }
+
+/// L'extraction d'image embarquée doit rendre un PNG exploitable.
+///
+/// Le flux posé par `insert_image_bitmap` est du zlib d'échantillons bruts :
+/// l'extraction doit donc décoder puis ré-encoder, pas recopier le flux.
+#[test]
+fn une_image_embarquee_s_extrait_en_png() {
+    let mut img = image::RgbImage::new(8, 8);
+    for px in img.pixels_mut() {
+        *px = image::Rgb([220, 40, 40]);
+    }
+    let raw = img.into_raw();
+
+    let mut doc = Document::from_bytes(&page_blanche()).expect("ouverture");
+    doc.insert_image_bitmap(1, [150.0, 300.0, 350.0, 500.0], &raw, 8, 8)
+        .expect("insertion");
+
+    let images = doc.extract_images(1).expect("liste des images");
+    assert_eq!(images.len(), 1, "une image embarquée attendue");
+
+    let png = doc.extract_image_png(&images[0]).expect("extraction PNG");
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "signature PNG");
+
+    let decoded = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+        .expect("relecture du PNG");
+    assert_eq!(decoded.to_rgb8().dimensions(), (8, 8), "dimensions");
+    assert_eq!(
+        decoded.to_rgb8().into_raw()[..3],
+        [220, 40, 40],
+        "couleur du premier pixel"
+    );
+}
