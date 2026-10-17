@@ -137,7 +137,7 @@ pub fn stamp_name(label: &str) -> &'static [u8] {
 }
 
 /// Style visuel d'une annotation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnnotationStyle {
     /// Couleur au format RGB (0–255).
     pub color: [u8; 3],
@@ -207,7 +207,7 @@ impl AnnotationStyle {
 }
 
 /// Une annotation posée par l'utilisateur.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Annotation {
     /// Identifiant unique (sert de `/NM` dans le PDF).
     pub id: String,
