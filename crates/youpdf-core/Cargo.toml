@@ -36,6 +36,11 @@ pdfium-render = { version = "0.8", features = ["bindings"] }
 # dès qu'une combinaison résoudra. Le reste de `convert` compile sans cette dep.
 docx-rs = { version = "0.4.22", optional = true }
 
+# Empaquetage des parties OOXML pour l'export Word / Excel / PowerPoint.
+# `deflate` suffit : les fichiers `.docx`/`.xlsx`/`.pptx` sont des ZIP
+# compressés en DEFLATE.
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
 # Fichiers temporaires pour l'OCR.
 tempfile = "3"
 
@@ -45,6 +50,10 @@ sha2      = "0.10"
 aes       = "0.8"
 cbc       = { version = "0.1", features = ["alloc"] }
 getrandom = "0.2"
+
+[dev-dependencies]
+# Validation du XML produit par l'export Office dans les tests.
+quick-xml = "0.41"
 
 [features]
 default = []
