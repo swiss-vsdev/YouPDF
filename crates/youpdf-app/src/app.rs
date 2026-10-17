@@ -88,6 +88,8 @@ enum ExportMode {
     Text,
     /// Une image par page, dans un dossier.
     Image,
+    /// Les images embarquées du document, extraites telles quelles.
+    Embedded,
     /// Document bureautique (Word, Excel, PowerPoint).
     Office,
 }
@@ -503,8 +505,14 @@ struct Tab {
     cache: HashMap<(u32, u32), TextureHandle>,
     /// Modifications non enregistrées.
     dirty: bool,
+    /// Modifications qui ne sont pas de simples annotations (texte, champs,
+    /// caviardage…). Elles ne s'annulent pas et gardent `dirty` vrai.
+    structural_dirty: bool,
     /// Annotations YouPDF en mémoire (chargées à la demande).
     annots: Vec<Annotation>,
+    /// Annotations telles qu'écrites sur le disque : sert à savoir si un
+    /// retour arrière ramène bien à l'état enregistré.
+    baseline_annots: Vec<Annotation>,
     annots_loaded: bool,
     /// Piles d'annulation/rétablissement (instantanés des annotations).
     undo: Vec<Vec<Annotation>>,
@@ -755,7 +763,11 @@ pub struct YouPdfApp {
 impl YouPdfApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
         install_fonts(&cc.egui_ctx);
-        apply_theme(&cc.egui_ctx, Theme::Dark);
+        // La configuration est lue une seule fois : le thème en vient, et le
+        // panneau IA reçoit le même objet au lieu de relire le fichier.
+        let settings = youpdf_ai::AppSettings::load().unwrap_or_default();
+        let theme = settings.theme();
+        apply_theme(&cc.egui_ctx, theme);
 
         let (renderer, renderer_label): (Box<dyn Renderer>, &'static str) =
             match PdfiumRenderer::load() {
@@ -825,8 +837,8 @@ impl YouPdfApp {
             extract_open: false,
             extract_tables: Vec::new(),
             extract_pairs: Vec::new(),
-            theme: Theme::Dark,
-            applied_theme: Theme::Dark,
+            theme,
+            applied_theme: theme,
             slideshow: false,
             batch_open: false,
             batch_files: Vec::new(),
@@ -861,7 +873,7 @@ impl YouPdfApp {
             search_word: false,
             page_entry: String::new(),
             home_open: initial.is_none(),
-            ai: AiPanel::new(),
+            ai: AiPanel::with_settings(settings),
             ai_doc_tab: None,
             ai_doc_text: String::new(),
             page_layout: PageLayout::default(),
@@ -974,6 +986,7 @@ impl YouPdfApp {
         if !annots.is_empty() && doc.clear_youpdf_annotations().is_err() {
             tracing::warn!("purge des annotations impossible");
         }
+        let baseline_annots = annots.clone();
         self.tabs.push(Tab {
             doc,
             path: path.clone(),
@@ -983,7 +996,9 @@ impl YouPdfApp {
             zoom_fit_page: false,
             cache: HashMap::new(),
             dirty: false,
+            structural_dirty: false,
             annots,
+            baseline_annots,
             annots_loaded: true,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -996,6 +1011,10 @@ impl YouPdfApp {
         self.active = self.tabs.len() - 1;
         self.panel = Some(Panel::Thumbnails);
         self.home_open = false;
+        // Le nouvel onglet devient actif tout de suite : sans cela, la trame
+        // courante réutilise la session du document précédent.
+        self.last_active = self.active;
+        self.reset_document_session();
         if let Some(path) = path {
             self.recents.retain(|old| old != &path);
             self.recents.insert(0, path);
@@ -1045,14 +1064,21 @@ impl YouPdfApp {
 
     /// Ferme l'onglet, sans confirmation.
     fn close_tab_now(&mut self, idx: usize) {
-        if idx < self.tabs.len() {
-            self.tabs.remove(idx);
-            if self.active >= self.tabs.len() {
-                self.active = self.tabs.len().saturating_sub(1);
-            }
-            self.last_active = self.active;
-            self.search_index = None;
-            self.results.clear();
+        if idx >= self.tabs.len() {
+            return;
+        }
+        // Le document affiché change seulement quand on ferme l'onglet actif :
+        // fermer un autre onglet décale les index mais garde la même page.
+        let was_active = idx == self.active;
+        self.tabs.remove(idx);
+        if idx < self.active {
+            self.active -= 1;
+        } else if self.active >= self.tabs.len() {
+            self.active = self.tabs.len().saturating_sub(1);
+        }
+        self.last_active = self.active;
+        if was_active {
+            self.reset_document_session();
         }
     }
 
@@ -1110,6 +1136,8 @@ impl YouPdfApp {
         match tab.doc.save_with_annotations(&path, &annots) {
             Ok(()) => {
                 tab.dirty = false;
+                tab.structural_dirty = false;
+                tab.baseline_annots = tab.annots.clone();
                 self.toast(ctx, format!("Saved {}", path.display()));
             }
             Err(err) => self.toast(ctx, format!("Save failed: {err}")),
@@ -1137,6 +1165,8 @@ impl YouPdfApp {
         match tab.doc.save_with_annotations(&path, &annots) {
             Ok(()) => {
                 tab.dirty = false;
+                tab.structural_dirty = false;
+                tab.baseline_annots = tab.annots.clone();
                 tab.path = Some(path.clone());
                 tab.title = path
                     .file_name()
@@ -1279,6 +1309,17 @@ impl YouPdfApp {
                     });
                 }
                 ui.add_space(6.0);
+                ui.label(RichText::new("Embedded images").size(12.0).color(pal().muted));
+                if ui
+                    .selectable_label(
+                        self.export_mode == ExportMode::Embedded,
+                        "PNG (one file per embedded image)",
+                    )
+                    .clicked()
+                {
+                    self.export_mode = ExportMode::Embedded;
+                }
+                ui.add_space(6.0);
                 ui.label(RichText::new("Office").size(12.0).color(pal().muted));
                 for format in OfficeFormat::ALL {
                     if ui
@@ -1305,6 +1346,10 @@ impl YouPdfApp {
                              row per line, one slide per page. Images, tables and the layout are \
                              not reconstructed."
                         }
+                        ExportMode::Embedded => {
+                            "Each image embedded in the document is written as a PNG. Rendered \
+                             page pictures are not included — use Images for those."
+                        }
                         ExportMode::Text => {
                             "Only the text layer is exported: images, tables and the page layout \
                              are not rebuilt, and pages without extractable text come out empty."
@@ -1329,6 +1374,44 @@ impl YouPdfApp {
     /// Écrit la couche texte du document dans le format choisi, les pages en
     /// images, ou un document bureautique.
     fn export_active(&mut self, ctx: &egui::Context) {
+        if self.export_mode == ExportMode::Embedded {
+            let Some(directory) = rfd::FileDialog::new().pick_folder() else {
+                return;
+            };
+            let result = self.tabs.get(self.active).map(|tab| {
+                let mut written = 0usize;
+                let mut skipped = 0usize;
+                for page in 1..=tab.total() as u32 {
+                    let images = tab.doc.extract_images(page).unwrap_or_default();
+                    for (index, info) in images.iter().enumerate() {
+                        match tab.doc.extract_image_png(info) {
+                            Ok(bytes) => {
+                                let name =
+                                    format!("page{page:04}-image{:02}.png", index + 1);
+                                if std::fs::write(directory.join(name), bytes).is_ok() {
+                                    written += 1;
+                                } else {
+                                    skipped += 1;
+                                }
+                            }
+                            Err(_) => skipped += 1,
+                        }
+                    }
+                }
+                (written, skipped)
+            });
+            if let Some((written, skipped)) = result {
+                let name = directory
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "the folder".to_owned());
+                self.toast(
+                    ctx,
+                    format!("{written} embedded image(s) written to {name} ({skipped} skipped)"),
+                );
+            }
+            return;
+        }
         if self.export_mode == ExportMode::Office {
             let format = self.export_office_format;
             let stem = self
@@ -1439,7 +1522,8 @@ impl YouPdfApp {
         };
         if let Some(previous) = tab.undo.pop() {
             tab.redo.push(std::mem::replace(&mut tab.annots, previous));
-            tab.dirty = true;
+            // Revenir à l'état enregistré doit éteindre « non enregistré ».
+            tab.dirty = tab.structural_dirty || tab.annots != tab.baseline_annots;
             self.toast(ctx, "Undone");
         }
     }
@@ -1450,7 +1534,7 @@ impl YouPdfApp {
         };
         if let Some(next) = tab.redo.pop() {
             tab.undo.push(std::mem::replace(&mut tab.annots, next));
-            tab.dirty = true;
+            tab.dirty = tab.structural_dirty || tab.annots != tab.baseline_annots;
             self.toast(ctx, "Redone");
         }
     }
@@ -1917,6 +2001,7 @@ impl YouPdfApp {
                                 entry.options = props.options.clone();
                             }
                             tab.dirty = true;
+                            tab.structural_dirty = true;
                             tab.cache.clear();
                             self.toast(ctx, format!("Field {} updated", props.name));
                         }
@@ -1943,6 +2028,7 @@ impl YouPdfApp {
                         entry.value = Some(buffer.clone());
                     }
                     tab.dirty = true;
+                    tab.structural_dirty = true;
                     // La page est déjà rendue avec l'ancienne valeur.
                     tab.cache.clear();
                     self.toast(ctx, format!("Field {} updated", field.name));
@@ -2689,6 +2775,7 @@ impl YouPdfApp {
     fn mark_document_changed(&mut self) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             tab.dirty = true;
+            tab.structural_dirty = true;
             tab.cache.clear();
             // Les annotations en attente ne vivent qu'en mémoire : les
             // marquer « à recharger » les remplacerait par celles du
@@ -2861,6 +2948,7 @@ impl YouPdfApp {
             }
             if changed > 0 {
                 tab.dirty = true;
+                tab.structural_dirty = true;
                 tab.cache.clear();
             }
         }
@@ -2951,6 +3039,16 @@ impl YouPdfApp {
         self.mark_document_changed();
         match outcome {
             Ok((areas, cleaned)) => {
+                // Le caviardage a détruit le contenu sous les zones : les
+                // annotations en mémoire sont caduques. Sans ce rechargement,
+                // `save_with_annotations` réécrirait dans le fichier une
+                // annotation qui chevauchait une zone caviardée.
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.annots = annots_to_display(&tab.doc, tab.doc.read_annotations());
+                    tab.annots_loaded = true;
+                }
+                self.selected_annot = 0;
+                self.has_annot_selection = false;
                 self.annot_tool = Some(0);
                 let suffix = if sanitize {
                     format!(" · {cleaned} metadata entries removed")
@@ -4228,6 +4326,7 @@ impl YouPdfApp {
                                     let removed = tab.doc.sanitize().unwrap_or(0);
                                     if removed > 0 {
                                         tab.dirty = true;
+                                        tab.structural_dirty = true;
                                     }
                                     removed
                                 })
@@ -4664,7 +4763,16 @@ impl YouPdfApp {
                     MenuAction::ImagePdf => self.image_pdf_save(ctx),
                     MenuAction::GenerateOutline => self.generate_bookmarks(ctx),
                     MenuAction::ClearOutline => self.clear_bookmarks(ctx),
-                    MenuAction::Theme(theme) => self.theme = theme,
+                    MenuAction::Theme(theme) => {
+                        self.theme = theme;
+                        // Le thème est une préférence persistante : on
+                        // l'enregistre au même endroit que le reste.
+                        self.ai.settings.theme_index = Theme::ALL
+                            .iter()
+                            .position(|candidate| *candidate == theme)
+                            .unwrap_or(0);
+                        let _ = self.ai.settings.save();
+                    }
                 }
             }
         }
@@ -5107,7 +5215,7 @@ impl YouPdfApp {
         if !self.ai.open {
             return;
         }
-        if self.ai_doc_tab != Some(self.active) {
+        if self.ai.enabled() && self.ai_doc_tab != Some(self.active) {
             self.ai_doc_tab = Some(self.active);
             self.ai_doc_text = self
                 .tabs
