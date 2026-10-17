@@ -506,10 +506,16 @@ fn new_fragment(
 impl Document {
     /// Remplace un fragment de texte par un nouveau contenu.
     ///
+    /// `background` est la couleur du rectangle de masquage (composantes
+    /// 0.0–1.0) ; `None` donne du blanc. Un appelant qui connaît la couleur
+    /// réelle de la page doit la fournir, sinon le patch se voit sur une
+    /// page teintée.
+    ///
     /// ## Méthode
     ///
-    /// 1. On dessine un rectangle blanc sur l'ancien fragment.
-    /// 2. On écrit le nouveau texte au même emplacement, avec Helvetica.
+    /// 1. On dessine un rectangle de masquage sur l'ancien fragment.
+    /// 2. On écrit le nouveau texte au même emplacement, avec Helvetica,
+    ///    dans la couleur du fragment (`TextFragment::color`).
     ///
     /// ## Limites
     ///
@@ -521,7 +527,7 @@ impl Document {
     ///   (récupérable par extraction), ce qui **doit** être su si le but
     ///   est de supprimer une information sensible (utiliser le
     ///   caviardage pour ça).
-    pub fn replace_text_fragment(&mut self, fragment: &TextFragment, new_text: &str) -> Result<()> {
+    pub fn replace_text_fragment(&mut self, fragment: &TextFragment, new_text: &str, background: Option<[f32; 3]>) -> Result<()> {
         let page_id = self
             .page_id(fragment.page as u32)
             .map_err(|e| Error::Pdf(format!("page : {e}")))?;
@@ -537,9 +543,13 @@ impl Document {
         // défaut d'affichage des accents que ce correctif supprime.
         let mut content: Vec<u8> = Vec::new();
 
-        // Rectangle blanc de masquage (légèrement plus grand pour être sûr).
+        // Rectangle de masquage : couleur contrôlée, par défaut blanc.
+        let bg = background.unwrap_or([1.0, 1.0, 1.0]);
         content.extend_from_slice(
-            format!("q\n1 1 1 rg\n{:.2} {:.2} {:.2} {:.2} re\nf\nQ\n",
+            format!("q\n{:.2} {:.2} {:.2} rg\n{:.2} {:.2} {:.2} {:.2} re\nf\nQ\n",
+                bg[0],
+                bg[1],
+                bg[2],
                 x1 - 1.0,
                 y1 - 1.0,
                 w + 2.0,
@@ -547,11 +557,21 @@ impl Document {
             .as_bytes(),
         );
 
-        // Texte de remplacement.
+        // Texte de remplacement. La couleur est reposée explicitement : après
+        // le `Q` du masque, la couleur de remplissage courante est celle
+        // qu'avait laissée le contenu de la page, qui n'a rien à voir.
+        let ink = [
+            fragment.color[0] as f32 / 255.0,
+            fragment.color[1] as f32 / 255.0,
+            fragment.color[2] as f32 / 255.0,
+        ];
         let safe = encode_pdf_literal(new_text);
         content.extend_from_slice(
             format!(
-                "BT\n/YouPdfF1 {:.2} Tf\n{:.2} {:.2} Td\n",
+                "BT\n{:.3} {:.3} {:.3} rg\n/YouPdfF1 {:.2} Tf\n{:.2} {:.2} Td\n",
+                ink[0],
+                ink[1],
+                ink[2],
                 fragment.font_size,
                 x1,
                 y1 + fragment.font_size * 0.2
