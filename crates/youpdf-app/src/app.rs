@@ -18,6 +18,7 @@ use egui::{
 };
 use egui_phosphor::regular as ph;
 use youpdf_shared::{pal, set_palette, Theme};
+use crate::ai::AiPanel;
 use youpdf_core::render::NullRenderer;
 use youpdf_core::ocr::{make_searchable, TesseractEngine};
 use youpdf_core::{
@@ -131,6 +132,8 @@ enum MenuAction {
     Batch,
     /// Ouvre la fenêtre d'extraction de données.
     Extract,
+    /// Active/désactive les fonctionnalités IA.
+    AiEnabled,
     /// Écrit une copie déclarée conforme à un niveau.
     Conformance(Conformance),
     /// Écrit un PDF dont chaque page est une image.
@@ -666,6 +669,12 @@ pub struct YouPdfApp {
     page_entry: String,
     /// Surface d'accueil (fichiers récents) affichée à la place du canevas.
     home_open: bool,
+    /// Panneau IA (« apportez votre propre fournisseur »).
+    ai: AiPanel,
+    /// Onglet dont le texte est mis en cache pour l'IA (`None` = à extraire).
+    ai_doc_tab: Option<usize>,
+    /// Texte du document actif, extrait à l'ouverture du panneau IA.
+    ai_doc_text: String,
     /// Disposition des pages du canevas (une, continue, deux, couverture).
     page_layout: PageLayout,
     /// Plein écran natif demandé par le menu `…`.
@@ -832,6 +841,9 @@ impl YouPdfApp {
             search_word: false,
             page_entry: String::new(),
             home_open: initial.is_none(),
+            ai: AiPanel::new(),
+            ai_doc_tab: None,
+            ai_doc_text: String::new(),
             page_layout: PageLayout::default(),
             fullscreen: false,
             actions_opened: false,
@@ -1045,6 +1057,9 @@ impl YouPdfApp {
         self.search_rects.clear();
         self.search_rects_page = None;
         self.search_active = None;
+        // Le contexte IA appartient au document : on le ré-extraira.
+        self.ai_doc_tab = None;
+        self.ai_doc_text.clear();
         // Les résultats d'extraction et l'outil de mesure appartiennent au
         // document : les garder ferait agir la fenêtre sur le mauvais onglet.
         self.extract_tables.clear();
@@ -4497,6 +4512,10 @@ impl YouPdfApp {
                                 }
                             }
                             ui.add_space(4.0);
+                            if menu_row_checked(ui, "AI features…", self.ai.enabled()) {
+                                action = Some(MenuAction::AiEnabled);
+                            }
+                            ui.add_space(4.0);
                             let sep = ui.cursor().top();
                             ui.painter().hline(
                                 ui.max_rect().x_range(),
@@ -4566,6 +4585,7 @@ impl YouPdfApp {
                     MenuAction::Slideshow => self.enter_slideshow(ctx),
                     MenuAction::Batch => self.batch_open = true,
                     MenuAction::Extract => self.extract_open = true,
+                    MenuAction::AiEnabled => self.ai.open = true,
                     MenuAction::Conformance(level) => self.conformance_save(ctx, level),
                     MenuAction::ImagePdf => self.image_pdf_save(ctx),
                     MenuAction::GenerateOutline => self.generate_bookmarks(ctx),
@@ -4985,6 +5005,29 @@ impl YouPdfApp {
         if !open {
             self.compress_open = false;
         }
+    }
+
+    // -- IA ----------------------------------------------------------------
+
+    /// Peint le panneau IA. Le texte du document n'est extrait qu'une fois par
+    /// onglet, et seulement quand le panneau est ouvert.
+    fn ai_window(&mut self, ctx: &egui::Context) {
+        if !self.ai.open {
+            return;
+        }
+        if self.ai_doc_tab != Some(self.active) {
+            self.ai_doc_tab = Some(self.active);
+            self.ai_doc_text = self
+                .tabs
+                .get(self.active)
+                .map(|tab| extract_document_text(&tab.doc))
+                .unwrap_or_default();
+        }
+        let (name, pages) = match self.tabs.get(self.active) {
+            Some(tab) => (Some(tab.title.clone()), Some(tab.total())),
+            None => (None, None),
+        };
+        self.ai.show(ctx, &self.ai_doc_text, name.as_deref(), pages);
     }
 
     /// Exécute une écriture qui part du document lui-même (copie compressée,
@@ -7865,6 +7908,7 @@ impl eframe::App for YouPdfApp {
         self.redact_window(ctx);
         self.organize_window(ctx);
         self.activity_window(ctx);
+        self.ai_window(ctx);
         if !self.render_status.is_empty() {
             let message = std::mem::take(&mut self.render_status);
             self.toast(ctx, message);
@@ -7888,6 +7932,29 @@ fn install_fonts(ctx: &egui::Context) {
 /// `youpdf_shared::theme` : un seul endroit définit les couleurs.
 fn apply_theme(ctx: &egui::Context, theme: Theme) {
     theme.apply(ctx);
+}
+
+/// Extrait le texte du document pour le contexte IA.
+///
+/// Plafonné à 40 pages et 60 000 caractères : inutile d'envoyer un roman
+/// entier au modèle à chaque question. Le plafond est volontairement large
+/// pour couvrir un contrat ou un rapport typique.
+fn extract_document_text(doc: &Document) -> String {
+    const MAX_PAGES: usize = 40;
+    const MAX_CHARS: usize = 60_000;
+
+    let total = doc.page_count().min(MAX_PAGES);
+    let mut out = String::new();
+    for page in 1..=total as u32 {
+        if let Ok(text) = doc.page_text(page) {
+            out.push_str(&text.replace('\u{c}', "\n"));
+            out.push('\n');
+        }
+    }
+    if out.chars().count() > MAX_CHARS {
+        out = out.chars().take(MAX_CHARS).collect();
+    }
+    out
 }
 
 // --------------------------------------------------------------------------

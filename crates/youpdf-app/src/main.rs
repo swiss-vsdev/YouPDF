@@ -1,5 +1,6 @@
 //! Point d'entrée de l'application YouPDF.
 
+mod ai;
 mod app;
 
 use app::YouPdfApp;
