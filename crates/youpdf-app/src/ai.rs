@@ -10,22 +10,25 @@
 //! jamais, même quand le fournisseur ne répond pas.
 
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
 
 use egui::{RichText, ScrollArea, TextEdit};
 use youpdf_ai::{
-    build_provider, AiProvider, AiTask, AppSettings, ChatContext, ChatOptions, Message, ModelInfo,
+    build_provider, AiTask, AppSettings, ChatContext, ChatOptions, Message, ModelInfo, ProviderConfig,
     ProviderKind, SecretStore,
 };
 use youpdf_shared::pal;
 
 /// Demande envoyée au fil de travail.
+///
+/// La configuration part telle quelle : c'est le fil de travail qui construit
+/// le fournisseur, donc qui lit le trousseau et ouvre le client HTTP. Le fil
+/// d'interface ne touche jamais au trousseau.
 enum AiRequest {
     /// Lister les modèles du fournisseur.
-    ListModels(Arc<dyn AiProvider>),
+    ListModels(ProviderConfig),
     /// Envoyer une conversation.
     Chat {
-        provider: Arc<dyn AiProvider>,
+        config: ProviderConfig,
         model: String,
         messages: Vec<Message>,
     },
@@ -39,6 +42,9 @@ enum AiReply {
 }
 
 /// Fil de travail : un runtime tokio, une demande à la fois.
+///
+/// Le fil n'existe que si une demande a été envoyée : tant que l'IA est
+/// éteinte, aucun fil, aucun runtime, aucune lecture du trousseau.
 fn spawn_worker(requests: Receiver<AiRequest>, replies: Sender<AiReply>) {
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -53,24 +59,32 @@ fn spawn_worker(requests: Receiver<AiRequest>, replies: Sender<AiReply>) {
         };
 
         while let Ok(request) = requests.recv() {
-            let reply = runtime.block_on(async {
-                match request {
-                    AiRequest::ListModels(provider) => provider
-                        .list_models()
-                        .await
-                        .map(AiReply::Models)
-                        .unwrap_or_else(|e| AiReply::Error(e.to_string())),
-                    AiRequest::Chat {
-                        provider,
-                        model,
-                        messages,
-                    } => provider
-                        .chat(&model, &messages, &ChatOptions::default())
-                        .await
-                        .map(|response| AiReply::Chat(response.content))
-                        .unwrap_or_else(|e| AiReply::Error(e.to_string())),
-                }
-            });
+            let reply = match request {
+                AiRequest::ListModels(config) => match build_provider(&config) {
+                    Ok(provider) => runtime.block_on(async {
+                        provider
+                            .list_models()
+                            .await
+                            .map(AiReply::Models)
+                            .unwrap_or_else(|e| AiReply::Error(e.to_string()))
+                    }),
+                    Err(e) => AiReply::Error(e.to_string()),
+                },
+                AiRequest::Chat {
+                    config,
+                    model,
+                    messages,
+                } => match build_provider(&config) {
+                    Ok(provider) => runtime.block_on(async {
+                        provider
+                            .chat(&model, &messages, &ChatOptions::default())
+                            .await
+                            .map(|response| AiReply::Chat(response.content))
+                            .unwrap_or_else(|e| AiReply::Error(e.to_string()))
+                    }),
+                    Err(e) => AiReply::Error(e.to_string()),
+                },
+            };
 
             if replies.send(reply).is_err() {
                 break;
@@ -107,19 +121,18 @@ pub struct AiPanel {
     status: Option<String>,
     /// Une demande est en vol.
     busy: bool,
-    /// Canal vers le fil de travail.
-    requests: Sender<AiRequest>,
+    /// Canal vers le fil de travail ; `None` tant qu'aucune demande n'a été
+    /// envoyée, donc tant que l'IA n'a pas servi.
+    requests: Option<Sender<AiRequest>>,
     /// Canal depuis le fil de travail.
-    replies: Receiver<AiReply>,
+    replies: Option<Receiver<AiReply>>,
 }
 
 impl AiPanel {
-    /// Construit le panneau et démarre son fil de travail.
+    /// Construit le panneau. Aucun fil n'est démarré ici : le fil de travail
+    /// naît à la première demande, jamais quand l'IA est éteinte.
     pub fn new() -> Self {
         let settings = AppSettings::load().unwrap_or_default();
-        let (request_tx, request_rx) = channel();
-        let (reply_tx, reply_rx) = channel();
-        spawn_worker(request_rx, reply_tx);
 
         Self {
             open: false,
@@ -132,8 +145,8 @@ impl AiPanel {
             target_language: "English".to_string(),
             status: None,
             busy: false,
-            requests: request_tx,
-            replies: reply_rx,
+            requests: None,
+            replies: None,
         }
     }
 
@@ -142,9 +155,30 @@ impl AiPanel {
         self.settings.ai_enabled
     }
 
+    /// Envoie une demande au fil de travail, en le démarrant au besoin.
+    fn send(&mut self, request: AiRequest) {
+        if self.requests.is_none() {
+            let (request_tx, request_rx) = channel();
+            let (reply_tx, reply_rx) = channel();
+            spawn_worker(request_rx, reply_tx);
+            self.requests = Some(request_tx);
+            self.replies = Some(reply_rx);
+        }
+        if let Some(requests) = &self.requests {
+            let _ = requests.send(request);
+        }
+        self.busy = true;
+    }
+
     /// Recueille les réponses du fil de travail.
     fn poll(&mut self) {
-        while let Ok(reply) = self.replies.try_recv() {
+        let mut inbox = Vec::new();
+        if let Some(replies) = &self.replies {
+            while let Ok(reply) = replies.try_recv() {
+                inbox.push(reply);
+            }
+        }
+        for reply in inbox {
             self.busy = false;
             match reply {
                 AiReply::Models(models) => {
@@ -169,18 +203,16 @@ impl AiPanel {
             self.status = Some("Select a provider first.".to_string());
             return;
         };
-        match build_provider(&config) {
-            Ok(provider) => {
-                let _ = self.requests.send(AiRequest::ListModels(provider));
-                self.busy = true;
-                self.status = Some("Listing models…".to_string());
-            }
-            Err(e) => self.status = Some(e.to_string()),
-        }
+        self.send(AiRequest::ListModels(config));
+        self.status = Some("Listing models…".to_string());
     }
 
     /// Envoie la tâche sélectionnée au fournisseur actif.
     fn submit(&mut self, doc_text: &str, doc_name: Option<&str>, doc_pages: Option<usize>) {
+        if matches!(self.task, AiTask::Chat) && self.input.trim().is_empty() {
+            self.status = Some("Type a question first.".to_string());
+            return;
+        }
         let Some(config) = self.active_config() else {
             self.status = Some("Select a provider first.".to_string());
             return;
@@ -194,13 +226,6 @@ impl AiPanel {
             self.status = Some("Choose a model first.".to_string());
             return;
         };
-        let provider = match build_provider(&config) {
-            Ok(provider) => provider,
-            Err(e) => {
-                self.status = Some(e.to_string());
-                return;
-            }
-        };
 
         let context = ChatContext {
             document_name: doc_name.map(|name| name.to_string()),
@@ -211,13 +236,7 @@ impl AiPanel {
         let messages = self.task.build_messages(&context, &self.input);
 
         let label = match self.task {
-            AiTask::Chat => {
-                if self.input.trim().is_empty() {
-                    self.status = Some("Type a question first.".to_string());
-                    return;
-                }
-                self.input.clone()
-            }
+            AiTask::Chat => self.input.clone(),
             other => task_label(other).to_string(),
         };
 
@@ -226,12 +245,11 @@ impl AiPanel {
             text: label,
         });
         self.input.clear();
-        let _ = self.requests.send(AiRequest::Chat {
-            provider,
+        self.send(AiRequest::Chat {
+            config,
             model,
             messages,
         });
-        self.busy = true;
         self.status = Some("Waiting for the model…".to_string());
     }
 
