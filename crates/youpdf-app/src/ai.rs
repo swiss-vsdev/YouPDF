@@ -9,7 +9,9 @@
 //! L'appel réseau tourne sur un fil de travail : l'interface ne se fige
 //! jamais, même quand le fournisseur ne répond pas.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 
 use egui::{RichText, ScrollArea, TextEdit};
 use youpdf_ai::{
@@ -45,7 +47,15 @@ enum AiReply {
 ///
 /// Le fil n'existe que si une demande a été envoyée : tant que l'IA est
 /// éteinte, aucun fil, aucun runtime, aucune lecture du trousseau.
-fn spawn_worker(requests: Receiver<AiRequest>, replies: Sender<AiReply>) {
+///
+/// `cancel` est une génération partagée avec l'interface : couper l'IA
+/// l'incrémente, et le fil abandonne alors toute demande encore en file
+/// **avant** d'ouvrir la moindre connexion.
+fn spawn_worker(
+    requests: Receiver<AiRequest>,
+    replies: Sender<AiReply>,
+    cancel: Arc<AtomicU64>,
+) {
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -59,15 +69,22 @@ fn spawn_worker(requests: Receiver<AiRequest>, replies: Sender<AiReply>) {
         };
 
         while let Ok(request) = requests.recv() {
+            let generation = cancel.load(Ordering::Relaxed);
+            // La lecture du trousseau peut prendre un instant : on revérifie
+            // juste avant l'appel réseau que l'IA n'a pas été coupée entre
+            // temps. Sinon, on abandonne sans rien envoyer.
+            let alive = || cancel.load(Ordering::Relaxed) == generation;
+
             let reply = match request {
                 AiRequest::ListModels(config) => match build_provider(&config) {
-                    Ok(provider) => runtime.block_on(async {
+                    Ok(provider) if alive() => runtime.block_on(async {
                         provider
                             .list_models()
                             .await
                             .map(AiReply::Models)
                             .unwrap_or_else(|e| AiReply::Error(e.to_string()))
                     }),
+                    Ok(_) => continue,
                     Err(e) => AiReply::Error(e.to_string()),
                 },
                 AiRequest::Chat {
@@ -75,13 +92,14 @@ fn spawn_worker(requests: Receiver<AiRequest>, replies: Sender<AiReply>) {
                     model,
                     messages,
                 } => match build_provider(&config) {
-                    Ok(provider) => runtime.block_on(async {
+                    Ok(provider) if alive() => runtime.block_on(async {
                         provider
                             .chat(&model, &messages, &ChatOptions::default())
                             .await
                             .map(|response| AiReply::Chat(response.content))
                             .unwrap_or_else(|e| AiReply::Error(e.to_string()))
                     }),
+                    Ok(_) => continue,
                     Err(e) => AiReply::Error(e.to_string()),
                 },
             };
@@ -126,6 +144,9 @@ pub struct AiPanel {
     requests: Option<Sender<AiRequest>>,
     /// Canal depuis le fil de travail.
     replies: Option<Receiver<AiReply>>,
+    /// Génération de travail : incrémentée à chaque coupure de l'IA, pour
+    /// qu'une demande encore en file soit abandonnée avant tout envoi.
+    cancel: Arc<AtomicU64>,
 }
 
 impl AiPanel {
@@ -153,6 +174,7 @@ impl AiPanel {
             busy: false,
             requests: None,
             replies: None,
+            cancel: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -166,7 +188,7 @@ impl AiPanel {
         if self.requests.is_none() {
             let (request_tx, request_rx) = channel();
             let (reply_tx, reply_rx) = channel();
-            spawn_worker(request_rx, reply_tx);
+            spawn_worker(request_rx, reply_tx, Arc::clone(&self.cancel));
             self.requests = Some(request_tx);
             self.replies = Some(reply_rx);
         }
@@ -189,9 +211,11 @@ impl AiPanel {
     /// Coupe l'IA : jette les canaux du fil de travail.
     ///
     /// Le fil se termine de lui-même (son `recv` échoue). Une requête déjà
-    /// partie sur le réseau ne peut pas être rappelée, mais plus rien n'est
-    /// envoyé et sa réponse ne peut plus être livrée.
+    /// partie sur le réseau ne peut pas être rappelée, mais toute demande
+    /// encore en file est abandonnée avant l'envoi grâce à la génération, et
+    /// la réponse en vol ne peut plus être livrée.
     fn disable(&mut self) {
+        self.cancel.fetch_add(1, Ordering::Relaxed);
         self.requests = None;
         self.replies = None;
         self.busy = false;
@@ -231,6 +255,10 @@ impl AiPanel {
 
     /// Demande la liste des modèles du fournisseur actif.
     fn list_models(&mut self) {
+        if self.busy {
+            self.status = Some("A request is already running.".to_string());
+            return;
+        }
         let Some(config) = self.active_config() else {
             self.status = Some("Select a provider first.".to_string());
             return;
@@ -241,6 +269,12 @@ impl AiPanel {
 
     /// Envoie la tâche sélectionnée au fournisseur actif.
     fn submit(&mut self, doc_text: &str, doc_name: Option<&str>, doc_pages: Option<usize>) {
+        // Une seule demande à la fois : sinon une seconde question resterait
+        // en file et partirait après une coupure de l'IA.
+        if self.busy {
+            self.status = Some("A request is already running.".to_string());
+            return;
+        }
         if matches!(self.task, AiTask::Chat) && self.input.trim().is_empty() {
             self.status = Some("Type a question first.".to_string());
             return;

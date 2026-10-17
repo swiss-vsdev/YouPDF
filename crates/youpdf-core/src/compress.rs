@@ -386,7 +386,7 @@ pub(crate) fn decode_stream_content(stream: &lopdf::Stream) -> Option<image::Dyn
     }
 
     if filters.iter().any(|f| f == "DCTDecode") {
-        return image::load_from_memory_with_format(&stream.content, image::ImageFormat::Jpeg).ok();
+        return decode_limited(&stream.content, image::ImageFormat::Jpeg);
     }
 
     if filters.iter().any(|f| f == "FlateDecode") {
@@ -403,16 +403,31 @@ pub(crate) fn decode_stream_content(stream: &lopdf::Stream) -> Option<image::Dyn
             return None;
         }
         // Certains producteurs emballent un JPEG ou un PNG dans un flux Flate.
-        if let Ok(img) = image::load_from_memory_with_format(&raw, image::ImageFormat::Jpeg) {
+        if let Some(img) = decode_limited(&raw, image::ImageFormat::Jpeg) {
             return Some(img);
         }
-        if let Ok(img) = image::load_from_memory_with_format(&raw, image::ImageFormat::Png) {
+        if let Some(img) = decode_limited(&raw, image::ImageFormat::Png) {
             return Some(img);
         }
         return raw_samples_to_image(stream, &raw);
     }
 
     None
+}
+
+/// Décode une image en mémoire avec des plafonds explicites.
+///
+/// Un en-tête peut annoncer des dimensions énormes sans transporter les
+/// octets correspondants : sans plafond, le décodeur alloue avant de
+/// s'apercevoir que le flux est faux.
+fn decode_limited(bytes: &[u8], format: image::ImageFormat) -> Option<image::DynamicImage> {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(20_000);
+    limits.max_image_height = Some(20_000);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    reader.limits(limits);
+    reader.decode().ok()
 }
 
 /// Reconstruit une image à partir d'échantillons bruts, 8 bits par composant.
