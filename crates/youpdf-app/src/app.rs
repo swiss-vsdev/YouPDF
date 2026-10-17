@@ -321,6 +321,128 @@ struct CachedPage {
     scale: f32,
 }
 
+/// Sélection de texte sur une page, en repère affiché.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TextSel {
+    /// Page concernée.
+    page: u32,
+    /// Ancre et tête du glissé ; `None` sélectionne tout le texte de la page.
+    span: Option<([f32; 2], [f32; 2])>,
+}
+
+/// Indices des blocs couverts par une sélection, dans l'ordre de lecture.
+///
+/// L'ordre est celui d'un lecteur : lignes de haut en bas, puis blocs de
+/// gauche à droite. La sélection prend tout ce qui se trouve entre le bloc de
+/// l'ancre et celui de la tête. Le découpage s'arrête au bloc, pas au
+/// caractère : l'extraction estime les rectangles (`0,5 × corps` par
+/// caractère), un découpage plus fin afficherait une précision trompeuse.
+fn selected_indices(frags: &[TextFragment], span: Option<([f32; 2], [f32; 2])>) -> Vec<usize> {
+    if frags.is_empty() {
+        return Vec::new();
+    }
+    let mut order: Vec<usize> = (0..frags.len()).collect();
+    order.sort_by(|a, b| reading_order(frags, *a, *b));
+
+    let Some((anchor, head)) = span else {
+        return order;
+    };
+    let start = nearest_fragment(frags, anchor);
+    let end = nearest_fragment(frags, head);
+    let start = order.iter().position(|i| *i == start).unwrap_or(0);
+    let end = order.iter().position(|i| *i == end).unwrap_or(start);
+    let (low, high) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    order[low..=high].to_vec()
+}
+
+/// Texte d'une sélection, blocs réunis dans l'ordre de lecture.
+///
+/// Deux blocs d'une même ligne sont séparés par une espace, deux lignes par un
+/// saut de ligne.
+fn selection_text(frags: &[TextFragment], span: Option<([f32; 2], [f32; 2])>) -> String {
+    let mut out = String::new();
+    let mut previous_line: Option<f32> = None;
+    for index in selected_indices(frags, span) {
+        let frag = &frags[index];
+        let line = (frag.rect[1] + frag.rect[3]) * 0.5;
+        if let Some(previous) = previous_line {
+            let height = frag.font_size.max(1.0);
+            out.push(if (previous - line).abs() > height * 0.6 {
+                '\n'
+            } else {
+                ' '
+            });
+        }
+        out.push_str(&frag.text);
+        previous_line = Some(line);
+    }
+    out
+}
+
+/// Ordre de lecture de deux blocs : lignes de haut en bas, puis de gauche à
+/// droite sur une même ligne.
+fn reading_order(frags: &[TextFragment], a: usize, b: usize) -> std::cmp::Ordering {
+    let (ra, rb) = (frags[a].rect, frags[b].rect);
+    let (ta, tb) = ((ra[1] + ra[3]) * 0.5, (rb[1] + rb[3]) * 0.5);
+    // Les blocs d'une ligne ne sont pas alignés au pixel près : une tolérance
+    // proportionnelle au corps évite de couper une ligne en deux.
+    let tolerance = frags[a].font_size.max(frags[b].font_size) * 0.6;
+    if (ta - tb).abs() <= tolerance {
+        ra[0]
+            .partial_cmp(&rb[0])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    } else {
+        tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
+/// Index du bloc le plus proche d'un point (repère affiché).
+fn nearest_fragment(frags: &[TextFragment], point: [f32; 2]) -> usize {
+    let mut best = 0;
+    let mut best_d = f32::INFINITY;
+    for (index, frag) in frags.iter().enumerate() {
+        let d = rect_distance(frag.rect, point);
+        if d < best_d {
+            best_d = d;
+            best = index;
+        }
+    }
+    best
+}
+
+/// Distance d'un point à un rectangle ; zéro s'il est dedans.
+fn rect_distance(rect: [f32; 4], point: [f32; 2]) -> f32 {
+    let dx = (rect[0] - point[0]).max(0.0).max(point[0] - rect[2]);
+    let dy = (rect[1] - point[1]).max(0.0).max(point[1] - rect[3]);
+    (dx * dx + dy * dy).sqrt()
+}
+
+/// Extrait et met en cache les blocs de texte d'une page, en repère affiché.
+///
+/// Répond `false` si le moteur n'a rien lu : l'appelant ne doit alors pas
+/// proposer de sélection sur cette page.
+fn extract_page_fragments(tab: &mut Tab, page: u32) -> bool {
+    match tab.doc.extract_text_fragments(page) {
+        Ok(mut frags) => {
+            for frag in &mut frags {
+                frag.rect = rect_to_display(&tab.doc, page as usize, frag.rect);
+            }
+            let usable = !frags.is_empty();
+            tab.fragments.insert(page, frags);
+            usable
+        }
+        Err(err) => {
+            tracing::warn!(%err, page, "extraction du texte de la page");
+            tab.fragments.insert(page, Vec::new());
+            false
+        }
+    }
+}
+
 /// Palier de vignette : hors de la pyramide de zoom, une vignette ne doit
 /// jamais être servie à la place d'une page rendue.
 const THUMBNAIL_STEP: i32 = -1;
@@ -559,8 +681,7 @@ struct Tab {
     /// Plan du document (signets).
     outline: Vec<OutlineItem>,
     /// Champs de formulaire du document.
-    forms: Vec<FormField>,
-    /// Pièces jointes du document.
+    forms: Vec<FormField>,    /// Pièces jointes du document.
     attachments: Vec<AttachmentInfo>,
     /// Fragments de texte de chaque page, extraits à la demande pour
     /// l'outil Texte du mode Édition.
@@ -731,6 +852,8 @@ pub struct YouPdfApp {
     selected_annot: usize,
     /// Sélection active.
     has_annot_selection: bool,
+    /// Sélection de texte en cours (outil Sélection du mode Commentaire).
+    text_sel: Option<TextSel>,
     /// Tracé de crayon en cours (coordonnées PDF).
     ink_current: Vec<[f32; 2]>,
     /// Coin de départ d'un glissé en cours (coordonnées PDF).
@@ -926,6 +1049,7 @@ impl YouPdfApp {
             text_draft: None,
             selected_annot: 0,
             has_annot_selection: false,
+            text_sel: None,
             ink_current: Vec::new(),
             drag_from: None,
             drag_to: None,
@@ -1159,6 +1283,7 @@ impl YouPdfApp {
         self.form_edit = None;
         self.selected_annot = 0;
         self.has_annot_selection = false;
+        self.text_sel = None;
         self.organize_selected.clear();
         self.replace_open = false;
         self.edit_text = None;
@@ -2591,6 +2716,44 @@ impl YouPdfApp {
             *slot = values[values.len() / 2];
         }
         out
+    }
+
+    /// Sélectionne tout le texte de la page courante.
+    fn select_page_text(&mut self) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let page = tab.page as u32;
+        // Le texte de la page peut ne pas avoir été extrait : c'est le cas
+        // tant qu'aucun glissé n'a eu lieu dessus.
+        if !tab.fragments.contains_key(&page) {
+            let Some(tab) = self.tabs.get_mut(self.active) else {
+                return;
+            };
+            if !extract_page_fragments(tab, page) {
+                return;
+            }
+        }
+        self.text_sel = Some(TextSel { page, span: None });
+    }
+
+    /// Copie le texte de la sélection dans le presse-papiers.
+    fn copy_selection(&mut self, ctx: &egui::Context) {
+        let Some(sel) = self.text_sel else {
+            return;
+        };
+        let text = self
+            .tabs
+            .get(self.active)
+            .and_then(|tab| tab.fragments.get(&sel.page))
+            .map(|frags| selection_text(frags, sel.span))
+            .unwrap_or_default();
+        if text.is_empty() {
+            self.toast(ctx, "No text selected");
+            return;
+        }
+        ctx.copy_text(text);
+        self.toast(ctx, "Copied");
     }
 
     /// Ouvre la réécriture du bloc de texte touché.
@@ -4494,6 +4657,8 @@ impl YouPdfApp {
                 });
             if let Some((idx, want_preset)) = chosen_tool {
                 self.annot_tool = Some(idx);
+                // La sélection de texte n'appartient qu'à l'outil Sélection.
+                self.text_sel = None;
                 if want_preset {
                     self.preset_open = true;
                 } else if !mode_tools(mode).get(idx).map(|t| t.2).unwrap_or(false) {
@@ -4560,6 +4725,7 @@ impl YouPdfApp {
                 self.mode = None;
                 self.annot_tool = None;
                 self.preset_open = false;
+                self.text_sel = None;
             }
         } else {
             Area::new(Id::new("modes"))
@@ -4582,6 +4748,7 @@ impl YouPdfApp {
                                         self.tools_open = false;
                                         self.annot_tool = None;
                                         self.preset_open = false;
+                                        self.text_sel = None;
                                     }
                                 }
                             });
@@ -4628,6 +4795,7 @@ impl YouPdfApp {
                         self.mode = Some(idx);
                         self.annot_tool = None;
                         self.preset_open = false;
+                        self.text_sel = None;
                     }
                     ToolsEntry::Organize => self.organize_open = true,
                     ToolsEntry::Crop => self.crop_open = true,
@@ -7181,13 +7349,22 @@ impl YouPdfApp {
         };
         let mut edit_commit = false;
         let mut edit_cancel = false;
+        // Sélection de texte : c'est l'état de lecture. Elle est active quand
+        // aucun mode n'est ouvert, ou dans le mode Commentaire sans outil ou
+        // avec l'outil Sélection. Aucun de ces états ne consomme le glissé.
+        // Les autres modes et les outils qui dessinent gardent le leur.
+        let select_text_tool = matches!(self.mode, None | Some(0))
+            && matches!(self.annot_tool, None | Some(0));
+        let mut sel = self.text_sel;
+        let mut sel_copy = false;
+        let mut sel_all = false;
         let renderer = &*self.renderer;
         let status = &mut self.render_status;
         let last_fit = &mut self.last_fit;
         let page_layout = self.page_layout;
         let tab = &mut self.tabs[active];
         let total = tab.total();
-        let sense = if action == ToolAction::None {
+        let sense = if action == ToolAction::None && !select_text_tool {
             Sense::click()
         } else {
             Sense::click_and_drag()
@@ -7343,6 +7520,37 @@ impl YouPdfApp {
                             );
                         }
 
+                        // Sélection de texte en cours.
+                        if let Some(s) = sel.as_ref() {
+                            if s.page == page {
+                                if let Some(frags) = tab.fragments.get(&page) {
+                                    for index in selected_indices(frags, s.span) {
+                                        let [x1, y1, x2, y2] = frags[index].rect;
+                                        let r = Rect::from_min_max(
+                                            pos2(
+                                                page_rect.min.x + x1 * scale,
+                                                page_rect.max.y - y2 * scale,
+                                            ),
+                                            pos2(
+                                                page_rect.min.x + x2 * scale,
+                                                page_rect.max.y - y1 * scale,
+                                            ),
+                                        );
+                                        ui.painter().rect_filled(
+                                            r.expand(1.0),
+                                            Rounding::same(2.0),
+                                            Color32::from_rgba_unmultiplied(
+                                                pal().accent.r(),
+                                                pal().accent.g(),
+                                                pal().accent.b(),
+                                                90,
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
                         // Régions marquées pour caviardage et résultats
                         // de recherche actifs.
                         for region in redact_marks.iter().filter(|r| r.page == page as usize) {
@@ -7463,20 +7671,69 @@ impl YouPdfApp {
                         }
                     }
 
+                    // Repères de la page : le même calcul sert aux outils
+                    // d'annotation et à la sélection de texte.
+                    let to_pdf = |pos: egui::Pos2| -> [f32; 2] {
+                        [
+                            (pos.x - page_rect.min.x) / scale,
+                            (page_rect.max.y - pos.y) / scale,
+                        ]
+                    };
+                    let to_screen = |p: [f32; 2]| -> egui::Pos2 {
+                        pos2(
+                            page_rect.min.x + p[0] * scale,
+                            page_rect.max.y - p[1] * scale,
+                        )
+                    };
+
+                    // Sélection de texte : c'est l'état de lecture, donc elle
+                    // ne dépend pas de l'outil. Elle est active quand aucun
+                    // outil n'est armé, et avec l'outil Sélection du mode
+                    // Commentaire. Les outils qui dessinent gardent leur
+                    // glissé.
+                    if select_text_tool {
+                        if resp.drag_started() {
+                            if !tab.fragments.contains_key(&page) {
+                                extract_page_fragments(tab, page);
+                            }
+                            if let Some(point) = resp.interact_pointer_pos() {
+                                let point = to_pdf(point);
+                                sel = Some(TextSel {
+                                    page,
+                                    span: Some((point, point)),
+                                });
+                            }
+                        } else if resp.dragged() {
+                            if let (Some(s), Some(point)) =
+                                (sel.as_mut(), resp.interact_pointer_pos())
+                            {
+                                if s.page == page {
+                                    if let Some((_, head)) = s.span.as_mut() {
+                                        *head = to_pdf(point);
+                                    }
+                                }
+                            }
+                        }
+                        if resp.clicked() {
+                            sel = None;
+                        }
+                        let on_page = sel.map(|s| s.page == page).unwrap_or(false);
+                        if on_page {
+                            resp.context_menu(|ui| {
+                                if ui.button("Copy").clicked() {
+                                    sel_copy = true;
+                                    ui.close_menu();
+                                }
+                                if ui.button("Select all").clicked() {
+                                    sel_all = true;
+                                    ui.close_menu();
+                                }
+                            });
+                        }
+                    }
+
                     // Interaction des outils d'annotation.
                     if action != ToolAction::None {
-                        let to_pdf = |pos: egui::Pos2| -> [f32; 2] {
-                            [
-                                (pos.x - page_rect.min.x) / scale,
-                                (page_rect.max.y - pos.y) / scale,
-                            ]
-                        };
-                        let to_screen = |p: [f32; 2]| -> egui::Pos2 {
-                            pos2(
-                                page_rect.min.x + p[0] * scale,
-                                page_rect.max.y - p[1] * scale,
-                            )
-                        };
                         // Outil Texte : chaque bloc est encadré, celui sous le
                         // curseur plus franchement — c'est ce bloc que le clic
                         // réécrira.
@@ -7714,10 +7971,17 @@ impl YouPdfApp {
             });
 
         self.edit_text = draft;
+        self.text_sel = sel;
         if edit_cancel {
             self.edit_text = None;
         } else if edit_commit {
             self.replace_fragment(&ctx);
+        }
+
+        if sel_all {
+            self.select_page_text();
+        } else if sel_copy {
+            self.copy_selection(&ctx);
         }
 
         if let Some((page, kind, rect)) = pending_rect {
@@ -8268,6 +8532,22 @@ impl YouPdfApp {
                 i.key_pressed(egui::Key::F),
             )
         });
+        // Copie et « tout sélectionner » portent sur le texte de la page : un
+        // champ de saisie au premier plan garde la priorité (garde `typing`).
+        let (copy_text, select_all) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::C) && i.modifiers.command && !i.modifiers.shift,
+                i.key_pressed(egui::Key::A) && i.modifiers.command && !i.modifiers.shift,
+            )
+        });
+        if !typing && copy_text {
+            self.copy_selection(ctx);
+            return;
+        }
+        if !typing && select_all {
+            self.select_page_text();
+            return;
+        }
         if cmd && find {
             self.search_step(if shift { -1 } else { 1 });
             return;
@@ -9397,5 +9677,77 @@ mod tests {
             "la page courante est ramenée dans les bornes"
         );
         assert!(page_layout_rows(PageLayout::Continuous, 0, 1).is_empty());
+    }
+
+    /// Bloc de texte de test : rectangle et corps suffisent.
+    fn frag(text: &str, rect: [f32; 4], font_size: f32) -> TextFragment {
+        TextFragment {
+            page: 1,
+            text: text.to_string(),
+            rect,
+            font: None,
+            font_size,
+            color: [0, 0, 0],
+        }
+    }
+
+    /// La sélection suit l'ordre de lecture et joint les blocs correctement.
+    #[test]
+    fn selection_follows_reading_order() {
+        // Deux lignes de deux blocs ; les blocs sont donnés dans le désordre.
+        let frags = vec![
+            frag("monde", [60.0, 82.0, 110.0, 94.0], 12.0),
+            frag("bonjour", [10.0, 82.0, 55.0, 94.0], 12.0),
+            frag("seconde", [10.0, 60.0, 60.0, 72.0], 12.0),
+        ];
+
+        // Tout sélectionner parcourt de haut en bas puis de gauche à droite.
+        let all = selected_indices(&frags, None);
+        assert_eq!(all, vec![1, 0, 2]);
+        assert_eq!(selection_text(&frags, None), "bonjour monde\nseconde");
+
+        // Un glissé du premier bloc de la première ligne au second de la
+        // troisième ligne couvre bien tout.
+        let span = Some(([30.0, 88.0], [30.0, 66.0]));
+        assert_eq!(selected_indices(&frags, span), vec![1, 0, 2]);
+
+        // Un glissé qui s'arrête dans la première ligne s'y arrête.
+        let span = Some(([30.0, 88.0], [30.0, 88.0]));
+        assert_eq!(selected_indices(&frags, span), vec![1]);
+        assert_eq!(selection_text(&frags, span), "bonjour");
+    }
+
+    /// Un point hors de tout bloc retombe sur le plus proche.
+    #[test]
+    fn selection_snaps_to_the_closest_block() {
+        let frags = vec![
+            frag("gauche", [10.0, 100.0, 60.0, 112.0], 12.0),
+            frag("droite", [200.0, 100.0, 250.0, 112.0], 12.0),
+        ];
+        // Le point est à droite du second bloc, sous la ligne.
+        let span = Some(([20.0, 106.0], [400.0, 40.0]));
+        assert_eq!(selected_indices(&frags, span), vec![0, 1]);
+        assert_eq!(selection_text(&frags, span), "gauche droite");
+    }
+
+    /// Deux blocs presque à la même hauteur restent sur une seule ligne.
+    #[test]
+    fn same_line_blocks_join_with_a_space() {
+        let frags = vec![
+            frag("a", [10.0, 100.0, 20.0, 112.0], 12.0),
+            frag("b", [30.0, 101.0, 40.0, 113.0], 12.0),
+        ];
+        assert_eq!(selection_text(&frags, None), "a b");
+    }
+
+    /// Une sélection vide ou un index absent ne paniquent pas.
+    #[test]
+    fn empty_selection_is_empty() {
+        assert!(selected_indices(&[], None).is_empty());
+        assert_eq!(selection_text(&[], None), "");
+        // Bloc unique : un point très loin retombe dessus.
+        let frags = vec![frag("seul", [0.0, 0.0, 10.0, 10.0], 10.0)];
+        let span = Some(([900.0, 900.0], [-50.0, -50.0]));
+        assert_eq!(selected_indices(&frags, span), vec![0]);
     }
 }
