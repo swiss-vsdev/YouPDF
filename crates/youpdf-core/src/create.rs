@@ -93,8 +93,12 @@ pub fn document_from_images(paths: &[PathBuf], dpi: f32) -> Result<Document> {
             .map_err(|e| Error::InvalidInput(format!("{} : {e}", path.display())))?;
         let format = image::guess_format(&bytes)
             .map_err(|e| Error::InvalidInput(format!("{} : {e}", path.display())))?;
-        let decoded = image::load_from_memory(&bytes)
-            .map_err(|e| Error::InvalidInput(format!("{} : {e}", path.display())))?;
+        let decoded = crate::compress::decode_limited(&bytes, format).ok_or_else(|| {
+            Error::InvalidInput(format!(
+                "{} : image illisible ou trop grande (plafond 20000 px, 256 Mio)",
+                path.display()
+            ))
+        })?;
 
         let pixel_width = decoded.width();
         let pixel_height = decoded.height();

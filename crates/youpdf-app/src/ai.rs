@@ -52,7 +52,7 @@ enum AiReply {
 /// l'incrémente, et le fil abandonne alors toute demande encore en file
 /// **avant** d'ouvrir la moindre connexion.
 fn spawn_worker(
-    requests: Receiver<AiRequest>,
+    requests: Receiver<(u64, AiRequest)>,
     replies: Sender<AiReply>,
     cancel: Arc<AtomicU64>,
 ) {
@@ -68,11 +68,9 @@ fn spawn_worker(
             }
         };
 
-        while let Ok(request) = requests.recv() {
-            let generation = cancel.load(Ordering::Relaxed);
-            // La lecture du trousseau peut prendre un instant : on revérifie
-            // juste avant l'appel réseau que l'IA n'a pas été coupée entre
-            // temps. Sinon, on abandonne sans rien envoyer.
+        while let Ok((generation, request)) = requests.recv() {
+            // `generation` vient de la mise en file, pas du réveil du fil :
+            // couper l'IA entre les deux fait échouer ce test.
             let alive = || cancel.load(Ordering::Relaxed) == generation;
 
             let reply = match request {
@@ -140,8 +138,9 @@ pub struct AiPanel {
     /// Une demande est en vol.
     busy: bool,
     /// Canal vers le fil de travail ; `None` tant qu'aucune demande n'a été
-    /// envoyée, donc tant que l'IA n'a pas servi.
-    requests: Option<Sender<AiRequest>>,
+    /// envoyée, donc tant que l'IA n'a pas servi. Chaque message porte la
+    /// génération fixée à la mise en file.
+    requests: Option<Sender<(u64, AiRequest)>>,
     /// Canal depuis le fil de travail.
     replies: Option<Receiver<AiReply>>,
     /// Génération de travail : incrémentée à chaque coupure de l'IA, pour
@@ -195,7 +194,14 @@ impl AiPanel {
         let sent = self
             .requests
             .as_ref()
-            .is_some_and(|requests| requests.send(request).is_ok());
+            .is_some_and(|requests| {
+                // La génération est fixée au moment de la mise en file : si
+                // l'utilisateur coupe l'IA avant que le fil ne prenne la
+                // demande, le fil verra deux générations différentes et
+                // n'ouvrira aucune connexion.
+                let generation = self.cancel.load(Ordering::Relaxed);
+                requests.send((generation, request)).is_ok()
+            });
         if sent {
             self.busy = true;
         } else {
