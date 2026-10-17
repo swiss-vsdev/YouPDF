@@ -19,6 +19,7 @@ use egui::{
 use egui_phosphor::regular as ph;
 use youpdf_shared::{pal, set_palette, Theme};
 use crate::ai::AiPanel;
+use youpdf_core::compress::CompressionLevel;
 use youpdf_core::render::NullRenderer;
 use youpdf_core::ocr::{make_searchable, TesseractEngine};
 use youpdf_core::{
@@ -26,7 +27,8 @@ use youpdf_core::{
     AttachmentInfo, Background, Bates, BatesPosition, ComparisonReport, Conformance, CropMargins,
     DifferenceKind, Document, EncryptionOptions, EncryptionStrength, ExtractedTable,
     FieldProperties, FormDataFormat, FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue,
-    MeasureKind, Measurement, NumberStyle, OcrEngine, OcrMode, OutlineItem, OutlineStyle, PageRange,
+    MeasureKind, Measurement, NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineItem,
+    OutlineStyle, PageRange,
     PdfiumRenderer, RedactionRegion, RenderOptions, Renderer, SearchIndex, SearchOptions,
     SearchResult, TextFormat, TextFragment, Watermark, STAMP_NAMES,
 };
@@ -76,6 +78,18 @@ impl PageLayout {
             PageLayout::Cover => "Cover (book)",
         }
     }
+}
+
+/// Nature de l'export choisi dans la fenêtre « Export ».
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum ExportMode {
+    /// Couche texte, dans l'un des `TextFormat`.
+    #[default]
+    Text,
+    /// Une image par page, dans un dossier.
+    Image,
+    /// Document bureautique (Word, Excel, PowerPoint).
+    Office,
 }
 
 /// Entrée choisie dans le menu `…`.
@@ -551,15 +565,19 @@ pub struct YouPdfApp {
     /// Fenêtre « Exporter » et le format choisi.
     export_open: bool,
     export_format: TextFormat,
-    /// Export en images plutôt qu'en texte.
-    export_image: bool,
+    /// Nature de l'export : texte, images ou document bureautique.
+    export_mode: ExportMode,
     /// Format d'image choisi.
     export_image_format: ImageFormat,
     /// Résolution d'export, en points par pouce.
     export_dpi: f32,
+    /// Format bureautique choisi.
+    export_office_format: OfficeFormat,
     /// Fenêtre « Compresser » : dernier bilan affiché.
     compress_open: bool,
     compress_report: Option<String>,
+    /// Niveau de compression d'image choisi.
+    compress_level: CompressionLevel,
     /// Fenêtre « Protéger » et ses réglages.
     protect_open: bool,
     protect: EncryptionOptions,
@@ -769,11 +787,13 @@ impl YouPdfApp {
             find_focus: false,
             export_open: false,
             export_format: TextFormat::Plain,
-            export_image: false,
+            export_mode: ExportMode::Text,
             export_image_format: ImageFormat::Png,
             export_dpi: 150.0,
+            export_office_format: OfficeFormat::Word,
             compress_open: false,
             compress_report: None,
+            compress_level: CompressionLevel::Ebook,
             protect_open: false,
             protect: EncryptionOptions::default(),
             crop_open: false,
@@ -1221,12 +1241,12 @@ impl YouPdfApp {
                 ] {
                     if ui
                         .selectable_label(
-                            !self.export_image && self.export_format == format,
+                            self.export_mode == ExportMode::Text && self.export_format == format,
                             format.display_name(),
                         )
                         .clicked()
                     {
-                        self.export_image = false;
+                        self.export_mode = ExportMode::Text;
                         self.export_format = format;
                     }
                 }
@@ -1238,16 +1258,17 @@ impl YouPdfApp {
                 ] {
                     if ui
                         .selectable_label(
-                            self.export_image && self.export_image_format == format,
+                            self.export_mode == ExportMode::Image
+                                && self.export_image_format == format,
                             label,
                         )
                         .clicked()
                     {
-                        self.export_image = true;
+                        self.export_mode = ExportMode::Image;
                         self.export_image_format = format;
                     }
                 }
-                if self.export_image {
+                if self.export_mode == ExportMode::Image {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Resolution").size(12.0).color(pal().muted));
                         ui.add(
@@ -1257,14 +1278,37 @@ impl YouPdfApp {
                         );
                     });
                 }
+                ui.add_space(6.0);
+                ui.label(RichText::new("Office").size(12.0).color(pal().muted));
+                for format in OfficeFormat::ALL {
+                    if ui
+                        .selectable_label(
+                            self.export_mode == ExportMode::Office
+                                && self.export_office_format == format,
+                            format.display_name(),
+                        )
+                        .clicked()
+                    {
+                        self.export_mode = ExportMode::Office;
+                        self.export_office_format = format;
+                    }
+                }
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new(if self.export_image {
-                        "Each page is rendered at the chosen resolution and written into a \
-                         folder as page-0001, page-0002…"
-                    } else {
-                        "Only the text layer is exported: images, tables and the page layout \
-                         are not rebuilt, and pages without extractable text come out empty."
+                    RichText::new(match self.export_mode {
+                        ExportMode::Image => {
+                            "Each page is rendered at the chosen resolution and written into a \
+                             folder as page-0001, page-0002…"
+                        }
+                        ExportMode::Office => {
+                            "The text layer is rebuilt as an Office document: one paragraph or \
+                             row per line, one slide per page. Images, tables and the layout are \
+                             not reconstructed."
+                        }
+                        ExportMode::Text => {
+                            "Only the text layer is exported: images, tables and the page layout \
+                             are not rebuilt, and pages without extractable text come out empty."
+                        }
                     })
                     .size(11.0)
                     .color(pal().muted),
@@ -1282,10 +1326,40 @@ impl YouPdfApp {
         }
     }
 
-    /// Écrit la couche texte du document dans le format choisi, ou les pages
-    /// en images.
+    /// Écrit la couche texte du document dans le format choisi, les pages en
+    /// images, ou un document bureautique.
     fn export_active(&mut self, ctx: &egui::Context) {
-        if self.export_image {
+        if self.export_mode == ExportMode::Office {
+            let format = self.export_office_format;
+            let stem = self
+                .active_stem()
+                .or_else(|| self.tabs.get(self.active).map(|tab| tab.title.clone()))
+                .unwrap_or_else(|| "document".to_owned());
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter(format.display_name(), &[format.extension()])
+                .set_file_name(format!("{stem}.{}", format.extension()))
+                .save_file()
+            else {
+                return;
+            };
+            let result = self
+                .tabs
+                .get(self.active)
+                .map(|tab| tab.doc.export_office(&path, format));
+            match result {
+                Some(Ok(())) => {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "the file".to_owned());
+                    self.toast(ctx, format!("Exported {name}"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Export failed: {err}")),
+                None => {}
+            }
+            return;
+        }
+        if self.export_mode == ExportMode::Image {
             let format = self.export_image_format;
             let dpi = self.export_dpi;
             let Some(directory) = rfd::FileDialog::new().pick_folder() else {
@@ -4985,9 +5059,27 @@ impl YouPdfApp {
                 ui.set_max_width(380.0);
                 ui.label(
                     RichText::new(
-                        "Streams are deflated and unreachable objects are dropped.                          Images are not resampled and fonts are not subset, so a file                          made of scans barely shrinks.",
+                        "Streams are deflated and unreachable objects are dropped.                          Fonts are not subset, so a text-only file barely shrinks.",
                     )
                     .size(12.0)
+                    .color(pal().muted),
+                );
+                ui.add_space(8.0);
+                ui.label(RichText::new("Image quality").size(12.0).color(pal().muted));
+                for level in CompressionLevel::ALL {
+                    if ui
+                        .selectable_label(self.compress_level == level, level.display_name())
+                        .clicked()
+                    {
+                        self.compress_level = level;
+                    }
+                }
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
+                        "Images are resampled to the chosen resolution and re-encoded as JPEG.                          A stream is replaced only when the result is smaller.",
+                    )
+                    .size(11.0)
                     .color(pal().muted),
                 );
                 if let Some(report) = self.compress_report.clone() {
@@ -5064,14 +5156,17 @@ impl YouPdfApp {
         else {
             return;
         };
-        let result = self.with_annotations_applied(|tab| tab.doc.compress(&path));
+        let level = self.compress_level;
+        let result =
+            self.with_annotations_applied(|tab| tab.doc.compress_with(&path, &level.options()));
         match result {
             Some(Ok(report)) => {
                 let before = report.before_bytes as f64 / 1024.0;
                 let after = report.after_bytes as f64 / 1024.0;
                 self.compress_report = Some(format!(
-                    "{before:.0} KB → {after:.0} KB ({} byte(s) saved)",
-                    report.saved_bytes()
+                    "{before:.0} KB → {after:.0} KB ({} byte(s) saved, {} image(s) resampled)",
+                    report.saved_bytes(),
+                    report.images_resampled
                 ));
                 self.mark_document_changed();
                 let saved = path
