@@ -420,7 +420,10 @@ pub(crate) fn decode_stream_content(stream: &lopdf::Stream) -> Option<image::Dyn
 /// Un en-tête peut annoncer des dimensions énormes sans transporter les
 /// octets correspondants : sans plafond, le décodeur alloue avant de
 /// s'apercevoir que le flux est faux.
-fn decode_limited(bytes: &[u8], format: image::ImageFormat) -> Option<image::DynamicImage> {
+pub(crate) fn decode_limited(
+    bytes: &[u8],
+    format: image::ImageFormat,
+) -> Option<image::DynamicImage> {
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(20_000);
     limits.max_image_height = Some(20_000);
