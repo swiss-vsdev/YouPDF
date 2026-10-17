@@ -338,12 +338,10 @@ struct TextSel {
 /// caractère : l'extraction estime les rectangles (`0,5 × corps` par
 /// caractère), un découpage plus fin afficherait une précision trompeuse.
 fn selected_indices(frags: &[TextFragment], span: Option<([f32; 2], [f32; 2])>) -> Vec<usize> {
-    if frags.is_empty() {
-        return Vec::new();
+    let order = reading_order(frags);
+    if order.is_empty() {
+        return order;
     }
-    let mut order: Vec<usize> = (0..frags.len()).collect();
-    order.sort_by(|a, b| reading_order(frags, *a, *b));
-
     let Some((anchor, head)) = span else {
         return order;
     };
@@ -383,21 +381,105 @@ fn selection_text(frags: &[TextFragment], span: Option<([f32; 2], [f32; 2])>) ->
     out
 }
 
-/// Ordre de lecture de deux blocs : lignes de haut en bas, puis de gauche à
-/// droite sur une même ligne.
-fn reading_order(frags: &[TextFragment], a: usize, b: usize) -> std::cmp::Ordering {
-    let (ra, rb) = (frags[a].rect, frags[b].rect);
-    let (ta, tb) = ((ra[1] + ra[3]) * 0.5, (rb[1] + rb[3]) * 0.5);
-    // Les blocs d'une ligne ne sont pas alignés au pixel près : une tolérance
-    // proportionnelle au corps évite de couper une ligne en deux.
-    let tolerance = frags[a].font_size.max(frags[b].font_size) * 0.6;
-    if (ta - tb).abs() <= tolerance {
-        ra[0]
-            .partial_cmp(&rb[0])
+/// Ordre de lecture des blocs d'une page.
+///
+/// Deux passes plutôt qu'un comparateur : un comparateur « même ligne ? » n'est
+/// pas transitif dès que les corps de police diffèrent (a ≈ b, b ≈ c mais
+/// a < c), et un tri sur un ordre non transitif rend un résultat non
+/// spécifié. On trie donc par ordonnée décroissante, puis on regroupe les
+/// blocs d'une même ligne et on les trie de gauche à droite. Chaque groupe est
+/// fermé, l'ordre est donc déterministe.
+fn reading_order(frags: &[TextFragment]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..frags.len()).collect();
+    order.sort_by(|a, b| {
+        line_center(&frags[*b])
+            .partial_cmp(&line_center(&frags[*a]))
             .unwrap_or(std::cmp::Ordering::Equal)
-    } else {
-        tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut out: Vec<usize> = Vec::with_capacity(order.len());
+    let mut start = 0;
+    while start < order.len() {
+        let reference = line_center(&frags[order[start]]);
+        let tolerance = frags[order[start]].font_size.max(1.0) * 0.6;
+        let mut end = start + 1;
+        while end < order.len() {
+            let size = frags[order[end]].font_size.max(1.0);
+            let gap = (line_center(&frags[order[end]]) - reference).abs();
+            if gap <= tolerance.max(size * 0.6) {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        let mut row: Vec<usize> = order[start..end].to_vec();
+        row.sort_by(|a, b| {
+            frags[*a].rect[0]
+                .partial_cmp(&frags[*b].rect[0])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        out.extend(row);
+        start = end;
     }
+    out
+}
+
+/// Ordonnée du centre d'un bloc, en repère affiché.
+fn line_center(frag: &TextFragment) -> f32 {
+    (frag.rect[1] + frag.rect[3]) * 0.5
+}
+
+/// Couleur du fond de page autour d'un bloc, en repère affiché.
+///
+/// Le masque de réécriture doit se fondre dans la page : blanc sur une page
+/// blanche, beige sur une page beige. On échantillonne six points au bord du
+/// bloc, à l'écart des glyphes, et on prend la médiane par canal — un point
+/// isolé tombé sur un filet ou un glyphe voisin ne décide donc pas seul. Sans
+/// bitmap de la page disponible, on répond blanc.
+fn mask_color_in(tab: &Tab, page: usize, rect: [f32; 4]) -> [u8; 3] {
+    const WHITE: [u8; 3] = [255, 255, 255];
+    let Some((bitmap_page, scale, bitmap)) = tab.last_bitmap.as_ref() else {
+        return WHITE;
+    };
+    if *bitmap_page != page as u32 || *scale <= 0.0 || bitmap.width == 0 || bitmap.height == 0 {
+        return WHITE;
+    }
+
+    // Hauteur de la page en points du repère affiché.
+    let page_h = bitmap.height as f32 / *scale;
+    let [x1, y1, x2, y2] = rect;
+    let mut samples: Vec<[u8; 3]> = Vec::with_capacity(6);
+
+    // Deux rangées : juste au-dessus du bloc, juste en dessous.
+    for y in [y2 + 2.0_f32, y1 - 2.0] {
+        for t in [0.2_f32, 0.5, 0.8] {
+            let x = x1 + (x2 - x1) * t;
+            let px = (x * scale) as i64;
+            let py = ((page_h - y) * scale) as i64;
+            if px < 0 || py < 0 || px >= bitmap.width as i64 || py >= bitmap.height as i64 {
+                continue;
+            }
+            let idx = (py as usize * bitmap.width as usize + px as usize) * 4;
+            if idx + 2 < bitmap.pixels.len() {
+                samples.push([
+                    bitmap.pixels[idx],
+                    bitmap.pixels[idx + 1],
+                    bitmap.pixels[idx + 2],
+                ]);
+            }
+        }
+    }
+    if samples.is_empty() {
+        return WHITE;
+    }
+
+    let mut out = WHITE;
+    for (channel, slot) in out.iter_mut().enumerate() {
+        let mut values: Vec<u8> = samples.iter().map(|s| s[channel]).collect();
+        values.sort_unstable();
+        *slot = values[values.len() / 2];
+    }
+    out
 }
 
 /// Index du bloc le plus proche d'un point (repère affiché).
@@ -2662,60 +2744,11 @@ impl YouPdfApp {
     }
 
     /// Couleur du fond de page autour d'un bloc, en repère affiché.
-    ///
-    /// Le masque de réécriture doit se fondre dans la page : blanc sur une
-    /// page blanche, beige sur une page beige. On échantillonne six points au
-    /// bord du bloc, à l'écart des glyphes, et on prend la médiane par canal —
-    /// un point isolé tombé sur un filet ou un glyphe voisin ne décide donc
-    /// pas seul. Sans bitmap disponible, on répond blanc.
     fn mask_color(&self, page: usize, rect: [f32; 4]) -> [u8; 3] {
-        const WHITE: [u8; 3] = [255, 255, 255];
-        let Some((bitmap_page, scale, bitmap)) = self
-            .tabs
-            .get(self.active)
-            .and_then(|tab| tab.last_bitmap.as_ref())
-        else {
-            return WHITE;
-        };
-        if *bitmap_page != page as u32 || *scale <= 0.0 || bitmap.width == 0 || bitmap.height == 0 {
-            return WHITE;
+        match self.tabs.get(self.active) {
+            Some(tab) => mask_color_in(tab, page, rect),
+            None => [255, 255, 255],
         }
-
-        // Hauteur de la page en points du repère affiché.
-        let page_h = bitmap.height as f32 / *scale;
-        let [x1, y1, x2, y2] = rect;
-        let mut samples: Vec<[u8; 3]> = Vec::with_capacity(6);
-
-        // Deux rangées : juste au-dessus du bloc, juste en dessous.
-        for y in [y2 + 2.0_f32, y1 - 2.0] {
-            for t in [0.2_f32, 0.5, 0.8] {
-                let x = x1 + (x2 - x1) * t;
-                let px = (x * scale) as i64;
-                let py = ((page_h - y) * scale) as i64;
-                if px < 0 || py < 0 || px >= bitmap.width as i64 || py >= bitmap.height as i64 {
-                    continue;
-                }
-                let idx = (py as usize * bitmap.width as usize + px as usize) * 4;
-                if idx + 2 < bitmap.pixels.len() {
-                    samples.push([
-                        bitmap.pixels[idx],
-                        bitmap.pixels[idx + 1],
-                        bitmap.pixels[idx + 2],
-                    ]);
-                }
-            }
-        }
-        if samples.is_empty() {
-            return WHITE;
-        }
-
-        let mut out = WHITE;
-        for (channel, slot) in out.iter_mut().enumerate() {
-            let mut values: Vec<u8> = samples.iter().map(|s| s[channel]).collect();
-            values.sort_unstable();
-            *slot = values[values.len() / 2];
-        }
-        out
     }
 
     /// Sélectionne tout le texte de la page courante.
@@ -3236,7 +3269,20 @@ impl YouPdfApp {
                     if new_text == fragment.text {
                         continue;
                     }
-                    if tab.doc.replace_text_fragment(&fragment, &new_text, None).is_ok() {
+                    // Même masque que la réécriture en place : la couleur du
+                    // fond de la page quand elle est connue, blanc sinon.
+                    let bg = mask_color_in(
+                        tab,
+                        page,
+                        rect_to_display(&tab.doc, page, fragment.rect),
+                    );
+                    let background =
+                        Some([bg[0] as f32 / 255.0, bg[1] as f32 / 255.0, bg[2] as f32 / 255.0]);
+                    if tab
+                        .doc
+                        .replace_text_fragment(&fragment, &new_text, background)
+                        .is_ok()
+                    {
                         changed += 1;
                     }
                 }
@@ -3423,8 +3469,9 @@ impl YouPdfApp {
                 );
                 let image = bitmap.to_egui_image();
                 // La page en cours d'affichage garde ses pixels : la
-                // réécriture y lit la couleur du fond.
-                if page as usize == tab.page {
+                // réécriture y lit la couleur du fond. Une vignette rendue à
+                // une échelle minuscule ne doit pas écraser cette référence.
+                if page as usize == tab.page && step != THUMBNAIL_STEP {
                     tab.last_bitmap = Some((page, target_scale, bitmap));
                 }
                 let handle = ctx.load_texture(
@@ -7459,8 +7506,10 @@ impl YouPdfApp {
 
                 // Une seule page rastérisée par trame, et seulement une fois
                 // le zoom au repos : la page courante d'abord, puis les
-                // autres pages visibles au fil des trames suivantes.
-                let pending_render: Option<u32> = if zoom_settled {
+                // autres pages visibles au fil des trames suivantes. La
+                // comparaison porte sur le palier *manquant ou trop grossier*,
+                // d'où `needs_render` sans négation.
+                let pending_render: Option<(u32, i32, f32)> = if zoom_settled {
                     let mut visible: Vec<(u32, i32, f32)> = placed
                         .iter()
                         .filter(|(_, _, page_rect, _, _)| clip.intersects(*page_rect))
@@ -7469,12 +7518,10 @@ impl YouPdfApp {
                     visible.sort_by_key(|(page, _, _)| if *page == tab.page as u32 { 0 } else { 1 });
                     visible
                         .into_iter()
-                        .find(|(page, step, target)| !tab.needs_render(*page, *step, *target))
-                        .map(|(page, _, _)| page)
+                        .find(|(page, step, target)| tab.needs_render(*page, *step, *target))
                 } else {
                     None
                 };
-                let mut rendered_pending = false;
 
                 for (page, rect, page_rect, row_id, scale) in placed {
                     let size = page_rect.size();
@@ -7505,13 +7552,10 @@ impl YouPdfApp {
                         }
 
                         let step = render_step(scale, ppp);
-                        let wanted = pending_render == Some(page);
+                        let wanted = pending_render == Some((page, step, scale * ppp));
                         if let Some(tex) = Self::page_texture(
                             &ctx, renderer, tab, page, step, scale, ppp, wanted, status,
                         ) {
-                            if wanted {
-                                rendered_pending = true;
-                            }
                             ui.painter().image(
                                 tex.id(),
                                 page_rect,
@@ -7955,11 +7999,13 @@ impl YouPdfApp {
                     tab.page = page;
                 }
 
-                // Le rendu net d'une page vient d'aboutir : la trame suivante
-                // s'occupe de la page visible suivante. Si le rendu échoue, on
-                // ne redemande rien — sinon on tournerait à vide.
-                if rendered_pending {
-                    ctx.request_repaint();
+                // La page demandée est à jour : la trame suivante s'occupe de
+                // la suivante. Si son rendu a échoué, `needs_render` reste vrai
+                // et on ne redemande rien — sinon on tournerait à vide.
+                if let Some((page, step, target)) = pending_render {
+                    if !tab.needs_render(page, step, target) {
+                        ctx.request_repaint();
+                    }
                 }
 
                 // ponytail: cache borné par nettoyage grossier, LRU plus tard.
@@ -9749,5 +9795,27 @@ mod tests {
         let frags = vec![frag("seul", [0.0, 0.0, 10.0, 10.0], 10.0)];
         let span = Some(([900.0, 900.0], [-50.0, -50.0]));
         assert_eq!(selected_indices(&frags, span), vec![0]);
+    }
+
+    /// Des corps de police différents sur des lignes voisines ne doivent pas
+    /// mélanger l'ordre de lecture (comparateur non transitif d'autrefois).
+    #[test]
+    fn reading_order_survives_mixed_font_sizes() {
+        let frags = vec![
+            frag("corps", [10.0, 100.0, 60.0, 112.0], 12.0),
+            frag("titre", [10.0, 118.0, 70.0, 134.0], 16.0),
+            frag("bas", [10.0, 88.0, 55.0, 100.0], 12.0),
+        ];
+        assert_eq!(selection_text(&frags, None), "titre\ncorps\nbas");
+    }
+
+    /// Deux corps différents sur une même ligne y restent.
+    #[test]
+    fn reading_order_keeps_one_line_together() {
+        let frags = vec![
+            frag("grand", [40.0, 98.0, 90.0, 118.0], 20.0),
+            frag("petit", [10.0, 100.0, 35.0, 112.0], 12.0),
+        ];
+        assert_eq!(selection_text(&frags, None), "petit grand");
     }
 }
