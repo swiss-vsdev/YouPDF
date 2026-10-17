@@ -13,6 +13,10 @@ path = "src/main.rs"
 [dependencies]
 youpdf-shared = { workspace = true }
 youpdf-core   = { workspace = true }
+youpdf-ai     = { workspace = true }
+
+# Fil de travail du panneau IA : un runtime tokio dédié, jamais le fil UI.
+tokio = { workspace = true }
 
 eframe              = { workspace = true }
 egui                = { workspace = true }

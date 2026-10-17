@@ -64,6 +64,13 @@ impl ProviderConfig {
 /// Configuration globale de l'application.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
+    /// Interrupteur général de l'IA.
+    ///
+    /// Faux par défaut : tant qu'il est faux, YouPDF ne construit aucun
+    /// fournisseur et n'ouvre aucune connexion réseau. C'est le seul moyen
+    /// d'être certain qu'un document ne part nulle part.
+    #[serde(default)]
+    pub ai_enabled: bool,
     /// Thème visuel actif (index dans `Theme::ALL`).
     pub theme_index: usize,
     /// Langue d'interface (`fr`, `en`…).
@@ -81,8 +88,9 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            ai_enabled: false,
             theme_index: 0,
-            locale: "fr".to_string(),
+            locale: "en".to_string(),
             default_zoom: 1.0,
             providers: vec![
                 ProviderConfig::for_kind(ProviderKind::Ollama, "ollama", "Ollama (local)"),
@@ -150,6 +158,6 @@ impl AppSettings {
         Theme::ALL
             .get(self.theme_index)
             .copied()
-            .unwrap_or(Theme::SOFT_GREEN)
+            .unwrap_or(Theme::Dark)
     }
 }
