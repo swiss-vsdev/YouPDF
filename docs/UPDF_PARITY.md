@@ -14,6 +14,7 @@ Unchecked below = still open. The plan document is the authoritative task list.
 
 - **Phase 1.1** — Added the Home screen (`crates/youpdf-app/src/home.rs` + `home_screen`/`home_grid`/`home_card`/`home_list`): search filter, Recents / Starred / Tools tabs, grid and list views, page-1 thumbnails (cached), star toggle persisted to `~/.youpdf/starred.txt`, and the card context menu (open, open in new tab, star, reveal, remove from recents, delete).
 - **Phase 1.2** — Tab bar: auto-width tabs (120–220 pt), close button on active/hover, middle-click close, drag-to-reorder with an insertion bar and active-tab tracking, and a right-click menu (close, close others/right/all, pin, duplicate, reveal, copy path). A pinned tab keeps its position.
+- **Phase 1.3** — Docked bottom status bar (26 pt) replacing the floating zoom overlay: first/prev/next/last page, a page-number field, a layout picker, zoom out / preset / zoom in, a slideshow button, and a right cluster with the displayed page size, the render engine and a lock icon for encrypted files.
 
 ## 1. Window Chrome & Layout
 *   **UPDF:** Tabbed interface with `+` new tab, Home house button, traffic lights, avatar, notifications.
