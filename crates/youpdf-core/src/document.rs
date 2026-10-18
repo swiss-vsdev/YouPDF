@@ -61,6 +61,20 @@ pub struct PageView {
     pub rotation: i32,
 }
 
+/// Boîtes déclarées d'une page, en points, telles qu'écrites dans le
+/// document. `None` quand la boîte n'est pas présente.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PageBoxes {
+    /// `/MediaBox` : format du support.
+    pub media: Option<[f32; 4]>,
+    /// `/CropBox` : zone visible et imprimable.
+    pub crop: Option<[f32; 4]>,
+    /// `/TrimBox` : format final après rognage.
+    pub trim: Option<[f32; 4]>,
+    /// `/BleedBox` : fonds perdus.
+    pub bleed: Option<[f32; 4]>,
+}
+
 impl Default for PageView {
     fn default() -> Self {
         PageView {
@@ -355,6 +369,47 @@ impl Document {
     /// C'est ce que produit aussi le rendu pdfium, qui applique la rotation.
     pub fn page_size(&self, page_number: u32) -> (f32, f32) {
         self.page_view(page_number).display_size()
+    }
+
+    /// Lit `MediaBox`, `CropBox`, `TrimBox` et `BleedBox` d'une page, en
+    /// remontant la chaîne des `/Parent` : ces clés sont souvent héritées du
+    /// nœud `Pages`. Chaque boîte absente reste `None`.
+    pub fn page_boxes(&self, page_number: u32) -> PageBoxes {
+        let mut boxes = PageBoxes::default();
+        let Ok(page_id) = self.page_id(page_number) else {
+            return boxes;
+        };
+        let mut current = Some(page_id);
+        for _ in 0..16 {
+            let Some(id) = current else { break };
+            let Ok(dict) = self.inner.get_dictionary(id) else {
+                break;
+            };
+            for (key, slot) in [
+                (b"MediaBox".as_slice(), &mut boxes.media),
+                (b"CropBox".as_slice(), &mut boxes.crop),
+                (b"TrimBox".as_slice(), &mut boxes.trim),
+                (b"BleedBox".as_slice(), &mut boxes.bleed),
+            ] {
+                if slot.is_none() {
+                    if let Ok(object) = dict.get_deref(key, &self.inner) {
+                        if let Ok(array) = object.as_array() {
+                            if array.len() >= 4 {
+                                let num = |i: usize| {
+                                    array[i]
+                                        .as_float()
+                                        .or_else(|_| array[i].as_i64().map(|v| v as f32))
+                                        .unwrap_or(0.0)
+                                };
+                                *slot = Some([num(0), num(1), num(2), num(3)]);
+                            }
+                        }
+                    }
+                }
+            }
+            current = dict.get(b"Parent").ok().and_then(|p| p.as_reference().ok());
+        }
+        boxes
     }
 
     /// Géométrie d'affichage d'une page : boîte visible et rotation.

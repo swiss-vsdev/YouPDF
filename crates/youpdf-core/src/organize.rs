@@ -64,6 +64,130 @@ impl Document {
         self.touch();
         Ok(doomed.len())
     }
+    /// Insère une page blanche juste après la page `after`
+    /// (`after == 0` place la page en tête).
+    ///
+    /// Le format demandé (`width` × `height` en points) devient sa boîte
+    /// visible : une page ajoutée au milieu d'un document hétérogène garde la
+    /// taille qu'on lui donne, elle n'hérite pas de ses voisines.
+    pub fn insert_blank_page_after(
+        &mut self,
+        after: usize,
+        width: f32,
+        height: f32,
+    ) -> Result<usize> {
+        if width <= 0.0 || height <= 0.0 {
+            return Err(Error::Pdf("format de page invalide".into()));
+        }
+        let mut page = Dictionary::new();
+        page.set("Type", Object::Name(b"Page".to_vec()));
+        page.set(
+            "MediaBox",
+            Object::Array(vec![
+                Object::Integer(0),
+                Object::Integer(0),
+                Object::Real(width),
+                Object::Real(height),
+            ]),
+        );
+        page.set("Resources", Object::Dictionary(Dictionary::new()));
+        page.set(
+            "Contents",
+            Object::Stream(Stream::new(Dictionary::new(), Vec::new())),
+        );
+        let id = self.inner.add_object(Object::Dictionary(page));
+
+        let root = self.pages_root_id()?;
+        let page_count = self.inner.get_pages().len();
+        let anchor = if after == 0 {
+            None
+        } else {
+            self.inner
+                .get_pages()
+                .get(&(after.min(page_count) as u32))
+                .copied()
+        };
+        self.insert_kids(root, anchor, &[id])?;
+        self.refresh_page_tree()?;
+        self.touch();
+        Ok(1)
+    }
+
+    /// Duplique les pages indiquées, chaque copie placée juste après l'original.
+    ///
+    /// Les copies sont des objets neufs : modifier la copie ne touche pas
+    /// l'original, et l'ordre de sélection n'a pas d'importance.
+    pub fn duplicate_pages(&mut self, pages: &[usize]) -> Result<usize> {
+        let existing = self.inner.get_pages();
+        let mut selected: Vec<(u32, ObjectId)> = pages
+            .iter()
+            .filter_map(|number| {
+                let number = *number as u32;
+                existing.get(&number).map(|id| (number, *id))
+            })
+            .collect();
+        if selected.is_empty() {
+            return Ok(0);
+        }
+        selected.sort_by_key(|(number, _)| *number);
+        selected.dedup_by_key(|(number, _)| *number);
+
+        // Un instantané suffit pour copier toutes les pages : la copie a
+        // besoin de lire la version stable du document.
+        let source = self.inner.clone();
+        let root = self.pages_root_id()?;
+        let mut map: HashMap<ObjectId, ObjectId> = HashMap::new();
+        let mut inserted = 0usize;
+        for (_, original) in &selected {
+            let copy = self.copy_foreign_page(&source, *original, &mut map)?;
+            inserted += self.insert_kids(root, Some(*original), &[copy])?;
+        }
+        self.refresh_page_tree()?;
+        self.touch();
+        Ok(inserted)
+    }
+
+    /// Déplace la page `from` vers la position `to` (numéros 1-indexés).
+    ///
+    /// La page est retirée de son nœud puis réinsérée à sa nouvelle place.
+    /// C'est la même référence qui se déplace, pas une copie : les entrées du
+    /// plan, les destinations et les liens qui pointent sur cette page
+    /// continuent de la viser, et aucun objet ne devient orphelin.
+    pub fn move_page(&mut self, from: usize, to: usize) -> Result<()> {
+        if from == 0 || to == 0 || from == to {
+            return Ok(());
+        }
+        let page_count = self.inner.get_pages().len();
+        if from > page_count || to > page_count {
+            return Ok(());
+        }
+        let Some(original) = self.inner.get_pages().get(&(from as u32)).copied() else {
+            return Ok(());
+        };
+        let Some(holder) = self.kids_node_of(original) else {
+            return Ok(());
+        };
+
+        // Retirer la page : les numéros qui la suivaient se décalent de un.
+        let mut kids = self.kids_of(holder);
+        kids.retain(|child| !matches!(child, Object::Reference(id) if *id == original));
+        self.set_kids(holder, kids)?;
+
+        // La déposer avant la page qui occupe désormais la position visée.
+        let root = self.pages_root_id()?;
+        let anchor = if to <= 1 {
+            None
+        } else {
+            self.inner
+                .get_pages()
+                .get(&((to - 1) as u32))
+                .copied()
+        };
+        self.insert_kids(root, anchor, &[original])?;
+        self.refresh_page_tree()?;
+        self.touch();
+        Ok(())
+    }
 
     /// Recalcule `/Count` et retire les références condamnées d'un nœud.
     fn prune_node(&mut self, node_id: ObjectId, doomed: &HashSet<ObjectId>) -> Result<usize> {
@@ -164,91 +288,126 @@ impl Document {
     }
 
     /// Insère des références dans le tableau `/Kids` qui contient `anchor`.
+    ///
+    /// Sans ancre, les pages passent en tête. Si l'ancre est absente du
+    /// document, elles finissent en fin de nœud racine. La recherche descend
+    /// dans **tous** les sous-arbres avant de conclure à l'absence : une ancre
+    /// présente dans un second sous-arbre ne doit pas être confondue avec une
+    /// ancre manquante, sinon la page atterrit dans le mauvais sous-arbre.
     fn insert_kids(
         &mut self,
         node_id: ObjectId,
         anchor: Option<ObjectId>,
         new_pages: &[ObjectId],
     ) -> Result<usize> {
-        let children: Vec<Object> = self
-            .inner
-            .get_dictionary(node_id)
-            .ok()
-            .and_then(|node| node.get(b"Kids").and_then(Object::as_array).ok().cloned())
-            .unwrap_or_default();
-
-        if anchor.is_none() {
-            if let Object::Dictionary(dict) = self
-                .inner
-                .get_object_mut(node_id)
-                .map_err(|e| Error::Pdf(format!("arbre des pages : {e}")))?
-            {
-                let mut kids: Vec<Object> = new_pages
-                    .iter()
-                    .map(|id| Object::Reference(*id))
-                    .collect();
-                kids.extend(children);
-                dict.set("Kids", Object::Array(kids));
+        if let Some(anchor_id) = anchor {
+            if self.insert_kids_after(node_id, anchor_id, new_pages)? {
+                return Ok(new_pages.len());
             }
+        } else {
+            let mut kids: Vec<Object> = new_pages
+                .iter()
+                .map(|id| Object::Reference(*id))
+                .collect();
+            kids.extend(self.kids_of(node_id));
+            self.set_kids(node_id, kids)?;
             self.set_pages_parent(node_id, new_pages);
             return Ok(new_pages.len());
         }
 
-        let anchor_id = anchor.unwrap();
-        let position = children.iter().position(|child| match child {
-            Object::Reference(id) => *id == anchor_id,
-            _ => false,
-        });
-        if let Some(position) = position {
+        // Ancre absente du document : ajouter en fin de nœud racine.
+        let mut kids = self.kids_of(node_id);
+        kids.extend(new_pages.iter().map(|id| Object::Reference(*id)));
+        self.set_kids(node_id, kids)?;
+        self.set_pages_parent(node_id, new_pages);
+        Ok(new_pages.len())
+    }
+
+    /// Insère `new_pages` juste après `anchor_id`, dans le nœud qui le contient
+    /// ou dans l'un de ses sous-arbres. Renvoie `true` si l'ancre est trouvée.
+    fn insert_kids_after(
+        &mut self,
+        node_id: ObjectId,
+        anchor_id: ObjectId,
+        new_pages: &[ObjectId],
+    ) -> Result<bool> {
+        let children = self.kids_of(node_id);
+        if let Some(position) = children
+            .iter()
+            .position(|child| matches!(child, Object::Reference(id) if *id == anchor_id))
+        {
             let mut kids = children;
             let tail = kids.split_off(position + 1);
             kids.extend(new_pages.iter().map(|id| Object::Reference(*id)));
             kids.extend(tail);
-            if let Object::Dictionary(dict) = self
-                .inner
-                .get_object_mut(node_id)
-                .map_err(|e| Error::Pdf(format!("arbre des pages : {e}")))?
-            {
-                dict.set("Kids", Object::Array(kids));
-            }
+            self.set_kids(node_id, kids)?;
             self.set_pages_parent(node_id, new_pages);
-            return Ok(new_pages.len());
+            return Ok(true);
         }
-
-        // L'ancre est plus bas : descendre dans les sous-arbres.
         for child in children {
             let Object::Reference(child_id) = child else {
                 continue;
             };
-            let is_branch = self
-                .inner
-                .get_dictionary(child_id)
-                .map(|dict| {
-                    dict.get(b"Type")
-                        .and_then(Object::as_name)
-                        .map(|name| name == b"Pages")
-                        .unwrap_or(false)
-                })
-                .unwrap_or(false);
-            if !is_branch {
+            if !self.is_branch(child_id) {
                 continue;
             }
-            if self.insert_kids(child_id, anchor, new_pages)? > 0 {
-                return Ok(new_pages.len());
+            if self.insert_kids_after(child_id, anchor_id, new_pages)? {
+                return Ok(true);
             }
         }
-        // Ancre absente : ajouter en fin de nœud racine.
-        if let Object::Dictionary(dict) = self
+        Ok(false)
+    }
+
+    /// Enfants `/Kids` d'un nœud, ou tableau vide.
+    fn kids_of(&self, node_id: ObjectId) -> Vec<Object> {
+        self.inner
+            .get_dictionary(node_id)
+            .ok()
+            .and_then(|node| node.get(b"Kids").and_then(Object::as_array).ok().cloned())
+            .unwrap_or_default()
+    }
+
+    /// Écrit le tableau `/Kids` d'un nœud.
+    fn set_kids(&mut self, node_id: ObjectId, kids: Vec<Object>) -> Result<()> {
+        let dict = self
             .inner
-            .get_object_mut(node_id)
-            .map_err(|e| Error::Pdf(format!("arbre des pages : {e}")))?
-        {
-            let mut kids = dict.get(b"Kids").and_then(Object::as_array).ok().cloned().unwrap_or_default();
-            kids.extend(new_pages.iter().map(|id| Object::Reference(*id)));
-            dict.set("Kids", Object::Array(kids));
+            .get_dictionary_mut(node_id)
+            .map_err(|e| Error::Pdf(format!("arbre des pages : {e}")))?;
+        dict.set("Kids", Object::Array(kids));
+        Ok(())
+    }
+
+    /// Vrai si le nœud est un nœud intermédiaire `/Pages`.
+    fn is_branch(&self, node_id: ObjectId) -> bool {
+        self.inner
+            .get_dictionary(node_id)
+            .map(|dict| {
+                dict.get(b"Type")
+                    .and_then(Object::as_name)
+                    .map(|name| name == b"Pages")
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    }
+
+    /// Nœud dont le tableau `/Kids` contient directement cette page.
+    fn kids_node_of(&self, page_id: ObjectId) -> Option<ObjectId> {
+        let root = self.pages_root_id().ok()?;
+        let mut stack = vec![root];
+        while let Some(node_id) = stack.pop() {
+            for child in self.kids_of(node_id) {
+                let Object::Reference(child_id) = child else {
+                    continue;
+                };
+                if child_id == page_id {
+                    return Some(node_id);
+                }
+                if self.is_branch(child_id) {
+                    stack.push(child_id);
+                }
+            }
         }
-        self.set_pages_parent(node_id, new_pages);
-        Ok(new_pages.len())
+        None
     }
 
     /// Rattache des pages au nœud qui les reçoit.

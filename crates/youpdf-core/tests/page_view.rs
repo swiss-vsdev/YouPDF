@@ -85,3 +85,40 @@ fn recadrage_borne_la_fraction() {
     assert!((inside[0] - 150.0).abs() < 0.01, "{inside:?}");
     assert!((inside[1] - 150.0).abs() < 0.01, "{inside:?}");
 }
+
+/// Les boîtes d'une page se lisent telles qu'écrites, y compris héritées du
+/// nœud `Pages`. C'est ce que montre la fenêtre « Propriétés de la page ».
+#[test]
+fn boites_de_page_heritees() {
+    use lopdf::{dictionary, Document as LopdfDoc, Object};
+    use youpdf_core::Document;
+
+    let mut doc = LopdfDoc::with_version("1.7");
+    let page_id = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "CropBox" => Object::Array(vec![10.into(), 20.into(), 610.into(), 800.into()]),
+    });
+    let pages_id = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![page_id.into()]),
+        "Count" => 1,
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]),
+    });
+    if let Ok(Object::Dictionary(dict)) = doc.get_object_mut(page_id) {
+        dict.set("Parent", Object::Reference(pages_id));
+    }
+    let catalog = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => pages_id,
+    });
+    doc.trailer.set("Root", Object::Reference(catalog));
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf).expect("écriture");
+
+    let doc = Document::from_bytes(&buf).expect("ouverture");
+    let boxes = doc.page_boxes(1);
+    assert_eq!(boxes.media, Some([0.0, 0.0, 600.0, 800.0]), "héritée du parent");
+    assert_eq!(boxes.crop, Some([10.0, 20.0, 610.0, 800.0]));
+    assert_eq!(boxes.trim, None);
+    assert_eq!(boxes.bleed, None);
+}

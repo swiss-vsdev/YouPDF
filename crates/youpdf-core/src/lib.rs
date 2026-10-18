@@ -52,7 +52,7 @@ pub use convert::{ImageFormat, TextFormat};
 pub use create::{blank_document, document_from_images};
 pub use crop::CropMargins;
 pub use compress::CompressionReport;
-pub use document::{Document, PageView};
+pub use document::{Document, PageBoxes, PageView};
 pub use edit::{ImageInfo, TextFragment, TextSpan, encode_pdf_literal};
 pub use extract::{ExtractedTable, KeyValue};
 pub use forms::{FieldProperties, FormDataFormat, FormField, FormFieldKind, NewFormField};
