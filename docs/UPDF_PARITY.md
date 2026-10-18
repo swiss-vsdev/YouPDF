@@ -12,6 +12,8 @@ Cross-referenced with `docs/UPDF_IMPLEMENTATION_PLAN.md`. Gaps closed since the 
 
 Unchecked below = still open. The plan document is the authoritative task list.
 
+- **Phase 1.1** — Added the Home screen (`crates/youpdf-app/src/home.rs` + `home_screen`/`home_grid`/`home_card`/`home_list`): search filter, Recents / Starred / Tools tabs, grid and list views, page-1 thumbnails (cached), star toggle persisted to `~/.youpdf/starred.txt`, and the card context menu (open, open in new tab, star, reveal, remove from recents, delete).
+
 ## 1. Window Chrome & Layout
 *   **UPDF:** Tabbed interface with `+` new tab, Home house button, traffic lights, avatar, notifications.
 *   **YouPDF:** Basic tab support, no Home/start screen, no notifications, no cloud/account/avatar integration.

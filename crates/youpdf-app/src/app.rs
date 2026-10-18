@@ -19,6 +19,7 @@ use egui::{
 use egui_phosphor::regular as ph;
 use youpdf_shared::{pal, set_palette, Theme};
 use crate::ai::AiPanel;
+use crate::home::{self, HomeCategory, HomeView, ViewMode};
 use youpdf_core::compress::CompressionLevel;
 use youpdf_core::render::NullRenderer;
 use youpdf_core::ocr::{make_searchable, TesseractEngine};
@@ -960,6 +961,12 @@ pub struct YouPdfApp {
     page_entry: String,
     /// Surface d'accueil (fichiers récents) affichée à la place du canevas.
     home_open: bool,
+    /// État de l'écran d'accueil (filtre, onglet, grille/liste).
+    home: HomeView,
+    /// Fichiers marqués d'une étoile (persistés dans `~/.youpdf/starred.txt`).
+    stars: Vec<PathBuf>,
+    /// Vignettes de l'écran d'accueil, par chemin : `(mtime, texture)`.
+    home_thumbs: HashMap<PathBuf, (u64, TextureHandle)>,
     /// Panneau IA (« apportez votre propre fournisseur »).
     ai: AiPanel,
     /// Onglet dont le texte est mis en cache pour l'IA (`None` = à extraire).
@@ -1144,6 +1151,9 @@ impl YouPdfApp {
             search_word: false,
             page_entry: String::new(),
             home_open: initial.is_none(),
+            home: HomeView::default(),
+            stars: home::load_stars(),
+            home_thumbs: HashMap::new(),
             ai: AiPanel::with_settings(settings),
             ai_doc_tab: None,
             ai_doc_text: String::new(),
@@ -1280,6 +1290,23 @@ impl YouPdfApp {
             return;
         }
 
+        match Document::open(&path) {
+            Ok(doc) => self.push_document(doc, Some(path)),
+            Err(err) => self.toast_owned(format!("Open failed: {err}")),
+        }
+    }
+
+    /// Ouvre un fichier dans un nouvel onglet, même s'il est déjà ouvert.
+    fn open_path_new_tab(&mut self, path: PathBuf) {
+        if Document::file_is_encrypted(&path) {
+            self.password_prompt = Some(PasswordPrompt {
+                path,
+                purpose: PasswordPurpose::Open,
+                value: String::new(),
+                error: None,
+            });
+            return;
+        }
         match Document::open(&path) {
             Ok(doc) => self.push_document(doc, Some(path)),
             Err(err) => self.toast_owned(format!("Open failed: {err}")),
@@ -6545,6 +6572,17 @@ impl YouPdfApp {
         }
     }
 
+    /// Révèle un fichier dans le gestionnaire de fichiers du système.
+    fn reveal_path(&self, path: &std::path::Path) {
+        #[cfg(target_os = "macos")]
+        let command = std::process::Command::new("open").arg("-R").arg(path).spawn();
+        #[cfg(not(target_os = "macos"))]
+        let command = std::process::Command::new("xdg-open")
+            .arg(path.parent().unwrap_or(path))
+            .spawn();
+        let _ = command;
+    }
+
     /// Révèle le fichier courant dans le gestionnaire de fichiers.
     fn reveal_active(&mut self, ctx: &egui::Context) {
         let Some(path) = self.tabs.get(self.active).and_then(|tab| tab.path.clone()) else {
@@ -8074,140 +8112,642 @@ impl YouPdfApp {
 
     /// Surface d'accueil : accès direct aux fichiers récents.
     fn empty_state(&mut self, ui: &mut egui::Ui) {
-        let mut open: Option<PathBuf> = None;
-        let mut forget: Option<PathBuf> = None;
-        let mut clear = false;
+        self.home_screen(ui);
+    }
 
+    /// Écran d'accueil : recherche, onglets Récents / Favoris / Outils, et
+    /// grille de vignettes ou liste. Remplace l'ancienne liste de récents.
+    fn home_screen(&mut self, ui: &mut egui::Ui) {
+        let mut open: Option<PathBuf> = None;
+        let mut open_new: Option<PathBuf> = None;
+        let mut reveal: Option<PathBuf> = None;
+        let mut forget: Option<PathBuf> = None;
+        let mut delete: Option<PathBuf> = None;
+        let mut star: Option<PathBuf> = None;
+        let mut open_dialog = false;
+        let mut clear = false;
+        let mut tool: Option<&'static str> = None;
+
+        let now = ui.input(|i| i.time) as i64;
+
+        // Liste affichée selon l'onglet.
+        let paths: Vec<PathBuf> = match self.home.category {
+            HomeCategory::Recents => self.recents.clone(),
+            HomeCategory::Starred => self.stars.clone(),
+            HomeCategory::Tools => Vec::new(),
+        };
+        let visible: Vec<PathBuf> = paths
+            .into_iter()
+            .filter(|path| {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.home.matches(&name)
+            })
+            .collect();
+
+        let ctx = ui.ctx().clone();
         ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                // En-tête.
+                ui.add_space(34.0);
                 ui.vertical_centered(|ui| {
-                    ui.add_space(90.0);
-                    ui.label(RichText::new("YouPDF").size(34.0).strong());
-                    ui.add_space(8.0);
+                    ui.label(RichText::new("YouPDF").size(30.0).strong());
+                    ui.add_space(4.0);
                     ui.label(
                         RichText::new("Free, local-first PDF editing")
-                            .size(13.0)
+                            .size(12.5)
                             .color(pal().muted),
                     );
-                    ui.add_space(22.0);
-                    let button = ui.add_sized(
-                        vec2(160.0, 32.0),
-                        Button::new(RichText::new("Open PDF").size(14.0)).fill(pal().accent),
-                    );
-                    if button.clicked() {
-                        self.open_dialog();
-                    }
-                    ui.add_space(10.0);
+                    ui.add_space(16.0);
                     ui.label(
                         RichText::new("or drop a file anywhere")
                             .size(11.0)
                             .color(pal().muted),
                     );
+                });
 
-                    if self.recents.is_empty() {
-                        return;
+                // Barre d'actions : recherche, catégories, vue.
+                let full = ui.available_width();
+                let margin = ((full - 720.0) * 0.5).max(16.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(margin);
+                    ui.add_sized(
+                        vec2(240.0, 28.0),
+                        TextEdit::singleline(&mut self.home.search_filter)
+                            .hint_text("Search file…"),
+                    );
+                    if ui
+                        .add_sized(
+                            vec2(96.0, 28.0),
+                            Button::new(RichText::new("Open File").size(12.5)).fill(pal().accent),
+                        )
+                        .clicked()
+                    {
+                        open_dialog = true;
                     }
-                    ui.add_space(34.0);
+                    if ui
+                        .add_sized(vec2(76.0, 28.0), Button::new(RichText::new("Batch").size(12.5)))
+                        .clicked()
+                    {
+                        tool = Some("batch");
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.add_space(margin);
+                        let toggle = ui.add_sized(
+                            vec2(30.0, 26.0),
+                            Button::new(
+                                RichText::new(match self.home.view_mode {
+                                    ViewMode::Grid => "▦",
+                                    ViewMode::List => "☰",
+                                })
+                                .size(13.0),
+                            ),
+                        );
+                        let toggle = toggle.on_hover_text(self.home.view_mode.label());
+                        if toggle.clicked() {
+                            self.home.view_mode = self.home.view_mode.toggled();
+                        }
+                        ui.add_space(10.0);
+                        for category in HomeCategory::ALL.into_iter().rev() {
+                            let selected = self.home.category == category;
+                            if ui
+                                .selectable_label(selected, RichText::new(category.label()).size(12.5))
+                                .clicked()
+                            {
+                                self.home.category = category;
+                            }
+                            ui.add_space(6.0);
+                        }
+                    });
+                });
+                ui.add_space(12.0);
+
+                ui.horizontal(|ui| {
+                    ui.add_space(margin);
+                    ui.label(
+                        RichText::new(match self.home.category {
+                            HomeCategory::Recents => "Recent files",
+                            HomeCategory::Starred => "Starred files",
+                            HomeCategory::Tools => "Tools",
+                        })
+                        .size(13.0)
+                        .strong(),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.add_space(margin);
+                        if self.home.category == HomeCategory::Recents
+                            && !self.recents.is_empty()
+                            && ui.small_button("Clear").clicked()
+                        {
+                            clear = true;
+                        }
+                    });
+                });
+                ui.add_space(10.0);
+
+                if self.home.category == HomeCategory::Tools {
+                    // Raccourcis d'outils.
+                    self.home_tools(ui, margin, &mut tool);
+                } else if visible.is_empty() {
                     ui.horizontal(|ui| {
-                        ui.add_space((ui.available_width() * 0.5 - 220.0).max(0.0));
-                        ui.allocate_ui_with_layout(
-                            vec2(440.0, 20.0),
-                            Layout::left_to_right(Align::Center),
-                            |ui| {
-                                ui.label(RichText::new("Recent files").size(13.0).strong());
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    if ui.small_button("Clear").clicked() {
-                                        clear = true;
-                                    }
-                                });
-                            },
+                        ui.add_space(margin);
+                        ui.label(
+                            RichText::new(if self.home.category == HomeCategory::Starred {
+                                "No starred files yet. Use the star on a card."
+                            } else {
+                                "No recent files. Open a PDF to get started."
+                            })
+                            .size(12.0)
+                            .color(pal().muted),
                         );
                     });
-                    ui.add_space(8.0);
-
-                    for path in self.recents.clone() {
-                        let exists = path.is_file();
-                        let name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| path.to_string_lossy().into_owned());
-                        let parent = path
-                            .parent()
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-
-                        ui.horizontal(|ui| {
-                            ui.add_space((ui.available_width() * 0.5 - 220.0).max(0.0));
-                            let (rect, resp) =
-                                ui.allocate_exact_size(vec2(440.0, 46.0), Sense::click());
-                            if resp.hovered() {
-                                ui.painter().rect_filled(
-                                    rect,
-                                    Rounding::same(8.0),
-                                    Color32::from_rgb(0x38, 0x38, 0x38),
-                                );
-                            }
-                            ui.painter().text(
-                                pos2(rect.min.x + 14.0, rect.min.y + 15.0),
-                                Align2::LEFT_CENTER,
-                                shorten(&name, 46),
-                                FontId::proportional(12.5),
-                                if exists { pal().icon_bright } else { pal().muted },
-                            );
-                            ui.painter().text(
-                                pos2(rect.min.x + 14.0, rect.min.y + 32.0),
-                                Align2::LEFT_CENTER,
-                                if exists {
-                                    shorten(&parent, 60)
-                                } else {
-                                    "File not found".to_owned()
-                                },
-                                FontId::proportional(10.5),
-                                pal().muted,
-                            );
-
-                            let forget_rect = Rect::from_center_size(
-                                pos2(rect.max.x - 20.0, rect.center().y),
-                                vec2(20.0, 20.0),
-                            );
-                            let forget_resp =
-                                ui.interact(forget_rect, resp.id.with("forget"), Sense::click());
-                            ui.painter().text(
-                                forget_rect.center(),
-                                Align2::CENTER_CENTER,
-                                if forget_resp.hovered() { "✕" } else { "" },
-                                FontId::proportional(12.0),
-                                pal().icon,
-                            );
-                            if forget_resp.clicked() {
-                                forget = Some(path.clone());
-                            } else if resp.clicked() {
-                                open = Some(path.clone());
-                            }
-                        });
-                        ui.add_space(4.0);
-                    }
-                    ui.add_space(30.0);
-                });
+                } else if self.home.view_mode == ViewMode::Grid {
+                    self.home_grid(
+                        ui, margin, &ctx, now, &visible, &mut open, &mut open_new, &mut reveal,
+                        &mut forget, &mut delete, &mut star,
+                    );
+                } else {
+                    self.home_list(
+                        ui, margin, now, &visible, &mut open, &mut open_new, &mut reveal,
+                        &mut forget, &mut delete, &mut star,
+                    );
+                }
+                ui.add_space(30.0);
             });
 
+        if open_dialog {
+            self.open_dialog();
+        }
         if clear {
             self.recents.clear();
             save_recents(&self.recents);
         }
+        if let Some(path) = star {
+            home::toggle_star(&mut self.stars, &path);
+            home::save_stars(&self.stars);
+        }
         if let Some(path) = forget {
             self.recents.retain(|old| old != &path);
+            self.home_thumbs.remove(&path);
             save_recents(&self.recents);
         }
-        if let Some(path) = open {
+        if let Some(path) = reveal {
+            self.reveal_path(&path);
+        }
+        if let Some(path) = delete {
+            self.recents.retain(|old| old != &path);
+            self.stars.retain(|old| old != &path);
+            self.home_thumbs.remove(&path);
+            save_recents(&self.recents);
+            home::save_stars(&self.stars);
+            if std::fs::remove_file(&path).is_ok() {
+                self.toast(&ctx, "File deleted");
+            } else {
+                self.toast(&ctx, "Could not delete the file");
+            }
+        }
+        if let Some(path) = open_new {
+            if path.is_file() {
+                self.open_path_new_tab(path);
+            } else {
+                self.toast(&ctx, "File not found");
+            }
+            self.home_open = false;
+        } else if let Some(path) = open {
             if path.is_file() {
                 self.open_path(path);
             } else {
-                self.toast(ui.ctx(), "File not found");
+                self.toast(&ctx, "File not found");
             }
+            self.home_open = false;
+        }
+        if let Some(id) = tool {
+            self.run_home_tool(id);
         }
     }
+
+    /// Grille de cartes de l'écran d'accueil (onglets Récents / Favoris).
+    #[allow(clippy::too_many_arguments)]
+    fn home_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        margin: f32,
+        ctx: &egui::Context,
+        now: i64,
+        visible: &[PathBuf],
+        open: &mut Option<PathBuf>,
+        open_new: &mut Option<PathBuf>,
+        reveal: &mut Option<PathBuf>,
+        forget: &mut Option<PathBuf>,
+        delete: &mut Option<PathBuf>,
+        star: &mut Option<PathBuf>,
+    ) {
+        const CARD_W: f32 = 160.0;
+        const GAP: f32 = 12.0;
+        let usable = (ui.available_width() - 2.0 * margin).max(CARD_W);
+        let columns = ((usable + GAP) / (CARD_W + GAP)).floor().max(1.0) as usize;
+
+        let mut index = 0usize;
+        while index < visible.len() {
+            ui.horizontal(|ui| {
+                ui.add_space(margin);
+                for path in visible.iter().skip(index).take(columns) {
+                    self.home_card(ui, ctx, now, path, open, open_new, reveal, forget, delete, star);
+                    ui.add_space(GAP);
+                }
+            });
+            index += columns;
+            ui.add_space(GAP);
+        }
+    }
+
+    /// Une carte de l'écran d'accueil : vignette, nom, taille, ancienneté, étoile.
+    #[allow(clippy::too_many_arguments)]
+    fn home_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        now: i64,
+        path: &std::path::Path,
+        open: &mut Option<PathBuf>,
+        open_new: &mut Option<PathBuf>,
+        reveal: &mut Option<PathBuf>,
+        forget: &mut Option<PathBuf>,
+        delete: &mut Option<PathBuf>,
+        star: &mut Option<PathBuf>,
+    ) {
+        const CARD_W: f32 = 160.0;
+        const CARD_H: f32 = 200.0;
+        let (rect, resp) = ui.allocate_exact_size(vec2(CARD_W, CARD_H), Sense::click());
+        if resp.hovered() {
+            ui.painter()
+                .rect_filled(rect, Rounding::same(8.0), pal().widget_bg);
+        }
+
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let exists = path.is_file();
+        let starred = home::is_star(&self.stars, path);
+
+        // Vignette de la première page, ou glyphe de repli.
+        let thumb_rect = Rect::from_min_size(rect.min, vec2(CARD_W, 130.0));
+        let texture = if exists {
+            self.home_thumbnail(ctx, path)
+        } else {
+            None
+        };
+        match texture {
+            Some(texture) => {
+                ui.painter().image(
+                    texture.id(),
+                    thumb_rect.shrink(6.0),
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+            None => {
+                let icon = Rect::from_center_size(thumb_rect.center(), vec2(46.0, 58.0));
+                icon_page(ui.painter(), icon, pal().muted);
+            }
+        }
+
+        // Bas de carte : nom, taille, ancienneté.
+        let text_x = rect.min.x + 10.0;
+        ui.painter().text(
+            pos2(text_x, rect.min.y + 146.0),
+            Align2::LEFT_CENTER,
+            shorten(&name, 20),
+            FontId::proportional(12.0),
+            if exists { pal().icon_bright } else { pal().muted },
+        );
+        ui.painter().text(
+            pos2(text_x, rect.min.y + 165.0),
+            Align2::LEFT_CENTER,
+            if exists {
+                let size = std::fs::metadata(path)
+                    .map(|m| format_size(m.len() as usize))
+                    .unwrap_or_else(|_| "—".to_owned());
+                let age = std::fs::metadata(path)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| home::relative_time(d.as_secs() as i64, now))
+                    .unwrap_or_else(|| "—".to_owned());
+                format!("{size} · {age}")
+            } else {
+                "File not found".to_owned()
+            },
+            FontId::proportional(10.0),
+            pal().muted,
+        );
+
+        // Étoile.
+        let star_rect = Rect::from_center_size(
+            pos2(rect.max.x - 16.0, rect.min.y + 148.0),
+            vec2(20.0, 20.0),
+        );
+        let star_resp = ui.interact(star_rect, resp.id.with("star"), Sense::click());
+        ui.painter().text(
+            star_rect.center(),
+            Align2::CENTER_CENTER,
+            if starred { "★" } else { "☆" },
+            FontId::proportional(13.0),
+            if starred { pal().accent } else { pal().muted },
+        );
+        if star_resp.clicked() {
+            *star = Some(path.to_path_buf());
+        }
+
+        if star_resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if !star_resp.clicked() && resp.clicked() {
+            *open = Some(path.to_path_buf());
+        }
+
+        resp.context_menu(|ui| {
+            if ui.button("Open").clicked() {
+                *open = Some(path.to_path_buf());
+                ui.close_menu();
+            }
+            if ui.button("Open in New Tab").clicked() {
+                *open_new = Some(path.to_path_buf());
+                ui.close_menu();
+            }
+            if ui
+                .button(if starred { "Remove Star" } else { "Star" })
+                .clicked()
+            {
+                *star = Some(path.to_path_buf());
+                ui.close_menu();
+            }
+            if ui.button("Reveal in Finder").clicked() {
+                *reveal = Some(path.to_path_buf());
+                ui.close_menu();
+            }
+            if ui.button("Remove from Recents").clicked() {
+                *forget = Some(path.to_path_buf());
+                ui.close_menu();
+            }
+            if ui.button("Delete File…").clicked() {
+                *delete = Some(path.to_path_buf());
+                ui.close_menu();
+            }
+        });
+    }
+
+    /// Liste compacte de l'écran d'accueil.
+    #[allow(clippy::too_many_arguments)]
+    fn home_list(
+        &mut self,
+        ui: &mut egui::Ui,
+        margin: f32,
+        now: i64,
+        visible: &[PathBuf],
+        open: &mut Option<PathBuf>,
+        open_new: &mut Option<PathBuf>,
+        reveal: &mut Option<PathBuf>,
+        forget: &mut Option<PathBuf>,
+        delete: &mut Option<PathBuf>,
+        star: &mut Option<PathBuf>,
+    ) {
+        for path in visible {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string_lossy().into_owned());
+            let parent = path
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let exists = path.is_file();
+            let starred = home::is_star(&self.stars, path);
+
+            ui.horizontal(|ui| {
+                ui.add_space(margin);
+                let width = (ui.available_width() - margin).max(200.0);
+                let (rect, resp) = ui.allocate_exact_size(vec2(width, 46.0), Sense::click());
+                if resp.hovered() {
+                    ui.painter()
+                        .rect_filled(rect, Rounding::same(8.0), pal().widget_bg);
+                }
+                ui.painter().text(
+                    pos2(rect.min.x + 14.0, rect.min.y + 15.0),
+                    Align2::LEFT_CENTER,
+                    shorten(&name, 46),
+                    FontId::proportional(12.5),
+                    if exists { pal().icon_bright } else { pal().muted },
+                );
+                let detail = if exists {
+                    let size = std::fs::metadata(path)
+                        .map(|m| format_size(m.len() as usize))
+                        .unwrap_or_else(|_| "—".to_owned());
+                    let age = std::fs::metadata(path)
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| home::relative_time(d.as_secs() as i64, now))
+                        .unwrap_or_else(|| "—".to_owned());
+                    format!("{} · {size} · {age}", shorten(&parent, 60))
+                } else {
+                    "File not found".to_owned()
+                };
+                ui.painter().text(
+                    pos2(rect.min.x + 14.0, rect.min.y + 32.0),
+                    Align2::LEFT_CENTER,
+                    detail,
+                    FontId::proportional(10.5),
+                    pal().muted,
+                );
+
+                let star_rect = Rect::from_center_size(
+                    pos2(rect.max.x - 46.0, rect.center().y),
+                    vec2(20.0, 20.0),
+                );
+                let star_resp = ui.interact(star_rect, resp.id.with("star"), Sense::click());
+                ui.painter().text(
+                    star_rect.center(),
+                    Align2::CENTER_CENTER,
+                    if starred { "★" } else { "☆" },
+                    FontId::proportional(13.0),
+                    if starred { pal().accent } else { pal().muted },
+                );
+                if star_resp.clicked() {
+                    *star = Some(path.clone());
+                }
+
+                let forget_rect = Rect::from_center_size(
+                    pos2(rect.max.x - 20.0, rect.center().y),
+                    vec2(20.0, 20.0),
+                );
+                let forget_resp = ui.interact(forget_rect, resp.id.with("forget"), Sense::click());
+                ui.painter().text(
+                    forget_rect.center(),
+                    Align2::CENTER_CENTER,
+                    if forget_resp.hovered() { "✕" } else { "" },
+                    FontId::proportional(12.0),
+                    pal().icon,
+                );
+                if forget_resp.clicked() {
+                    *forget = Some(path.clone());
+                } else if resp.clicked() {
+                    *open = Some(path.clone());
+                }
+
+                resp.context_menu(|ui| {
+                    if ui.button("Open").clicked() {
+                        *open = Some(path.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button("Open in New Tab").clicked() {
+                        *open_new = Some(path.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button("Reveal in Finder").clicked() {
+                        *reveal = Some(path.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button("Remove from Recents").clicked() {
+                        *forget = Some(path.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button("Delete File…").clicked() {
+                        *delete = Some(path.clone());
+                        ui.close_menu();
+                    }
+                });
+            });
+            ui.add_space(4.0);
+        }
+    }
+
+    /// Grille de raccourcis d'outils de l'onglet « Tools ».
+    fn home_tools(&mut self, ui: &mut egui::Ui, margin: f32, tool: &mut Option<&'static str>) {
+        const TOOLS: [(&str, &str); 12] = [
+            ("Search", "search"),
+            ("Thumbnails", "thumbs"),
+            ("Organize", "organize"),
+            ("Watermark", "watermark"),
+            ("Compress", "compress"),
+            ("Protect", "protect"),
+            ("Crop", "crop"),
+            ("OCR", "ocr"),
+            ("Compare", "compare"),
+            ("Measure", "measure"),
+            ("Extract data", "extract"),
+            ("Batch", "batch"),
+        ];
+        const CELL_W: f32 = 160.0;
+        const CELL_H: f32 = 64.0;
+        const GAP: f32 = 12.0;
+        let usable = (ui.available_width() - 2.0 * margin).max(CELL_W);
+        let columns = ((usable + GAP) / (CELL_W + GAP)).floor().max(1.0) as usize;
+        let mut index = 0usize;
+        while index < TOOLS.len() {
+            ui.horizontal(|ui| {
+                ui.add_space(margin);
+                for (label, id) in TOOLS.iter().skip(index).take(columns) {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(CELL_W, CELL_H), Sense::click());
+                    if resp.hovered() {
+                        ui.painter()
+                            .rect_filled(rect, Rounding::same(8.0), pal().widget_bg);
+                    }
+                    ui.painter().text(
+                        rect.center(),
+                        Align2::CENTER_CENTER,
+                        *label,
+                        FontId::proportional(13.0),
+                        pal().icon_bright,
+                    );
+                    if resp.clicked() {
+                        *tool = Some(id);
+                    }
+                    ui.add_space(GAP);
+                }
+            });
+            index += columns;
+            ui.add_space(GAP);
+        }
+    }
+
+    /// Applique un raccourci d'outil choisi dans l'onglet « Tools ».
+    fn run_home_tool(&mut self, id: &str) {
+        match id {
+            "search" => self.panel = Some(Panel::Search),
+            "thumbs" => self.panel = Some(Panel::Thumbnails),
+            "organize" => self.organize_open = true,
+            "watermark" => self.watermark_open = true,
+            "compress" => self.compress_open = true,
+            "protect" => self.protect_open = true,
+            "crop" => self.crop_open = true,
+            "ocr" => self.ocr_open = true,
+            "compare" => self.compare_open = true,
+            "measure" => self.measure_open = true,
+            "extract" => self.extract_open = true,
+            "batch" => self.batch_open = true,
+            _ => {}
+        }
+    }
+
+    /// Vignette de la première page d'un fichier, mise en cache par `mtime`.
+    ///
+    /// Renvoie `None` pour un fichier illisible, chiffré, ou sans pdfium.
+    ///
+    /// ponytail: l'ouverture et le rendu se font sur le fil de l'interface.
+    /// Acceptable pour une poignée de récents ; déporter sur un fil si la
+    /// liste s'allonge ou si des fichiers lourds font scintiller l'accueil.
+    fn home_thumbnail(&mut self, ctx: &egui::Context, path: &std::path::Path) -> Option<TextureHandle> {
+        let meta = std::fs::metadata(path).ok()?;
+        // Un fichier énorme n'entre pas dans une vignette : on l'ignore plutôt
+        // que de le charger en entier au premier affichage.
+        if meta.len() > 64 * 1024 * 1024 {
+            return None;
+        }
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)?;
+        if let Some((cached, texture)) = self.home_thumbs.get(path) {
+            if *cached == mtime {
+                return Some(texture.clone());
+            }
+        }
+        if !self.renderer.renders_real_content() {
+            return None;
+        }
+        let doc = Document::open(path).ok()?;
+        if doc.page_count() == 0 {
+            return None;
+        }
+        let view = doc.page_view(1);
+        let scale = (160.0 / view.width.max(1.0)).clamp(0.05, 0.5);
+        let options = RenderOptions {
+            scale,
+            ..Default::default()
+        };
+        let bitmap = self.renderer.render_page(&doc, 1, &options).ok()?;
+        let handle = ctx.load_texture(
+            format!("home-thumb-{}", path.display()),
+            bitmap.to_egui_image(),
+            TextureOptions::LINEAR,
+        );
+        // ponytail: borne simple — vider le cache s'il déborde. Un accueil
+        // affiche une poignée de vignettes ; au-delà, les re-rendre coûte
+        // moins qu'un cache qui grossit sans fin.
+        if self.home_thumbs.len() > 128 {
+            self.home_thumbs.clear();
+        }
+        self.home_thumbs
+            .insert(path.to_path_buf(), (mtime, handle.clone()));
+        Some(handle)
+    }
+
 
     /// Journal d'activité (cloche de la barre de titre) : les derniers
     /// messages affichés, du plus récent au plus ancien.
