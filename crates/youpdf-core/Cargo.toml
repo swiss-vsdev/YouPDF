@@ -30,12 +30,6 @@ flate2 = "1"
 # Rendu réel via pdfium (binaire embarqué).
 pdfium-render = { version = "0.8", features = ["bindings"] }
 
-# Génération de fichiers .docx (conversion PDF → Word).
-# ponytail: optionnel — les versions 0.4.x exigent des `zip` « yanked » sur
-# crates.io à cette date ; l'export Word sera réactivé (feature `convert-docx`)
-# dès qu'une combinaison résoudra. Le reste de `convert` compile sans cette dep.
-docx-rs = { version = "0.4.22", optional = true }
-
 # Empaquetage des parties OOXML pour l'export Word / Excel / PowerPoint.
 # `deflate` suffit : les fichiers `.docx`/`.xlsx`/`.pptx` sont des ZIP
 # compressés en DEFLATE.
@@ -54,7 +48,3 @@ getrandom = "0.2"
 [dev-dependencies]
 # Validation du XML produit par l'export Office dans les tests.
 quick-xml = "0.41"
-
-[features]
-default = []
-convert-docx = ["dep:docx-rs"]
