@@ -436,3 +436,182 @@ fn inserted_pages_point_to_the_node_that_holds_them() {
     );
     let _ = std::fs::remove_file(source);
 }
+
+/// PDF de `count` pages, chacune d'une largeur distincte (600, 601, …) : le
+/// numéro de page se lit dans sa taille, même après un déplacement.
+fn ordered_pdf(count: usize) -> Vec<u8> {
+    let mut doc = LopdfDoc::with_version("1.7");
+    let mut kids: Vec<Object> = Vec::new();
+    for index in 0..count {
+        let page_id = doc.add_object(dictionary! {
+            "Type" => Object::Name(b"Page".to_vec()),
+            "MediaBox" => Object::Array(vec![
+                0.into(),
+                0.into(),
+                (600 + index as i64).into(),
+                792.into(),
+            ]),
+        });
+        kids.push(page_id.into());
+    }
+    let pages_id = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(kids),
+        "Count" => count as i64,
+    });
+    let catalog_id = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => pages_id,
+    });
+    doc.trailer.set("Root", catalog_id);
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf).expect("écriture");
+    buf
+}
+
+/// Largeurs de toutes les pages, dans l'ordre du document.
+fn widths(doc: &Document) -> Vec<f32> {
+    (1..=doc.page_count() as u32)
+        .map(|number| doc.page_size(number).0)
+        .collect()
+}
+
+/// Page blanche insérée au milieu, duplication et déplacement gardent l'ordre
+/// demandé et les dimensions de chaque page.
+#[test]
+fn insert_blank_duplicate_and_move_pages() {
+    let mut doc = Document::from_bytes(&ordered_pdf(3)).expect("ouverture");
+    assert_eq!(widths(&doc), vec![600.0, 601.0, 602.0]);
+
+    doc.insert_blank_page_after(1, 400.0, 500.0)
+        .expect("insertion");
+    assert_eq!(widths(&doc), vec![600.0, 400.0, 601.0, 602.0]);
+    assert_eq!(
+        doc.page_size(2),
+        (400.0, 500.0),
+        "le format demandé est respecté"
+    );
+
+    doc.duplicate_pages(&[3]).expect("duplication");
+    assert_eq!(widths(&doc), vec![600.0, 400.0, 601.0, 601.0, 602.0]);
+
+    doc.move_page(1, 3).expect("déplacement vers l'avant");
+    assert_eq!(widths(&doc), vec![400.0, 601.0, 600.0, 601.0, 602.0]);
+
+    doc.move_page(5, 1).expect("déplacement vers l'arrière");
+    assert_eq!(widths(&doc), vec![602.0, 400.0, 601.0, 600.0, 601.0]);
+
+    doc.move_page(0, 2).expect("page 0 est un no-op");
+    assert_eq!(widths(&doc), vec![602.0, 400.0, 601.0, 600.0, 601.0]);
+}
+
+/// PDF à deux sous-arbres : `Pages` racine → `[Pages A → [1, 2]]`,
+/// `[Pages B → [3, 4]]`. La page 3 vit dans le second sous-arbre.
+fn two_branch_pdf() -> Vec<u8> {
+    let mut doc = LopdfDoc::with_version("1.7");
+    let page = |doc: &mut LopdfDoc, width: i64| {
+        doc.add_object(dictionary! {
+            "Type" => Object::Name(b"Page".to_vec()),
+            "MediaBox" => Object::Array(vec![0.into(), 0.into(), width.into(), 792.into()]),
+        })
+    };
+    let p1 = page(&mut doc, 601);
+    let p2 = page(&mut doc, 602);
+    let p3 = page(&mut doc, 603);
+    let p4 = page(&mut doc, 604);
+    let branch_a = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![p1.into(), p2.into()]),
+        "Count" => 2,
+    });
+    let branch_b = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![p3.into(), p4.into()]),
+        "Count" => 2,
+    });
+    for (id, parent) in [(p1, branch_a), (p2, branch_a), (p3, branch_b), (p4, branch_b)] {
+        if let Ok(Object::Dictionary(dict)) = doc.get_object_mut(id) {
+            dict.set("Parent", Object::Reference(parent));
+        }
+    }
+    if let Ok(Object::Dictionary(dict)) = doc.get_object_mut(branch_a) {
+        dict.set("Parent", Object::Reference((0, 0)));
+    }
+    let root = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![branch_a.into(), branch_b.into()]),
+        "Count" => 4,
+    });
+    for branch in [branch_a, branch_b] {
+        if let Ok(Object::Dictionary(dict)) = doc.get_object_mut(branch) {
+            dict.set("Parent", Object::Reference(root));
+        }
+    }
+    let catalog = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => root,
+    });
+    doc.trailer.set("Root", Object::Reference(catalog));
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf).expect("écriture");
+    buf
+}
+
+/// Une ancre présente dans le second sous-arbre ne doit pas être prise pour
+/// une ancre absente : la page insérée doit atterrir dans ce sous-arbre.
+#[test]
+fn insert_after_a_page_of_the_second_subtree() {
+    let mut doc = Document::from_bytes(&two_branch_pdf()).expect("ouverture");
+    assert_eq!(widths(&doc), vec![601.0, 602.0, 603.0, 604.0]);
+
+    doc.insert_blank_page_after(3, 400.0, 500.0)
+        .expect("insertion");
+    assert_eq!(
+        widths(&doc),
+        vec![601.0, 602.0, 603.0, 400.0, 604.0],
+        "la page blanche doit suivre la page 3, dans son sous-arbre"
+    );
+
+    let out = doc.to_bytes().expect("sérialisation");
+    let reopened = lopdf::Document::load_mem(&out).expect("réouverture");
+    let pages = reopened.get_pages();
+    let inserted = *pages.get(&4).expect("page insérée");
+    let parent = reopened
+        .get_dictionary(inserted)
+        .expect("page")
+        .get(b"Parent")
+        .expect("Parent")
+        .as_reference()
+        .expect("référence");
+    let kids = reopened
+        .get_dictionary(parent)
+        .expect("parent")
+        .get(b"Kids")
+        .expect("Kids")
+        .as_array()
+        .expect("tableau")
+        .len();
+    assert_eq!(kids, 3, "la page blanche rejoint le sous-arbre de la page 3");
+}
+
+/// Déplacer une page d'un sous-arbre à l'autre conserve l'objet de page : les
+/// références entrantes restent valides et rien ne devient orphelin.
+#[test]
+fn move_page_across_subtrees_keeps_the_object() {
+    let mut doc = Document::from_bytes(&two_branch_pdf()).expect("ouverture");
+    let before: Vec<lopdf::ObjectId> = doc.page_ids().into_values().collect();
+
+    doc.move_page(4, 1).expect("déplacement");
+    assert_eq!(widths(&doc), vec![604.0, 601.0, 602.0, 603.0]);
+
+    let after: Vec<lopdf::ObjectId> = doc.page_ids().into_values().collect();
+    assert_eq!(
+        after[0], before[3],
+        "la page déplacée garde son identifiant d'objet"
+    );
+    let mut sorted = after.clone();
+    sorted.sort();
+    let mut expected = before.clone();
+    expected.sort();
+    assert_eq!(sorted, expected, "aucune page n'est perdue ni dupliquée");
+}

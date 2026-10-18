@@ -51,7 +51,6 @@ const STATUS_H: f32 = 26.0;
 const RAIL_W: f32 = 52.0;
 const PANEL_W: f32 = 210.0;
 const PAGE_SPACING: f32 = 16.0;
-const THUMB_HEIGHT: f32 = 118.0;
 
 // --------------------------------------------------------------------------
 // Disposition des pages
@@ -1063,8 +1062,20 @@ pub struct YouPdfApp {
     canvas_style: usize,
     /// Ombre portée sous les pages.
     page_shadow: bool,
-    /// Échelle des vignettes du panneau Pages.
+    /// Échelle des vignettes du panneau Aspect.
     thumb_scale: f32,
+    /// Largeur d'une vignette du panneau Pages, en points (80 à 240).
+    thumb_pt: f32,
+    /// Pages cochées dans le panneau Pages.
+    thumb_selected: BTreeSet<usize>,
+    /// Onglet auquel appartient `thumb_selected` : la sélection est vidée dès
+    /// qu'on change de document, sinon les mêmes numéros viseraient d'autres
+    /// pages.
+    thumb_owner: usize,
+    /// Page en cours de glissé dans la liste des vignettes.
+    thumb_drag: Option<usize>,
+    /// Page dont la fenêtre « Propriétés de la page » est ouverte.
+    page_props: Option<usize>,
 
     search_query: String,
     search_index: Option<(usize, SearchIndex)>,
@@ -1232,6 +1243,11 @@ impl YouPdfApp {
             canvas_style: 0,
             page_shadow: true,
             thumb_scale: 1.0,
+            thumb_pt: 120.0,
+            thumb_selected: BTreeSet::new(),
+            thumb_owner: 0,
+            thumb_drag: None,
+            page_props: None,
             search_query: String::new(),
             search_index: None,
             results: Vec::new(),
@@ -4257,6 +4273,10 @@ impl YouPdfApp {
 
     fn thumbnails(&mut self, ui: &mut egui::Ui) {
         if self.tabs.is_empty() {
+            // Plus aucun document : la sélection ne doit pas survivre à
+            // l'ouverture suivante.
+            self.thumb_selected.clear();
+            self.thumb_owner = usize::MAX;
             return;
         }
         let active = self.active;
@@ -4264,10 +4284,41 @@ impl YouPdfApp {
         let ppp = ctx.pixels_per_point();
         let renderer = &*self.renderer;
         let status = &mut self.render_status;
-        let tab = &mut self.tabs[active];
-        let total = tab.total();
-        let thumb_scale = self.thumb_scale;
+        let total = self.tabs[active].total();
+        let mut zoom = self.thumb_pt;
+        let mut selected = std::mem::take(&mut self.thumb_selected);
+        // Changer d'onglet change de document : les mêmes numéros de page
+        // viseraient d'autres pages.
+        if self.thumb_owner != active {
+            self.thumb_owner = active;
+            selected.clear();
+        }
+        // Un document plus court (suppression, nouvelle ouverture) laisse des
+        // pages fantômes dans la sélection.
+        selected.retain(|page| *page >= 1 && *page <= total);
+        let mut drag_from = self.thumb_drag;
+        let mut action: Option<PageAction> = None;
         let mut jump = None;
+
+        // Curseur en bas du panneau : largeur des vignettes, de 80 à 240 pt.
+        egui::TopBottomPanel::bottom("thumb_zoom")
+            .frame(Frame::none().fill(pal().canvas_bg))
+            .show_inside(ui, |ui| {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(12.0);
+                    ui.add_sized(
+                        vec2((self.panel_w - 40.0).max(80.0), 18.0),
+                        egui::Slider::new(&mut zoom, 80.0..=240.0).show_value(false),
+                    );
+                });
+                ui.add_space(6.0);
+            });
+
+        let tab = &mut self.tabs[active];
+        let pointer = ctx.pointer_interact_pos();
+        let mut drop_target = None;
+        let mut drag_stopped = false;
 
         ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -4275,17 +4326,19 @@ impl YouPdfApp {
                 let tile_width = ui.available_width().max(80.0);
                 for page in 1..=total as u32 {
                     let (wp, hp) = tab.doc.page_size(page);
-                    let scale = (THUMB_HEIGHT * thumb_scale) / hp.max(1.0);
+                    let scale = zoom / wp.max(1.0);
                     let size = vec2(wp * scale, hp * scale);
-                    let (rect, resp) =
-                        ui.allocate_exact_size(vec2(tile_width, size.y + 28.0), Sense::click());
-                    let selected = page as usize == tab.page;
+                    let (rect, resp) = ui.allocate_exact_size(
+                        vec2(tile_width, size.y + 28.0),
+                        Sense::click_and_drag(),
+                    );
+                    let picked = selected.contains(&(page as usize));
                     let img_rect = Rect::from_center_size(
                         pos2(rect.center().x, rect.min.y + 8.0 + size.y / 2.0),
                         size,
                     );
 
-                    if selected {
+                    if picked {
                         ui.painter().rect_filled(
                             img_rect.expand(5.0),
                             Rounding::same(4.0),
@@ -4299,9 +4352,17 @@ impl YouPdfApp {
                         );
                     }
 
-                    if let Some(tex) =
-                        Self::page_texture(&ctx, renderer, tab, page, THUMBNAIL_STEP, scale, ppp, true, status)
-                    {
+                    if let Some(tex) = Self::page_texture(
+                        &ctx,
+                        renderer,
+                        tab,
+                        page,
+                        THUMBNAIL_STEP,
+                        scale,
+                        ppp,
+                        true,
+                        status,
+                    ) {
                         ui.painter().image(
                             tex.id(),
                             img_rect,
@@ -4309,11 +4370,19 @@ impl YouPdfApp {
                             Color32::WHITE,
                         );
                     }
-                    if selected {
+                    if picked {
                         ui.painter().rect_stroke(
                             img_rect.expand(5.0),
                             4.0,
                             Stroke::new(1.0_f32, pal().accent),
+                        );
+                    }
+                    // Repère de la page affichée.
+                    if page as usize == tab.page {
+                        ui.painter().circle_filled(
+                            pos2(rect.min.x + 8.0, rect.min.y + 8.0),
+                            3.0,
+                            pal().accent,
                         );
                     }
                     ui.painter().text(
@@ -4321,20 +4390,322 @@ impl YouPdfApp {
                         Align2::CENTER_CENTER,
                         page.to_string(),
                         FontId::proportional(11.0),
-                        if selected { pal().accent } else { pal().muted },
+                        if picked { pal().accent } else { pal().muted },
                     );
-                    if resp.clicked() {
-                        jump = Some(page as usize);
+
+                    // Cible du glissé : la vignette sous le curseur.
+                    if drag_from.is_some() && pointer.map(|p| rect.contains(p)).unwrap_or(false) {
+                        drop_target = Some(page as usize);
+                        ui.painter().rect_stroke(
+                            img_rect.expand(5.0),
+                            4.0,
+                            Stroke::new(2.0_f32, pal().accent),
+                        );
                     }
+                    if resp.drag_started() {
+                        drag_from = Some(page as usize);
+                    }
+                    if resp.drag_stopped() {
+                        drag_stopped = true;
+                    }
+                    if resp.clicked() {
+                        let mods = ui.input(|i| i.modifiers);
+                        if mods.shift {
+                            let anchor = selected
+                                .iter()
+                                .next_back()
+                                .copied()
+                                .unwrap_or(tab.page.max(1));
+                            let (lo, hi) = (anchor.min(page as usize), anchor.max(page as usize));
+                            for number in lo..=hi {
+                                selected.insert(number);
+                            }
+                        } else if mods.command || mods.ctrl {
+                            if !selected.remove(&(page as usize)) {
+                                selected.insert(page as usize);
+                            }
+                        } else {
+                            selected.clear();
+                            selected.insert(page as usize);
+                            jump = Some(page as usize);
+                        }
+                    }
+                    resp.context_menu(|ui| {
+                        // Le menu agit sur toute la sélection ; un clic droit
+                        // sur une page hors sélection la sélectionne d'abord.
+                        if !selected.contains(&(page as usize)) {
+                            selected.clear();
+                            selected.insert(page as usize);
+                        }
+                        if ui.button("Rotate Clockwise").clicked() {
+                            action = Some(PageAction::Rotate(90));
+                            ui.close_menu();
+                        }
+                        if ui.button("Rotate Counter-Clockwise").clicked() {
+                            action = Some(PageAction::Rotate(-90));
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.menu_button("Insert Blank Page After", |ui| {
+                            for (label, width, height) in BLANK_SIZES {
+                                if ui.button(label).clicked() {
+                                    action = Some(PageAction::Blank(width, height));
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                        if ui.button("Insert from File…").clicked() {
+                            action = Some(PageAction::InsertFile);
+                            ui.close_menu();
+                        }
+                        if ui.button("Extract Selected Pages…").clicked() {
+                            action = Some(PageAction::Extract);
+                            ui.close_menu();
+                        }
+                        if ui.button("Duplicate Pages").clicked() {
+                            action = Some(PageAction::Duplicate);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Page Properties…").clicked() {
+                            action = Some(PageAction::Properties(page as usize));
+                            ui.close_menu();
+                        }
+                        if ui.button("Delete Pages").clicked() {
+                            action = Some(PageAction::Delete);
+                            ui.close_menu();
+                        }
+                        ui.label(
+                            RichText::new(format!("{} page(s) selected", selected.len()))
+                                .size(11.0)
+                                .color(pal().muted),
+                        );
+                    });
+
                     ui.add_space(6.0);
                 }
             });
 
+        // Fin du glissé : la vignette survolée devient la nouvelle position.
+        // `drag_stopped` vient de la vignette qui a porté le glissé : un
+        // relâchement ailleurs (curseur sorti de la fenêtre) ne déplace rien.
+        if drag_stopped {
+            if let Some(from) = drag_from.take() {
+                if let Some(to) = drop_target {
+                    if to != from {
+                        action = Some(PageAction::Move(from, to));
+                    }
+                }
+            }
+        }
+
+        self.thumb_selected = selected;
+        self.thumb_pt = zoom;
+        self.thumb_drag = drag_from;
         if let Some(page) = jump {
             if let Some(tab) = self.tabs.get_mut(active) {
                 tab.page = page;
             }
             self.jump = Some(page);
+        }
+        if let Some(action) = action {
+            self.run_page_action(&ctx, active, action);
+        }
+    }
+
+    /// Applique l'action choisie dans le menu contextuel des vignettes.
+    fn run_page_action(&mut self, ctx: &egui::Context, active: usize, action: PageAction) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let total = self.tabs[active].total();
+        // Pages visées : la sélection, ou la page affichée si rien n'est coché.
+        let mut pages: Vec<usize> = self.thumb_selected.iter().copied().collect();
+        if pages.is_empty() {
+            pages = vec![self.tabs[active].page.clamp(1, total)];
+        }
+        let last = pages.iter().copied().max().unwrap_or(1);
+
+        if let PageAction::Properties(page) = action {
+            self.page_props = Some(page);
+            return;
+        }
+
+        let doc = &mut self.tabs[active].doc;
+        let outcome: Result<Option<String>, String> = match action {
+            PageAction::Rotate(delta) => doc
+                .rotate_pages(&pages, delta)
+                .map(|count| Some(format!("{count} page(s) rotated")))
+                .map_err(|err| format!("Rotation failed: {err}")),
+            PageAction::Blank(mut width, mut height) => {
+                if width <= 0.0 || height <= 0.0 {
+                    let (dw, dh) = doc.page_size(last as u32);
+                    width = dw;
+                    height = dh;
+                }
+                doc.insert_blank_page_after(last, width, height)
+                    .map(|_| Some(format!("Blank page inserted after page {last}")))
+                    .map_err(|err| format!("Insert failed: {err}"))
+            }
+            PageAction::InsertFile => match rfd::FileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .pick_file()
+            {
+                Some(path) => doc
+                    .insert_pages_after(last, &path)
+                    .map(|count| Some(format!("{count} page(s) inserted after page {last}")))
+                    .map_err(|err| format!("Insert failed: {err}")),
+                None => Ok(None),
+            },
+            PageAction::Extract => match rfd::FileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .set_file_name("extract.pdf")
+                .save_file()
+            {
+                Some(path) => doc
+                    .extract_pages(&pages, &path)
+                    .map(|_| {
+                        Some(format!(
+                            "{} page(s) extracted to {}",
+                            pages.len(),
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        ))
+                    })
+                    .map_err(|err| format!("Extract failed: {err}")),
+                None => Ok(None),
+            },
+            PageAction::Duplicate => doc
+                .duplicate_pages(&pages)
+                .map(|count| Some(format!("{count} page(s) duplicated")))
+                .map_err(|err| format!("Duplicate failed: {err}")),
+            PageAction::Delete => {
+                if pages.len() >= total {
+                    Err("Keep at least one page".to_owned())
+                } else {
+                    doc.delete_pages(&pages)
+                        .map(|count| Some(format!("{count} page(s) removed")))
+                        .map_err(|err| format!("Delete failed: {err}"))
+                }
+            }
+            PageAction::Move(from, to) => doc
+                .move_page(from, to)
+                .map(|_| Some(format!("Page {from} moved to position {to}")))
+                .map_err(|err| format!("Move failed: {err}")),
+            PageAction::Properties(_) => Ok(None),
+        };
+
+        let structural = matches!(
+            action,
+            PageAction::Rotate(_)
+                | PageAction::Blank(_, _)
+                | PageAction::InsertFile
+                | PageAction::Duplicate
+                | PageAction::Delete
+                | PageAction::Move(_, _)
+        );
+        let message = match outcome {
+            Ok(message) => {
+                if structural && message.is_some() {
+                    // Les numéros de page changent : la sélection ne suit plus.
+                    self.thumb_selected.clear();
+                    self.mark_document_changed();
+                    if let Some(tab) = self.tabs.get_mut(active) {
+                        let count = tab.doc.page_count().max(1);
+                        if tab.page > count {
+                            tab.page = count;
+                        }
+                    }
+                }
+                message
+            }
+            Err(message) => Some(message),
+        };
+        if let Some(message) = message {
+            self.toast(ctx, message);
+        }
+    }
+
+    /// Fenêtre « Propriétés de la page ».
+    fn page_props_window(&mut self, ctx: &egui::Context) {
+        let Some(number) = self.page_props else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            self.page_props = None;
+            return;
+        };
+        let total = tab.total();
+        if number == 0 || number > total {
+            self.page_props = None;
+            return;
+        }
+        let view = tab.doc.page_view(number as u32);
+        let (dw, dh) = tab.doc.page_size(number as u32);
+        let boxes = tab.doc.page_boxes(number as u32);
+        let mut open = true;
+        self.show_modal(
+            ctx,
+            "modal-page-props",
+            "Page properties",
+            320.0,
+            &mut open,
+            |_app, ui| {
+                let mm = |pt: f32| pt * 25.4 / 72.0;
+                let mut row = |label: &str, value: String| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(label).size(12.0).color(pal().muted));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(RichText::new(value).size(12.0));
+                        });
+                    });
+                };
+                row("Page", format!("{number} of {total}"));
+                row(
+                    "Visible box",
+                    format!("{:.0} × {:.0} pt", view.width, view.height),
+                );
+                row(
+                    "Paper size",
+                    format!("{:.1} × {:.1} mm", mm(view.width), mm(view.height)),
+                );
+                row("Displayed", format!("{dw:.0} × {dh:.0} pt"));
+                row("Rotation", format!("{}°", view.rotation));
+                row("Origin", format!("({:.0}, {:.0})", view.x, view.y));
+
+                // Boîtes déclarées (Media / Crop / Trim / Bleed), quand elles
+                // existent : Media est le support, Crop la zone visible.
+                let mut any = false;
+                for (label, rect) in [
+                    ("Media box", boxes.media),
+                    ("Crop box", boxes.crop),
+                    ("Trim box", boxes.trim),
+                    ("Bleed box", boxes.bleed),
+                ] {
+                    if let Some([x1, y1, x2, y2]) = rect {
+                        row(
+                            label,
+                            format!(
+                                "{:.0} {:.0} {:.0} {:.0} pt",
+                                x1,
+                                y1,
+                                (x2 - x1).abs(),
+                                (y2 - y1).abs()
+                            ),
+                        );
+                        any = true;
+                    }
+                }
+                if !any {
+                    ui.label(
+                        RichText::new("No page boxes declared")
+                            .size(11.0)
+                            .color(pal().muted),
+                    );
+                }
+            },
+        );
+        if !open {
+            self.page_props = None;
         }
     }
 
@@ -9510,6 +9881,7 @@ impl eframe::App for YouPdfApp {
         self.password_window(ctx);
         self.draft_window(ctx);
         self.redact_window(ctx);
+        self.page_props_window(ctx);
         self.organize_window(ctx);
         self.activity_window(ctx);
         self.ai_window(ctx);
@@ -10210,6 +10582,39 @@ fn replace_occurrences(text: &str, needle: &str, replacement: &str) -> String {
     }
     out.push_str(&text[cursor..]);
     out
+}
+
+/// Formats proposés à l'insertion d'une page blanche. `(0, 0)` reprend la
+/// taille de la page voisine.
+const BLANK_SIZES: [(&str, f32, f32); 7] = [
+    ("Same as this page", 0.0, 0.0),
+    ("A4 (595 × 842 pt)", 595.0, 842.0),
+    ("A3 (842 × 1191 pt)", 842.0, 1191.0),
+    ("A5 (420 × 595 pt)", 420.0, 595.0),
+    ("Letter (612 × 792 pt)", 612.0, 792.0),
+    ("Legal (612 × 1008 pt)", 612.0, 1008.0),
+    ("Tabloid (792 × 1224 pt)", 792.0, 1224.0),
+];
+
+/// Opérations du menu contextuel des vignettes.
+#[derive(Clone, Copy)]
+enum PageAction {
+    /// Rotation de `delta` degrés (multiple de 90).
+    Rotate(i64),
+    /// Page blanche `largeur × hauteur` insérée après la dernière page visée.
+    Blank(f32, f32),
+    /// Insertion des pages d'un autre PDF.
+    InsertFile,
+    /// Extraction vers un nouveau fichier.
+    Extract,
+    /// Duplication des pages visées.
+    Duplicate,
+    /// Suppression des pages visées.
+    Delete,
+    /// Déplacement `(de, vers)`.
+    Move(usize, usize),
+    /// Ouverture de la fenêtre des propriétés de la page.
+    Properties(usize),
 }
 
 /// Opérations de la fenêtre « Organiser les pages ».
