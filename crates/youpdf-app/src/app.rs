@@ -1208,6 +1208,46 @@ impl YouPdfApp {
 
     // -- Fichiers ----------------------------------------------------------
 
+    /// Affiche une fenêtre modale centrée, avec le chrome commun à tous les
+    /// dialogues : non repliable, non redimensionnable, ancrée au centre de
+    /// l'écran, fond `chrome_bg` et coins arrondis. Le contenu est dessiné par
+    /// `add_contents`, qui reçoit `self` pour pouvoir lire et modifier l'état.
+    ///
+    /// `max_width == 0.0` laisse la fenêtre s'ajuster à son contenu.
+    ///
+    /// Les surfaces volontairement redimensionnables (organiser les pages,
+    /// comparer, extraire, lot) gardent leur propre `egui::Window` : forcer
+    /// leur taille les casserait.
+    fn show_modal<R>(
+        &mut self,
+        ctx: &egui::Context,
+        id_source: impl std::hash::Hash,
+        title: &str,
+        max_width: f32,
+        open: &mut bool,
+        add_contents: impl FnOnce(&mut Self, &mut egui::Ui) -> R,
+    ) -> Option<R> {
+        let mut result = None;
+        egui::Window::new(title)
+            .id(Id::new(id_source))
+            .open(open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .frame(
+                Frame::window(&ctx.style())
+                    .fill(pal().chrome_bg)
+                    .rounding(Rounding::same(10.0)),
+            )
+            .show(ctx, |ui| {
+                if max_width > 0.0 {
+                    ui.set_max_width(max_width);
+                }
+                result = Some(add_contents(self, ui));
+            });
+        result
+    }
+
     fn open_dialog(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("PDF", &["pdf"])
@@ -1467,36 +1507,30 @@ impl YouPdfApp {
         let title = self.tabs[idx].title.clone();
         let mut open = true;
         let mut choice: Option<u8> = None;
-        egui::Window::new("Unsaved changes")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(340.0);
-                ui.label(
-                    RichText::new(format!("\u{201c}{title}\u{201d} has unsaved changes."))
-                        .size(12.5)
-                        .color(pal().icon_bright),
-                );
-                ui.label(
-                    RichText::new("Closing now would lose them.")
-                        .size(11.0)
-                        .color(pal().muted),
-                );
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Save and close").clicked() {
-                        choice = Some(0);
-                    }
-                    if ui.button("Discard and close").clicked() {
-                        choice = Some(1);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        choice = Some(2);
-                    }
-                });
+        self.show_modal(ctx, "modal-close-confirm", "Unsaved changes", 340.0, &mut open, |_app, ui| {
+            ui.label(
+                RichText::new(format!("\u{201c}{title}\u{201d} has unsaved changes."))
+                    .size(12.5)
+                    .color(pal().icon_bright),
+            );
+            ui.label(
+                RichText::new("Closing now would lose them.")
+                    .size(11.0)
+                    .color(pal().muted),
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Save and close").clicked() {
+                    choice = Some(0);
+                }
+                if ui.button("Discard and close").clicked() {
+                    choice = Some(1);
+                }
+                if ui.button("Cancel").clicked() {
+                    choice = Some(2);
+                }
             });
+        });
         match choice {
             Some(0) => {
                 // Enregistrer d'abord : `save_active` peut ouvrir une boîte
@@ -1528,116 +1562,110 @@ impl YouPdfApp {
         }
         let mut open = true;
         let mut run = false;
-        egui::Window::new("Export")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(380.0);
-                ui.label(RichText::new("Text").size(12.0).color(pal().muted));
-                for format in [
-                    TextFormat::Plain,
-                    TextFormat::Markdown,
-                    TextFormat::Html,
-                    TextFormat::Csv,
-                    TextFormat::Xml,
-                    TextFormat::Rtf,
-                ] {
-                    if ui
-                        .selectable_label(
-                            self.export_mode == ExportMode::Text && self.export_format == format,
-                            format.display_name(),
-                        )
-                        .clicked()
-                    {
-                        self.export_mode = ExportMode::Text;
-                        self.export_format = format;
-                    }
-                }
-                ui.add_space(6.0);
-                ui.label(RichText::new("Images").size(12.0).color(pal().muted));
-                for (format, label) in [
-                    (ImageFormat::Png, "PNG (one file per page)"),
-                    (ImageFormat::Jpeg, "JPEG (one file per page)"),
-                ] {
-                    if ui
-                        .selectable_label(
-                            self.export_mode == ExportMode::Image
-                                && self.export_image_format == format,
-                            label,
-                        )
-                        .clicked()
-                    {
-                        self.export_mode = ExportMode::Image;
-                        self.export_image_format = format;
-                    }
-                }
-                if self.export_mode == ExportMode::Image {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Resolution").size(12.0).color(pal().muted));
-                        ui.add(
-                            egui::DragValue::new(&mut self.export_dpi)
-                                .range(36.0..=600.0)
-                                .suffix(" dpi"),
-                        );
-                    });
-                }
-                ui.add_space(6.0);
-                ui.label(RichText::new("Embedded images").size(12.0).color(pal().muted));
+        self.show_modal(ctx, "modal-export", "Export", 380.0, &mut open, |app, ui| {
+            ui.label(RichText::new("Text").size(12.0).color(pal().muted));
+            for format in [
+                TextFormat::Plain,
+                TextFormat::Markdown,
+                TextFormat::Html,
+                TextFormat::Csv,
+                TextFormat::Xml,
+                TextFormat::Rtf,
+            ] {
                 if ui
                     .selectable_label(
-                        self.export_mode == ExportMode::Embedded,
-                        "PNG (one file per embedded image)",
+                        app.export_mode == ExportMode::Text && app.export_format == format,
+                        format.display_name(),
                     )
                     .clicked()
                 {
-                    self.export_mode = ExportMode::Embedded;
+                    app.export_mode = ExportMode::Text;
+                    app.export_format = format;
                 }
-                ui.add_space(6.0);
-                ui.label(RichText::new("Office").size(12.0).color(pal().muted));
-                for format in OfficeFormat::ALL {
-                    if ui
-                        .selectable_label(
-                            self.export_mode == ExportMode::Office
-                                && self.export_office_format == format,
-                            format.display_name(),
-                        )
-                        .clicked()
-                    {
-                        self.export_mode = ExportMode::Office;
-                        self.export_office_format = format;
+            }
+            ui.add_space(6.0);
+            ui.label(RichText::new("Images").size(12.0).color(pal().muted));
+            for (format, label) in [
+                (ImageFormat::Png, "PNG (one file per page)"),
+                (ImageFormat::Jpeg, "JPEG (one file per page)"),
+            ] {
+                if ui
+                    .selectable_label(
+                        app.export_mode == ExportMode::Image
+                            && app.export_image_format == format,
+                        label,
+                    )
+                    .clicked()
+                {
+                    app.export_mode = ExportMode::Image;
+                    app.export_image_format = format;
+                }
+            }
+            if app.export_mode == ExportMode::Image {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Resolution").size(12.0).color(pal().muted));
+                    ui.add(
+                        egui::DragValue::new(&mut app.export_dpi)
+                            .range(36.0..=600.0)
+                            .suffix(" dpi"),
+                    );
+                });
+            }
+            ui.add_space(6.0);
+            ui.label(RichText::new("Embedded images").size(12.0).color(pal().muted));
+            if ui
+                .selectable_label(
+                    app.export_mode == ExportMode::Embedded,
+                    "PNG (one file per embedded image)",
+                )
+                .clicked()
+            {
+                app.export_mode = ExportMode::Embedded;
+            }
+            ui.add_space(6.0);
+            ui.label(RichText::new("Office").size(12.0).color(pal().muted));
+            for format in OfficeFormat::ALL {
+                if ui
+                    .selectable_label(
+                        app.export_mode == ExportMode::Office
+                            && app.export_office_format == format,
+                        format.display_name(),
+                    )
+                    .clicked()
+                {
+                    app.export_mode = ExportMode::Office;
+                    app.export_office_format = format;
+                }
+            }
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(match app.export_mode {
+                    ExportMode::Image => {
+                        "Each page is rendered at the chosen resolution and written into a \
+                         folder as page-0001, page-0002…"
                     }
-                }
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(match self.export_mode {
-                        ExportMode::Image => {
-                            "Each page is rendered at the chosen resolution and written into a \
-                             folder as page-0001, page-0002…"
-                        }
-                        ExportMode::Office => {
-                            "The text layer is rebuilt as an Office document: one paragraph or \
-                             row per line, one slide per page. Images, tables and the layout are \
-                             not reconstructed."
-                        }
-                        ExportMode::Embedded => {
-                            "Each image embedded in the document is written as a PNG. Rendered \
-                             page pictures are not included — use Images for those."
-                        }
-                        ExportMode::Text => {
-                            "Only the text layer is exported: images, tables and the page layout \
-                             are not rebuilt, and pages without extractable text come out empty."
-                        }
-                    })
-                    .size(11.0)
-                    .color(pal().muted),
-                );
-                ui.add_space(8.0);
-                if ui.button("Export…").clicked() {
-                    run = true;
-                }
-            });
+                    ExportMode::Office => {
+                        "The text layer is rebuilt as an Office document: one paragraph or \
+                         row per line, one slide per page. Images, tables and the layout are \
+                         not reconstructed."
+                    }
+                    ExportMode::Embedded => {
+                        "Each image embedded in the document is written as a PNG. Rendered \
+                         page pictures are not included — use Images for those."
+                    }
+                    ExportMode::Text => {
+                        "Only the text layer is exported: images, tables and the page layout \
+                         are not rebuilt, and pages without extractable text come out empty."
+                    }
+                })
+                .size(11.0)
+                .color(pal().muted),
+            );
+            ui.add_space(8.0);
+            if ui.button("Export…").clicked() {
+                run = true;
+            }
+        });
         if run {
             self.export_active(ctx);
         }
@@ -4565,47 +4593,43 @@ impl YouPdfApp {
         let areas = self.redact_regions.len();
         let mut confirm = false;
         let mut cancel = false;
-        egui::Window::new("Apply redaction")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(360.0);
-                ui.label(
-                    RichText::new(format!("{areas} area(s) will be blacked out permanently."))
-                        .size(12.5)
-                        .color(pal().icon_bright),
-                );
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(
-                        "Redaction replaces each marked page with an image: the text                          underneath is destroyed, not hidden, and cannot be recovered.                          Annotations overlapping a marked area are deleted.",
+        let mut keep_open = true;
+        self.show_modal(ctx, "modal-redact", "Apply redaction", 360.0, &mut keep_open, |app, ui| {
+            ui.label(
+                RichText::new(format!("{areas} area(s) will be blacked out permanently."))
+                    .size(12.5)
+                    .color(pal().icon_bright),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(
+                    "Redaction replaces each marked page with an image: the text                          underneath is destroyed, not hidden, and cannot be recovered.                          Annotations overlapping a marked area are deleted.",
+                )
+                .size(11.0)
+                .color(pal().muted),
+            );
+            ui.add_space(8.0);
+            ui.checkbox(
+                &mut app.redact_sanitize,
+                "Also remove metadata, XMP, JavaScript and attachments",
+            );
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("Apply").color(Color32::WHITE))
+                            .fill(pal().redact_red),
                     )
-                    .size(11.0)
-                    .color(pal().muted),
-                );
-                ui.add_space(8.0);
-                ui.checkbox(
-                    &mut self.redact_sanitize,
-                    "Also remove metadata, XMP, JavaScript and attachments",
-                );
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        cancel = true;
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new(RichText::new("Apply").color(Color32::WHITE))
-                                .fill(pal().redact_red),
-                        )
-                        .clicked()
-                    {
-                        confirm = true;
-                    }
-                });
+                    .clicked()
+                {
+                    confirm = true;
+                }
             });
-        if cancel {
+        });
+        if cancel || !keep_open {
             self.redact_modal = false;
         }
         if confirm {
@@ -5274,29 +5298,25 @@ impl YouPdfApp {
             .map(|m| format!("{:.1} KB", m.len() as f64 / 1024.0))
             .unwrap_or_else(|| "—".to_owned());
         let mut open = true;
+        let title = tab.title.clone();
 
-        egui::Window::new("Document properties")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                let mut row = |label: &str, value: &str| {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(label).size(12.0).color(pal().muted));
-                        ui.label(RichText::new(value).size(12.0).color(pal().icon_bright));
-                    });
-                };
-                row("File", &tab.title);
-                row("Path", &path);
-                row("Size", &size);
-                row("Pages", &total.to_string());
-                row("Title", meta.title.as_deref().unwrap_or("—"));
-                row("Author", meta.author.as_deref().unwrap_or("—"));
-                row("Subject", meta.subject.as_deref().unwrap_or("—"));
-                row("Keywords", meta.keywords.as_deref().unwrap_or("—"));
-                row("Producer", meta.producer.as_deref().unwrap_or("—"));
-            });
+        self.show_modal(ctx, "modal-properties", "Document properties", 0.0, &mut open, |_app, ui| {
+            let mut row = |label: &str, value: &str| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(label).size(12.0).color(pal().muted));
+                    ui.label(RichText::new(value).size(12.0).color(pal().icon_bright));
+                });
+            };
+            row("File", &title);
+            row("Path", &path);
+            row("Size", &size);
+            row("Pages", &total.to_string());
+            row("Title", meta.title.as_deref().unwrap_or("—"));
+            row("Author", meta.author.as_deref().unwrap_or("—"));
+            row("Subject", meta.subject.as_deref().unwrap_or("—"));
+            row("Keywords", meta.keywords.as_deref().unwrap_or("—"));
+            row("Producer", meta.producer.as_deref().unwrap_or("—"));
+        });
 
         if !open {
             self.props_open = false;
@@ -5341,68 +5361,62 @@ impl YouPdfApp {
         let mut apply = false;
         let mut clear = false;
         let total = self.active_total();
-        egui::Window::new("Watermark")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(360.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Text").size(12.0).color(pal().muted));
-                    ui.add(TextEdit::singleline(&mut self.watermark.text).desired_width(230.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Size").size(12.0).color(pal().muted));
-                    ui.add(
-                        egui::DragValue::new(&mut self.watermark.font_size).range(6.0..=200.0),
-                    );
-                    ui.label(RichText::new("Angle").size(12.0).color(pal().muted));
-                    ui.add(
-                        egui::DragValue::new(&mut self.watermark.rotation_deg).range(-90.0..=90.0),
-                    );
-                    ui.checkbox(&mut self.watermark.tiled, "Tiled");
-                });
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Opacity").size(12.0).color(pal().muted));
-                    ui.add(
-                        egui::Slider::new(&mut self.watermark.opacity, 0.05..=1.0).show_value(false),
-                    );
-                    ui.label(
-                        RichText::new(format!("{:.0} %", self.watermark.opacity * 100.0))
-                            .size(12.0)
-                            .color(pal().icon_bright),
-                    );
-                    ui.label(RichText::new("Grey").size(12.0).color(pal().muted));
-                    let mut grey = self.watermark.color[0];
-                    if ui
-                        .add(egui::Slider::new(&mut grey, 0..=255).show_value(false))
-                        .changed()
-                    {
-                        self.watermark.color = [grey, grey, grey];
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
-                    let mut all = self.watermark_from.is_none();
-                    if ui.checkbox(&mut all, format!("All ({total})")).changed() {
-                        self.watermark_from = if all { None } else { Some(1) };
-                    }
-                    if let Some(from) = self.watermark_from.as_mut() {
-                        ui.label(RichText::new("then from").size(12.0).color(pal().muted));
-                        ui.add(egui::DragValue::new(from).range(1..=total));
-                    }
-                });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Apply").clicked() {
-                        apply = true;
-                    }
-                    if ui.button("Remove from the document").clicked() {
-                        clear = true;
-                    }
-                });
+        self.show_modal(ctx, "modal-watermark", "Watermark", 360.0, &mut open, |app, ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Text").size(12.0).color(pal().muted));
+                ui.add(TextEdit::singleline(&mut app.watermark.text).desired_width(230.0));
             });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Size").size(12.0).color(pal().muted));
+                ui.add(
+                    egui::DragValue::new(&mut app.watermark.font_size).range(6.0..=200.0),
+                );
+                ui.label(RichText::new("Angle").size(12.0).color(pal().muted));
+                ui.add(
+                    egui::DragValue::new(&mut app.watermark.rotation_deg).range(-90.0..=90.0),
+                );
+                ui.checkbox(&mut app.watermark.tiled, "Tiled");
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Opacity").size(12.0).color(pal().muted));
+                ui.add(
+                    egui::Slider::new(&mut app.watermark.opacity, 0.05..=1.0).show_value(false),
+                );
+                ui.label(
+                    RichText::new(format!("{:.0} %", app.watermark.opacity * 100.0))
+                        .size(12.0)
+                        .color(pal().icon_bright),
+                );
+                ui.label(RichText::new("Grey").size(12.0).color(pal().muted));
+                let mut grey = app.watermark.color[0];
+                if ui
+                    .add(egui::Slider::new(&mut grey, 0..=255).show_value(false))
+                    .changed()
+                {
+                    app.watermark.color = [grey, grey, grey];
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
+                let mut all = app.watermark_from.is_none();
+                if ui.checkbox(&mut all, format!("All ({total})")).changed() {
+                    app.watermark_from = if all { None } else { Some(1) };
+                }
+                if let Some(from) = app.watermark_from.as_mut() {
+                    ui.label(RichText::new("then from").size(12.0).color(pal().muted));
+                    ui.add(egui::DragValue::new(from).range(1..=total));
+                }
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Apply").clicked() {
+                    apply = true;
+                }
+                if ui.button("Remove from the document").clicked() {
+                    clear = true;
+                }
+            });
+        });
 
         if apply {
             self.watermark.pages = Self::page_range_from(self.watermark_from);
@@ -5448,88 +5462,82 @@ impl YouPdfApp {
         let mut apply = false;
         let mut clear = false;
         let total = self.active_total();
-        egui::Window::new("Header & footer")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(460.0);
-                ui.label(
-                    RichText::new(
-                        "Each band has its own three slots; the page number joins the \
-                         footer centre.",
-                    )
-                    .size(11.0)
-                    .color(pal().muted),
-                );
+        self.show_modal(ctx, "modal-header-footer", "Header & footer", 460.0, &mut open, |app, ui| {
+            ui.label(
+                RichText::new(
+                    "Each band has its own three slots; the page number joins the \
+                     footer centre.",
+                )
+                .size(11.0)
+                .color(pal().muted),
+            );
+            ui.add_space(4.0);
+            for (label, slots) in [
+                ("Header", &mut app.header_footer.header),
+                ("Footer", &mut app.header_footer.footer),
+            ] {
+                ui.label(RichText::new(label).size(11.5).color(pal().icon_bright));
+                egui::Grid::new(format!("hf-grid-{label}"))
+                    .num_columns(3)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("Left").size(11.0).color(pal().muted));
+                        ui.label(RichText::new("Centre").size(11.0).color(pal().muted));
+                        ui.label(RichText::new("Right").size(11.0).color(pal().muted));
+                        ui.end_row();
+                        ui.add(TextEdit::singleline(&mut slots.left).desired_width(140.0));
+                        ui.add(TextEdit::singleline(&mut slots.center).desired_width(140.0));
+                        ui.add(TextEdit::singleline(&mut slots.right).desired_width(140.0));
+                        ui.end_row();
+                    });
                 ui.add_space(4.0);
-                for (label, slots) in [
-                    ("Header", &mut self.header_footer.header),
-                    ("Footer", &mut self.header_footer.footer),
+            }
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Page numbers").size(12.0).color(pal().muted));
+                for (text, style) in [
+                    ("None", None),
+                    ("1", Some(NumberStyle::Numeric)),
+                    ("1 / n", Some(NumberStyle::NumericTotal)),
+                    ("i", Some(NumberStyle::Roman)),
                 ] {
-                    ui.label(RichText::new(label).size(11.5).color(pal().icon_bright));
-                    egui::Grid::new(format!("hf-grid-{label}"))
-                        .num_columns(3)
-                        .spacing([8.0, 4.0])
-                        .show(ui, |ui| {
-                            ui.label(RichText::new("Left").size(11.0).color(pal().muted));
-                            ui.label(RichText::new("Centre").size(11.0).color(pal().muted));
-                            ui.label(RichText::new("Right").size(11.0).color(pal().muted));
-                            ui.end_row();
-                            ui.add(TextEdit::singleline(&mut slots.left).desired_width(140.0));
-                            ui.add(TextEdit::singleline(&mut slots.center).desired_width(140.0));
-                            ui.add(TextEdit::singleline(&mut slots.right).desired_width(140.0));
-                            ui.end_row();
-                        });
-                    ui.add_space(4.0);
+                    if ui
+                        .selectable_label(app.header_footer.page_numbers == style, text)
+                        .clicked()
+                    {
+                        app.header_footer.page_numbers = style;
+                    }
                 }
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Page numbers").size(12.0).color(pal().muted));
-                    for (text, style) in [
-                        ("None", None),
-                        ("1", Some(NumberStyle::Numeric)),
-                        ("1 / n", Some(NumberStyle::NumericTotal)),
-                        ("i", Some(NumberStyle::Roman)),
-                    ] {
-                        if ui
-                            .selectable_label(self.header_footer.page_numbers == style, text)
-                            .clicked()
-                        {
-                            self.header_footer.page_numbers = style;
-                        }
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Start at").size(12.0).color(pal().muted));
-                    ui.add(egui::DragValue::new(&mut self.header_footer.start_page).range(1..=total));
-                    ui.checkbox(&mut self.header_footer.skip_first_page, "Skip first page");
-                    ui.label(RichText::new("Size").size(12.0).color(pal().muted));
-                    ui.add(egui::DragValue::new(&mut self.header_footer.font_size).range(4.0..=36.0));
-                    ui.label(RichText::new("Margin").size(12.0).color(pal().muted));
-                    ui.add(egui::DragValue::new(&mut self.header_footer.margin).range(0.0..=120.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
-                    let mut all = self.header_footer_from.is_none();
-                    if ui.checkbox(&mut all, format!("All ({total})")).changed() {
-                        self.header_footer_from = if all { None } else { Some(1) };
-                    }
-                    if let Some(from) = self.header_footer_from.as_mut() {
-                        ui.label(RichText::new("then from").size(12.0).color(pal().muted));
-                        ui.add(egui::DragValue::new(from).range(1..=total));
-                    }
-                });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Apply").clicked() {
-                        apply = true;
-                    }
-                    if ui.button("Remove from the document").clicked() {
-                        clear = true;
-                    }
-                });
             });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Start at").size(12.0).color(pal().muted));
+                ui.add(egui::DragValue::new(&mut app.header_footer.start_page).range(1..=total));
+                ui.checkbox(&mut app.header_footer.skip_first_page, "Skip first page");
+                ui.label(RichText::new("Size").size(12.0).color(pal().muted));
+                ui.add(egui::DragValue::new(&mut app.header_footer.font_size).range(4.0..=36.0));
+                ui.label(RichText::new("Margin").size(12.0).color(pal().muted));
+                ui.add(egui::DragValue::new(&mut app.header_footer.margin).range(0.0..=120.0));
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
+                let mut all = app.header_footer_from.is_none();
+                if ui.checkbox(&mut all, format!("All ({total})")).changed() {
+                    app.header_footer_from = if all { None } else { Some(1) };
+                }
+                if let Some(from) = app.header_footer_from.as_mut() {
+                    ui.label(RichText::new("then from").size(12.0).color(pal().muted));
+                    ui.add(egui::DragValue::new(from).range(1..=total));
+                }
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Apply").clicked() {
+                    apply = true;
+                }
+                if ui.button("Remove from the document").clicked() {
+                    clear = true;
+                }
+            });
+        });
 
         if apply {
             self.header_footer.pages = Self::page_range_from(self.header_footer_from);
@@ -5573,47 +5581,41 @@ impl YouPdfApp {
         }
         let mut open = true;
         let mut run = false;
-        egui::Window::new("Compress")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(380.0);
-                ui.label(
-                    RichText::new(
-                        "Streams are deflated and unreachable objects are dropped.                          Fonts are not subset, so a text-only file barely shrinks.",
-                    )
-                    .size(12.0)
-                    .color(pal().muted),
-                );
-                ui.add_space(8.0);
-                ui.label(RichText::new("Image quality").size(12.0).color(pal().muted));
-                for level in CompressionLevel::ALL {
-                    if ui
-                        .selectable_label(self.compress_level == level, level.display_name())
-                        .clicked()
-                    {
-                        self.compress_level = level;
-                    }
+        self.show_modal(ctx, "modal-compress", "Compress", 380.0, &mut open, |app, ui| {
+            ui.label(
+                RichText::new(
+                    "Streams are deflated and unreachable objects are dropped.                          Fonts are not subset, so a text-only file barely shrinks.",
+                )
+                .size(12.0)
+                .color(pal().muted),
+            );
+            ui.add_space(8.0);
+            ui.label(RichText::new("Image quality").size(12.0).color(pal().muted));
+            for level in CompressionLevel::ALL {
+                if ui
+                    .selectable_label(app.compress_level == level, level.display_name())
+                    .clicked()
+                {
+                    app.compress_level = level;
                 }
+            }
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(
+                    "Images are resampled to the chosen resolution and re-encoded as JPEG.                          A stream is replaced only when the result is smaller.",
+                )
+                .size(11.0)
+                .color(pal().muted),
+            );
+            if let Some(report) = app.compress_report.clone() {
                 ui.add_space(6.0);
-                ui.label(
-                    RichText::new(
-                        "Images are resampled to the chosen resolution and re-encoded as JPEG.                          A stream is replaced only when the result is smaller.",
-                    )
-                    .size(11.0)
-                    .color(pal().muted),
-                );
-                if let Some(report) = self.compress_report.clone() {
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(report).size(12.0).color(pal().icon_bright));
-                }
-                ui.add_space(8.0);
-                if ui.button("Save compressed copy…").clicked() {
-                    run = true;
-                }
-            });
+                ui.label(RichText::new(report).size(12.0).color(pal().icon_bright));
+            }
+            ui.add_space(8.0);
+            if ui.button("Save compressed copy…").clicked() {
+                run = true;
+            }
+        });
         if run {
             self.compress_active(ctx);
         }
@@ -5710,77 +5712,71 @@ impl YouPdfApp {
         }
         let mut open = true;
         let mut run = false;
-        egui::Window::new("Protect")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(420.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Encryption").size(12.0).color(pal().muted));
-                    for strength in [EncryptionStrength::Aes256, EncryptionStrength::Rc4_128] {
-                        if ui
-                            .selectable_label(
-                                self.protect.strength == strength,
-                                strength.display_name(),
-                            )
-                            .clicked()
-                        {
-                            self.protect.strength = strength;
-                        }
+        self.show_modal(ctx, "modal-protect", "Protect", 420.0, &mut open, |app, ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Encryption").size(12.0).color(pal().muted));
+                for strength in [EncryptionStrength::Aes256, EncryptionStrength::Rc4_128] {
+                    if ui
+                        .selectable_label(
+                            app.protect.strength == strength,
+                            strength.display_name(),
+                        )
+                        .clicked()
+                    {
+                        app.protect.strength = strength;
                     }
-                });
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Open password").size(12.0).color(pal().muted));
-                    ui.add(
-                        TextEdit::singleline(&mut self.protect.user_password)
-                            .password(true)
-                            .desired_width(190.0),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Permissions password").size(12.0).color(pal().muted));
-                    ui.add(
-                        TextEdit::singleline(&mut self.protect.owner_password)
-                            .password(true)
-                            .desired_width(150.0),
-                    );
-                });
-                ui.add_space(6.0);
-                ui.label(RichText::new("Allowed actions").size(12.0).color(pal().muted));
-                egui::Grid::new("protect-perms")
-                    .num_columns(3)
-                    .spacing([14.0, 4.0])
-                    .show(ui, |ui| {
-                        ui.checkbox(&mut self.protect.permissions.print, "Print");
-                        ui.checkbox(
-                            &mut self.protect.permissions.print_high_quality,
-                            "High-quality print",
-                        );
-                        ui.checkbox(&mut self.protect.permissions.copy, "Copy text");
-                        ui.end_row();
-                        ui.checkbox(&mut self.protect.permissions.modify, "Modify");
-                        ui.checkbox(&mut self.protect.permissions.annotate, "Comment");
-                        ui.checkbox(&mut self.protect.permissions.fill_forms, "Fill forms");
-                        ui.end_row();
-                        ui.checkbox(&mut self.protect.permissions.assemble, "Assemble");
-                        ui.checkbox(&mut self.protect.permissions.accessibility, "Accessibility");
-                        ui.end_row();
-                    });
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(
-                        "The copy is encrypted on disk; the document in the window stays open                          and unencrypted.",
-                    )
-                    .size(11.0)
-                    .color(pal().muted),
-                );
-                ui.add_space(6.0);
-                if ui.button("Save encrypted copy…").clicked() {
-                    run = true;
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Open password").size(12.0).color(pal().muted));
+                ui.add(
+                    TextEdit::singleline(&mut app.protect.user_password)
+                        .password(true)
+                        .desired_width(190.0),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Permissions password").size(12.0).color(pal().muted));
+                ui.add(
+                    TextEdit::singleline(&mut app.protect.owner_password)
+                        .password(true)
+                        .desired_width(150.0),
+                );
+            });
+            ui.add_space(6.0);
+            ui.label(RichText::new("Allowed actions").size(12.0).color(pal().muted));
+            egui::Grid::new("protect-perms")
+                .num_columns(3)
+                .spacing([14.0, 4.0])
+                .show(ui, |ui| {
+                    ui.checkbox(&mut app.protect.permissions.print, "Print");
+                    ui.checkbox(
+                        &mut app.protect.permissions.print_high_quality,
+                        "High-quality print",
+                    );
+                    ui.checkbox(&mut app.protect.permissions.copy, "Copy text");
+                    ui.end_row();
+                    ui.checkbox(&mut app.protect.permissions.modify, "Modify");
+                    ui.checkbox(&mut app.protect.permissions.annotate, "Comment");
+                    ui.checkbox(&mut app.protect.permissions.fill_forms, "Fill forms");
+                    ui.end_row();
+                    ui.checkbox(&mut app.protect.permissions.assemble, "Assemble");
+                    ui.checkbox(&mut app.protect.permissions.accessibility, "Accessibility");
+                    ui.end_row();
+                });
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(
+                    "The copy is encrypted on disk; the document in the window stays open                          and unencrypted.",
+                )
+                .size(11.0)
+                .color(pal().muted),
+            );
+            ui.add_space(6.0);
+            if ui.button("Save encrypted copy…").clicked() {
+                run = true;
+            }
+        });
         if run {
             self.protect_active(ctx);
         }
@@ -5833,49 +5829,43 @@ impl YouPdfApp {
         let mut open = true;
         let mut apply = false;
         let mut reset = false;
-        egui::Window::new("Crop pages")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(340.0);
-                ui.label(
-                    RichText::new(
-                        "Margins removed from every edge, in points (72 pt = 1 inch). \
-                         Negative values grow the page.",
-                    )
-                    .size(11.0)
-                    .color(pal().muted),
-                );
-                ui.add_space(6.0);
-                egui::Grid::new("crop-grid")
-                    .num_columns(2)
-                    .spacing([8.0, 4.0])
-                    .show(ui, |ui| {
-                        for (label, value) in [
-                            ("Left", &mut self.crop.left),
-                            ("Right", &mut self.crop.right),
-                            ("Top", &mut self.crop.top),
-                            ("Bottom", &mut self.crop.bottom),
-                        ] {
-                            ui.label(RichText::new(label).size(12.0).color(pal().muted));
-                            ui.add(
-                                egui::DragValue::new(value).range(-500.0..=500.0).speed(0.5),
-                            );
-                            ui.end_row();
-                        }
-                    });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Apply").clicked() {
-                        apply = true;
-                    }
-                    if ui.button("Reset crop").clicked() {
-                        reset = true;
+        self.show_modal(ctx, "modal-crop", "Crop pages", 340.0, &mut open, |app, ui| {
+            ui.label(
+                RichText::new(
+                    "Margins removed from every edge, in points (72 pt = 1 inch). \
+                     Negative values grow the page.",
+                )
+                .size(11.0)
+                .color(pal().muted),
+            );
+            ui.add_space(6.0);
+            egui::Grid::new("crop-grid")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    for (label, value) in [
+                        ("Left", &mut app.crop.left),
+                        ("Right", &mut app.crop.right),
+                        ("Top", &mut app.crop.top),
+                        ("Bottom", &mut app.crop.bottom),
+                    ] {
+                        ui.label(RichText::new(label).size(12.0).color(pal().muted));
+                        ui.add(
+                            egui::DragValue::new(value).range(-500.0..=500.0).speed(0.5),
+                        );
+                        ui.end_row();
                     }
                 });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Apply").clicked() {
+                    apply = true;
+                }
+                if ui.button("Reset crop").clicked() {
+                    reset = true;
+                }
             });
+        });
 
         let pages: Vec<usize> = (1..=self.active_total() as usize).collect();
         if apply {
@@ -5928,96 +5918,90 @@ impl YouPdfApp {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned());
-        egui::Window::new("Background")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(380.0);
+        self.show_modal(ctx, "modal-background", "Background", 380.0, &mut open, |app, ui| {
+            ui.label(
+                RichText::new(
+                    "The background is painted behind the page content and prints with \
+                     the document.",
+                )
+                .size(11.0)
+                .color(pal().muted),
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Colour").size(12.0).color(pal().muted));
+                let [mut r, mut g, mut b] = app.background.color;
+                let mut changed = false;
+                changed |= ui
+                    .add(egui::Slider::new(&mut r, 0..=255).show_value(false))
+                    .changed();
+                changed |= ui
+                    .add(egui::Slider::new(&mut g, 0..=255).show_value(false))
+                    .changed();
+                changed |= ui
+                    .add(egui::Slider::new(&mut b, 0..=255).show_value(false))
+                    .changed();
+                if changed {
+                    app.background.color = [r, g, b];
+                }
+                let (rect, _) = ui.allocate_exact_size(vec2(24.0, 18.0), Sense::hover());
+                ui.painter().rect_filled(
+                    rect,
+                    Rounding::same(4.0),
+                    Color32::from_rgb(r, g, b),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Opacity").size(12.0).color(pal().muted));
+                ui.add(
+                    egui::Slider::new(&mut app.background.opacity, 0.05..=1.0)
+                        .show_value(false),
+                );
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Choose an image…").clicked() {
+                    choose = true;
+                }
                 ui.label(
                     RichText::new(
-                        "The background is painted behind the page content and prints with \
-                         the document.",
+                        image_name
+                            .clone()
+                            .unwrap_or_else(|| "No image (colour fill)".to_owned()),
                     )
                     .size(11.0)
                     .color(pal().muted),
                 );
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Colour").size(12.0).color(pal().muted));
-                    let [mut r, mut g, mut b] = self.background.color;
-                    let mut changed = false;
-                    changed |= ui
-                        .add(egui::Slider::new(&mut r, 0..=255).show_value(false))
-                        .changed();
-                    changed |= ui
-                        .add(egui::Slider::new(&mut g, 0..=255).show_value(false))
-                        .changed();
-                    changed |= ui
-                        .add(egui::Slider::new(&mut b, 0..=255).show_value(false))
-                        .changed();
-                    if changed {
-                        self.background.color = [r, g, b];
-                    }
-                    let (rect, _) = ui.allocate_exact_size(vec2(24.0, 18.0), Sense::hover());
-                    ui.painter().rect_filled(
-                        rect,
-                        Rounding::same(4.0),
-                        Color32::from_rgb(r, g, b),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Opacity").size(12.0).color(pal().muted));
-                    ui.add(
-                        egui::Slider::new(&mut self.background.opacity, 0.05..=1.0)
-                            .show_value(false),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("Choose an image…").clicked() {
-                        choose = true;
-                    }
-                    ui.label(
-                        RichText::new(
-                            image_name
-                                .clone()
-                                .unwrap_or_else(|| "No image (colour fill)".to_owned()),
-                        )
-                        .size(11.0)
-                        .color(pal().muted),
-                    );
-                    if self.background.image.is_some() && ui.small_button("Remove").clicked() {
-                        self.background.image = None;
-                    }
-                });
-                if self.background.image.is_some() {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Image scale").size(12.0).color(pal().muted));
-                        ui.add(egui::Slider::new(&mut self.background.scale, 0.2..=2.0));
-                    });
+                if app.background.image.is_some() && ui.small_button("Remove").clicked() {
+                    app.background.image = None;
                 }
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
-                    let mut all = self.background_from.is_none();
-                    if ui.checkbox(&mut all, format!("All ({total})")).changed() {
-                        self.background_from = if all { None } else { Some(1) };
-                    }
-                    if let Some(from) = self.background_from.as_mut() {
-                        ui.label(RichText::new("from").size(12.0).color(pal().muted));
-                        ui.add(egui::DragValue::new(from).range(1..=total));
-                    }
-                });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Apply").clicked() {
-                        apply = true;
-                    }
-                    if ui.button("Remove from the document").clicked() {
-                        clear = true;
-                    }
-                });
             });
+            if app.background.image.is_some() {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Image scale").size(12.0).color(pal().muted));
+                    ui.add(egui::Slider::new(&mut app.background.scale, 0.2..=2.0));
+                });
+            }
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
+                let mut all = app.background_from.is_none();
+                if ui.checkbox(&mut all, format!("All ({total})")).changed() {
+                    app.background_from = if all { None } else { Some(1) };
+                }
+                if let Some(from) = app.background_from.as_mut() {
+                    ui.label(RichText::new("from").size(12.0).color(pal().muted));
+                    ui.add(egui::DragValue::new(from).range(1..=total));
+                }
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Apply").clicked() {
+                    apply = true;
+                }
+                if ui.button("Remove from the document").clicked() {
+                    clear = true;
+                }
+            });
+        });
 
         if choose {
             if let Some(path) = rfd::FileDialog::new()
@@ -6071,84 +6055,78 @@ impl YouPdfApp {
         let mut apply = false;
         let mut clear = false;
         let total = self.active_total();
-        egui::Window::new("Bates numbering")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(380.0);
-                ui.label(
-                    RichText::new(
-                        "A sequential stamp on every chosen page, for legal discovery and \
-                         document control.",
-                    )
-                    .size(11.0)
-                    .color(pal().muted),
-                );
-                ui.add_space(6.0);
-                egui::Grid::new("bates-grid")
-                    .num_columns(2)
-                    .spacing([8.0, 4.0])
-                    .show(ui, |ui| {
-                        ui.label(RichText::new("Prefix").size(12.0).color(pal().muted));
-                        ui.add(
-                            TextEdit::singleline(&mut self.bates.prefix).desired_width(160.0),
-                        );
-                        ui.end_row();
-                        ui.label(RichText::new("Suffix").size(12.0).color(pal().muted));
-                        ui.add(
-                            TextEdit::singleline(&mut self.bates.suffix).desired_width(160.0),
-                        );
-                        ui.end_row();
-                        ui.label(RichText::new("Start at").size(12.0).color(pal().muted));
-                        ui.add(egui::DragValue::new(&mut self.bates.start).range(0..=999_999));
-                        ui.end_row();
-                        ui.label(RichText::new("Digits").size(12.0).color(pal().muted));
-                        ui.add(egui::DragValue::new(&mut self.bates.digits).range(1..=12));
-                        ui.end_row();
-                        ui.label(RichText::new("Font size").size(12.0).color(pal().muted));
-                        ui.add(
-                            egui::DragValue::new(&mut self.bates.font_size).range(4.0..=72.0),
-                        );
-                        ui.end_row();
-                        ui.label(RichText::new("Margin").size(12.0).color(pal().muted));
-                        ui.add(egui::DragValue::new(&mut self.bates.margin).range(0.0..=200.0));
-                        ui.end_row();
-                    });
-                ui.add_space(4.0);
-                ui.label(RichText::new("Position").size(12.0).color(pal().muted));
-                ui.horizontal_wrapped(|ui| {
-                    for (position, label) in BATES_POSITIONS {
-                        if ui
-                            .selectable_label(self.bates.position == position, label)
-                            .clicked()
-                        {
-                            self.bates.position = position;
-                        }
-                    }
+        self.show_modal(ctx, "modal-bates", "Bates numbering", 380.0, &mut open, |app, ui| {
+            ui.label(
+                RichText::new(
+                    "A sequential stamp on every chosen page, for legal discovery and \
+                     document control.",
+                )
+                .size(11.0)
+                .color(pal().muted),
+            );
+            ui.add_space(6.0);
+            egui::Grid::new("bates-grid")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Prefix").size(12.0).color(pal().muted));
+                    ui.add(
+                        TextEdit::singleline(&mut app.bates.prefix).desired_width(160.0),
+                    );
+                    ui.end_row();
+                    ui.label(RichText::new("Suffix").size(12.0).color(pal().muted));
+                    ui.add(
+                        TextEdit::singleline(&mut app.bates.suffix).desired_width(160.0),
+                    );
+                    ui.end_row();
+                    ui.label(RichText::new("Start at").size(12.0).color(pal().muted));
+                    ui.add(egui::DragValue::new(&mut app.bates.start).range(0..=999_999));
+                    ui.end_row();
+                    ui.label(RichText::new("Digits").size(12.0).color(pal().muted));
+                    ui.add(egui::DragValue::new(&mut app.bates.digits).range(1..=12));
+                    ui.end_row();
+                    ui.label(RichText::new("Font size").size(12.0).color(pal().muted));
+                    ui.add(
+                        egui::DragValue::new(&mut app.bates.font_size).range(4.0..=72.0),
+                    );
+                    ui.end_row();
+                    ui.label(RichText::new("Margin").size(12.0).color(pal().muted));
+                    ui.add(egui::DragValue::new(&mut app.bates.margin).range(0.0..=200.0));
+                    ui.end_row();
                 });
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
-                    let mut all = self.bates_from.is_none();
-                    if ui.checkbox(&mut all, format!("All ({total})")).changed() {
-                        self.bates_from = if all { None } else { Some(1) };
+            ui.add_space(4.0);
+            ui.label(RichText::new("Position").size(12.0).color(pal().muted));
+            ui.horizontal_wrapped(|ui| {
+                for (position, label) in BATES_POSITIONS {
+                    if ui
+                        .selectable_label(app.bates.position == position, label)
+                        .clicked()
+                    {
+                        app.bates.position = position;
                     }
-                    if let Some(from) = self.bates_from.as_mut() {
-                        ui.label(RichText::new("from").size(12.0).color(pal().muted));
-                        ui.add(egui::DragValue::new(from).range(1..=total));
-                    }
-                });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Apply").clicked() {
-                        apply = true;
-                    }
-                    if ui.button("Remove from the document").clicked() {
-                        clear = true;
-                    }
-                });
+                }
             });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
+                let mut all = app.bates_from.is_none();
+                if ui.checkbox(&mut all, format!("All ({total})")).changed() {
+                    app.bates_from = if all { None } else { Some(1) };
+                }
+                if let Some(from) = app.bates_from.as_mut() {
+                    ui.label(RichText::new("from").size(12.0).color(pal().muted));
+                    ui.add(egui::DragValue::new(from).range(1..=total));
+                }
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Apply").clicked() {
+                    apply = true;
+                }
+                if ui.button("Remove from the document").clicked() {
+                    clear = true;
+                }
+            });
+        });
 
         if apply {
             self.bates.pages = Self::page_range_from(self.bates_from);
@@ -6321,77 +6299,71 @@ impl YouPdfApp {
         }
         let installed = self.ocr_installed;
         let languages = self.ocr_languages.clone();
-        egui::Window::new("OCR")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(430.0);
-                ui.label(
-                    RichText::new(if installed {
-                        "Tesseract (system)"
-                    } else {
-                        "Tesseract (not installed)"
-                    })
-                    .size(12.0)
-                    .color(if installed { pal().icon_bright } else { pal().redact_red }),
-                );
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Language").size(12.0).color(pal().muted));
-                    ui.add(TextEdit::singleline(&mut self.ocr_language).desired_width(90.0));
-                    if !languages.is_empty() {
-                        let mut picked: Option<String> = None;
-                        egui::ComboBox::from_id_salt("ocr-lang")
-                            .selected_text(self.ocr_language.clone())
-                            .show_ui(ui, |ui| {
-                                for lang in languages.iter().take(300) {
-                                    if ui
-                                        .selectable_label(self.ocr_language == *lang, lang)
-                                        .clicked()
-                                    {
-                                        picked = Some(lang.clone());
-                                    }
+        self.show_modal(ctx, "modal-ocr", "OCR", 430.0, &mut open, |app, ui| {
+            ui.label(
+                RichText::new(if installed {
+                    "Tesseract (system)"
+                } else {
+                    "Tesseract (not installed)"
+                })
+                .size(12.0)
+                .color(if installed { pal().icon_bright } else { pal().redact_red }),
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Language").size(12.0).color(pal().muted));
+                ui.add(TextEdit::singleline(&mut app.ocr_language).desired_width(90.0));
+                if !languages.is_empty() {
+                    let mut picked: Option<String> = None;
+                    egui::ComboBox::from_id_salt("ocr-lang")
+                        .selected_text(app.ocr_language.clone())
+                        .show_ui(ui, |ui| {
+                            for lang in languages.iter().take(300) {
+                                if ui
+                                    .selectable_label(app.ocr_language == *lang, lang)
+                                    .clicked()
+                                {
+                                    picked = Some(lang.clone());
                                 }
-                            });
-                        if let Some(lang) = picked {
-                            self.ocr_language = lang;
-                        }
+                            }
+                        });
+                    if let Some(lang) = picked {
+                        app.ocr_language = lang;
                     }
-                });
-                ui.add_space(6.0);
-                ui.label(RichText::new("Output").size(12.0).color(pal().muted));
-                for &(mode, label, detail) in OcrMode::ALL {
-                    if ui
-                        .selectable_label(self.ocr_mode == mode, format!("{label} — {detail}"))
-                        .clicked()
-                    {
-                        self.ocr_mode = mode;
-                    }
-                }
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(
-                        "Recognition rewrites the document: each page becomes an image plus \
-                         an invisible text layer. It runs on the interface thread and can \
-                         take a while on a long scan.",
-                    )
-                    .size(11.0)
-                    .color(pal().muted),
-                );
-                ui.add_space(6.0);
-                if ui
-                    .add_enabled(installed, egui::Button::new("Recognise"))
-                    .clicked()
-                {
-                    run = true;
-                }
-                if let Some(report) = &self.ocr_report {
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(report).size(11.0).color(pal().icon_bright));
                 }
             });
+            ui.add_space(6.0);
+            ui.label(RichText::new("Output").size(12.0).color(pal().muted));
+            for &(mode, label, detail) in OcrMode::ALL {
+                if ui
+                    .selectable_label(app.ocr_mode == mode, format!("{label} — {detail}"))
+                    .clicked()
+                {
+                    app.ocr_mode = mode;
+                }
+            }
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(
+                    "Recognition rewrites the document: each page becomes an image plus \
+                     an invisible text layer. It runs on the interface thread and can \
+                     take a while on a long scan.",
+                )
+                .size(11.0)
+                .color(pal().muted),
+            );
+            ui.add_space(6.0);
+            if ui
+                .add_enabled(installed, egui::Button::new("Recognise"))
+                .clicked()
+            {
+                run = true;
+            }
+            if let Some(report) = &app.ocr_report {
+                ui.add_space(6.0);
+                ui.label(RichText::new(report).size(11.0).color(pal().icon_bright));
+            }
+        });
 
         if run {
             let language = self.ocr_language.clone();
@@ -6433,37 +6405,31 @@ impl YouPdfApp {
         let mut open = true;
         let mut make_blank = false;
         let mut images = false;
-        egui::Window::new("Create")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(380.0);
-                ui.label(RichText::new("Blank document").size(12.0).color(pal().muted));
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
-                    ui.add(egui::DragValue::new(&mut self.create_pages).range(1..=500));
-                    if ui.button("Create blank").clicked() {
-                        make_blank = true;
-                    }
-                });
-                ui.add_space(10.0);
-                ui.separator();
-                ui.add_space(10.0);
-                ui.label(RichText::new("From images").size(12.0).color(pal().muted));
-                ui.label(
-                    RichText::new(
-                        "One page per image, in the order chosen. PNG and JPEG are read.",
-                    )
-                    .size(11.0)
-                    .color(pal().muted),
-                );
-                ui.add_space(4.0);
-                if ui.button("Choose images…").clicked() {
-                    images = true;
+        self.show_modal(ctx, "modal-create", "Create", 380.0, &mut open, |app, ui| {
+            ui.label(RichText::new("Blank document").size(12.0).color(pal().muted));
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
+                ui.add(egui::DragValue::new(&mut app.create_pages).range(1..=500));
+                if ui.button("Create blank").clicked() {
+                    make_blank = true;
                 }
             });
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(10.0);
+            ui.label(RichText::new("From images").size(12.0).color(pal().muted));
+            ui.label(
+                RichText::new(
+                    "One page per image, in the order chosen. PNG and JPEG are read.",
+                )
+                .size(11.0)
+                .color(pal().muted),
+            );
+            ui.add_space(4.0);
+            if ui.button("Choose images…").clicked() {
+                images = true;
+            }
+        });
 
         if make_blank {
             match blank_document(self.create_pages.max(1), 595.0, 842.0) {
@@ -6638,43 +6604,37 @@ impl YouPdfApp {
                 .unwrap_or_else(|| "This file".to_owned());
             (title, name, prompt.purpose)
         };
-        egui::Window::new(title)
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(340.0);
-                let prompt = self.password_prompt.as_mut().unwrap();
-                ui.label(
-                    RichText::new(format!("{name} is protected. Enter its password."))
-                        .size(12.0)
-                        .color(pal().icon_bright),
-                );
-                ui.add_space(6.0);
-                let resp = ui.add(
-                    TextEdit::singleline(&mut prompt.value)
-                        .password(true)
-                        .desired_width(300.0)
-                        .hint_text("Password"),
-                );
-                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        self.show_modal(ctx, "modal-password", title, 340.0, &mut open, |app, ui| {
+            let prompt = app.password_prompt.as_mut().unwrap();
+            ui.label(
+                RichText::new(format!("{name} is protected. Enter its password."))
+                    .size(12.0)
+                    .color(pal().icon_bright),
+            );
+            ui.add_space(6.0);
+            let resp = ui.add(
+                TextEdit::singleline(&mut prompt.value)
+                    .password(true)
+                    .desired_width(300.0)
+                    .hint_text("Password"),
+            );
+            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                submit = true;
+            }
+            if let Some(err) = &prompt.error {
+                ui.add_space(4.0);
+                ui.label(RichText::new(err).size(11.0).color(pal().redact_red));
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("OK").clicked() {
                     submit = true;
                 }
-                if let Some(err) = &prompt.error {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(err).size(11.0).color(pal().redact_red));
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
                 }
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        submit = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        cancel = true;
-                    }
-                });
             });
+        });
         if !open {
             cancel = true;
         }
@@ -6847,69 +6807,63 @@ impl YouPdfApp {
         }
         let mut open = true;
         let mut clear = false;
-        egui::Window::new("Measure")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(340.0);
-                ui.checkbox(&mut self.measure_active, "Draw on the page");
-                ui.add_space(6.0);
-                ui.label(RichText::new("Kind").size(12.0).color(pal().muted));
-                for kind in [
-                    MeasureKind::Distance,
-                    MeasureKind::Perimeter,
-                    MeasureKind::Area,
-                ] {
-                    if ui
-                        .selectable_label(self.measure_kind == kind, kind.display_name())
-                        .clicked()
-                    {
-                        self.measure_kind = kind;
-                    }
+        self.show_modal(ctx, "modal-measure", "Measure", 340.0, &mut open, |app, ui| {
+            ui.checkbox(&mut app.measure_active, "Draw on the page");
+            ui.add_space(6.0);
+            ui.label(RichText::new("Kind").size(12.0).color(pal().muted));
+            for kind in [
+                MeasureKind::Distance,
+                MeasureKind::Perimeter,
+                MeasureKind::Area,
+            ] {
+                if ui
+                    .selectable_label(app.measure_kind == kind, kind.display_name())
+                    .clicked()
+                {
+                    app.measure_kind = kind;
                 }
-                ui.add_space(6.0);
-                egui::Grid::new("measure-grid")
-                    .num_columns(2)
-                    .spacing([8.0, 4.0])
-                    .show(ui, |ui| {
-                        ui.label(RichText::new("Scale").size(12.0).color(pal().muted));
-                        ui.add(
-                            egui::DragValue::new(&mut self.measure_scale)
-                                .range(0.01..=10_000.0)
-                                .speed(1.0),
-                        );
-                        ui.end_row();
-                        ui.label(RichText::new("Unit").size(12.0).color(pal().muted));
-                        ui.add(
-                            TextEdit::singleline(&mut self.measure_unit).desired_width(80.0),
-                        );
-                        ui.end_row();
-                    });
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(
-                        "Scale is drawing points per real unit: 72 with unit \"in\" reads inches \
-                         at 1:1.",
-                    )
-                    .size(11.0)
-                    .color(pal().muted),
-                );
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(
-                        "Distance follows the drag; perimeter and area take the dragged \
-                         rectangle.",
-                    )
-                    .size(11.0)
-                    .color(pal().muted),
-                );
-                ui.add_space(8.0);
-                if ui.button("Remove all measurements").clicked() {
-                    clear = true;
-                }
-            });
+            }
+            ui.add_space(6.0);
+            egui::Grid::new("measure-grid")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Scale").size(12.0).color(pal().muted));
+                    ui.add(
+                        egui::DragValue::new(&mut app.measure_scale)
+                            .range(0.01..=10_000.0)
+                            .speed(1.0),
+                    );
+                    ui.end_row();
+                    ui.label(RichText::new("Unit").size(12.0).color(pal().muted));
+                    ui.add(
+                        TextEdit::singleline(&mut app.measure_unit).desired_width(80.0),
+                    );
+                    ui.end_row();
+                });
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(
+                    "Scale is drawing points per real unit: 72 with unit \"in\" reads inches \
+                     at 1:1.",
+                )
+                .size(11.0)
+                .color(pal().muted),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(
+                    "Distance follows the drag; perimeter and area take the dragged \
+                     rectangle.",
+                )
+                .size(11.0)
+                .color(pal().muted),
+            );
+            ui.add_space(8.0);
+            if ui.button("Remove all measurements").clicked() {
+                clear = true;
+            }
+        });
         if clear {
             let result = self
                 .tabs
