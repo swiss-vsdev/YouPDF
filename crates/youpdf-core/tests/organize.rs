@@ -615,3 +615,345 @@ fn move_page_across_subtrees_keeps_the_object() {
     expected.sort();
     assert_eq!(sorted, expected, "aucune page n'est perdue ni dupliquée");
 }
+
+/// Une pièce jointe ajoutée se relit, description comprise.
+#[test]
+fn ajout_de_piece_jointe_puis_relecture() {
+    let bytes = structured_pdf().expect("PDF structuré");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+
+    doc.add_attachment("table.csv", Some("relevé"), b"a,b\n")
+        .expect("ajout");
+
+    let attachments = doc.attachments();
+    assert_eq!(attachments.len(), 2, "l'ancienne reste, la nouvelle arrive");
+    assert_eq!(attachments[1].name, "table.csv");
+    assert_eq!(attachments[1].description.as_deref(), Some("relevé"));
+    assert_eq!(attachments[1].size, Some(4));
+    assert_eq!(doc.attachment_bytes(1).expect("contenu"), b"a,b\n");
+    // L'ancienne n'a pas bougé.
+    assert_eq!(doc.attachment_bytes(0).expect("contenu"), b"contenu joint");
+
+    // Le fichier écrit se relit comme un PDF normal.
+    let round = Document::from_bytes(&doc.to_bytes().expect("écriture")).expect("réouverture");
+    assert_eq!(round.attachments().len(), 2);
+    assert_eq!(round.attachment_bytes(1).expect("contenu"), b"a,b\n");
+}
+
+/// Ajouter un nom déjà présent remplace l'entrée au lieu de la dupliquer.
+#[test]
+fn ajout_du_meme_nom_remplace_l_entree() {
+    let bytes = structured_pdf().expect("PDF structuré");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+
+    doc.add_attachment("note.txt", None, b"nouveau contenu")
+        .expect("ajout");
+
+    let attachments = doc.attachments();
+    assert_eq!(attachments.len(), 1, "une seule entrée porte ce nom");
+    assert_eq!(attachments[0].name, "note.txt");
+    assert_eq!(
+        doc.attachment_bytes(0).expect("contenu"),
+        b"nouveau contenu"
+    );
+}
+
+/// Le retrait enlève l'entrée, son descripteur et son flux.
+#[test]
+fn retrait_de_piece_jointe_libere_les_objets() {
+    let bytes = structured_pdf().expect("PDF structuré");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+
+    doc.remove_attachment(0).expect("retrait");
+
+    assert!(doc.attachments().is_empty(), "plus aucune pièce jointe");
+    assert!(doc.attachment_bytes(0).is_err(), "plus de contenu à lire");
+    // Aucun descripteur ni flux embarqué ne subsiste dans le fichier.
+    let written = doc.to_bytes().expect("écriture");
+    let text = String::from_utf8_lossy(&written);
+    assert!(!text.contains("Filespec"), "descripteur resté dans le fichier");
+    assert!(!text.contains("EmbeddedFile"), "flux resté dans le fichier");
+    // Le reste de la structure est intact.
+    let round = Document::from_bytes(&written).expect("réouverture");
+    assert_eq!(round.outline().len(), 1);
+    assert_eq!(round.page_count(), 1);
+}
+
+/// Un index hors limites est refusé, sans toucher au document.
+#[test]
+fn retrait_hors_limites_est_refuse() {
+    let bytes = structured_pdf().expect("PDF structuré");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+
+    assert!(doc.remove_attachment(4).is_err());
+    assert_eq!(doc.attachments().len(), 1, "rien n'a été retiré");
+}
+
+/// L'arbre à plusieurs nœuds est aplati sans perdre d'entrée.
+#[test]
+fn ajout_dans_un_arbre_a_plusieurs_noeuds() {
+    let bytes = nested_attachments_pdf().expect("PDF à deux nœuds");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+    assert_eq!(doc.attachments().len(), 2, "les deux nœuds sont lus");
+
+    doc.add_attachment("c.txt", None, b"troisieme")
+        .expect("ajout");
+    assert_eq!(doc.attachments().len(), 3);
+    assert_eq!(doc.attachment_bytes(2).expect("contenu"), b"troisieme");
+
+    doc.remove_attachment(1).expect("retrait");
+    let names: Vec<String> = doc.attachments().into_iter().map(|a| a.name).collect();
+    assert_eq!(names, vec!["a.txt".to_owned(), "c.txt".to_owned()]);
+    assert_eq!(doc.attachment_bytes(1).expect("contenu"), b"troisieme");
+}
+
+/// PDF dont l'arbre `/EmbeddedFiles` a deux nœuds feuilles.
+fn nested_attachments_pdf() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut doc = LopdfDoc::with_version("1.7");
+    let page_id = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+    });
+    let pages_id = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![page_id.into()]),
+        "Count" => 1,
+    });
+
+    let mut leaves: Vec<Object> = Vec::new();
+    for (name, payload) in [("a.txt", b"premier".to_vec()), ("b.txt", b"second".to_vec())] {
+        let stream = doc.add_object(Stream::new(dictionary! {}, payload));
+        let filespec = doc.add_object(dictionary! {
+            "Type" => Object::Name(b"Filespec".to_vec()),
+            "F" => Object::string_literal(name),
+            "UF" => Object::string_literal(name),
+            "EF" => dictionary! { "F" => stream, "UF" => stream },
+        });
+        let leaf = doc.add_object(dictionary! {
+            "Names" => Object::Array(vec![Object::string_literal(name), filespec.into()]),
+        });
+        leaves.push(leaf.into());
+    }
+    let root = doc.add_object(dictionary! {
+        "Kids" => Object::Array(leaves),
+    });
+    let catalog_id = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => pages_id,
+        "Names" => dictionary! { "EmbeddedFiles" => root },
+    });
+    doc.trailer.set("Root", catalog_id);
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf)?;
+    Ok(buf)
+}
+
+/// PDF dont l'arbre mélange un descripteur en ligne et un descripteur
+/// indirect visant le même flux embarqué.
+fn tricky_attachments_pdf() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut doc = LopdfDoc::with_version("1.7");
+    let page = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+    });
+    let pages = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![page.into()]),
+        "Count" => 1,
+    });
+
+    let shared = doc.add_object(Stream::new(dictionary! {}, b"partage".to_vec()));
+    let inline = dictionary! {
+        "Type" => Object::Name(b"Filespec".to_vec()),
+        "F" => Object::string_literal("inline.txt"),
+        "UF" => Object::string_literal("inline.txt"),
+        "EF" => dictionary! { "F" => shared, "UF" => shared },
+    };
+    let indirect = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Filespec".to_vec()),
+        "F" => Object::string_literal("indirect.txt"),
+        "UF" => Object::string_literal("indirect.txt"),
+        "EF" => dictionary! { "F" => shared, "UF" => shared },
+    });
+    let tree = doc.add_object(dictionary! {
+        "Names" => Object::Array(vec![
+            Object::string_literal("inline.txt"),
+            Object::Dictionary(inline),
+            Object::string_literal("indirect.txt"),
+            Object::Reference(indirect),
+        ]),
+    });
+    let catalog = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => pages,
+        "Names" => dictionary! { "EmbeddedFiles" => tree },
+    });
+    doc.trailer.set("Root", catalog);
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf)?;
+    Ok(buf)
+}
+
+/// Un descripteur en ligne est listé, extrait et retiré comme les autres.
+#[test]
+fn descripteur_en_ligne_est_lu_extrait_et_retire() {
+    let bytes = tricky_attachments_pdf().expect("PDF");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+
+    let names: Vec<String> = doc.attachments().into_iter().map(|a| a.name).collect();
+    assert_eq!(names, vec!["inline.txt".to_owned(), "indirect.txt".to_owned()]);
+    assert_eq!(doc.attachment_bytes(0).expect("contenu"), b"partage");
+
+    doc.remove_attachment(0).expect("retrait");
+    let names: Vec<String> = doc.attachments().into_iter().map(|a| a.name).collect();
+    assert_eq!(names, vec!["indirect.txt".to_owned()]);
+    assert_eq!(doc.attachment_bytes(0).expect("contenu"), b"partage");
+}
+
+/// Deux descripteurs partageant un flux gardent leurs index, et le flux
+/// partagé survit au retrait de l'un d'eux.
+#[test]
+fn deux_descripteurs_partageant_un_flux_gardent_leur_index() {
+    let bytes = tricky_attachments_pdf().expect("PDF");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+
+    assert_eq!(doc.attachments().len(), 2);
+    assert_eq!(doc.attachment_bytes(0).expect("contenu"), b"partage");
+    assert_eq!(doc.attachment_bytes(1).expect("contenu"), b"partage");
+
+    doc.remove_attachment(1).expect("retrait");
+    assert_eq!(doc.attachments().len(), 1);
+    assert_eq!(doc.attachment_bytes(0).expect("contenu"), b"partage");
+}
+
+/// Remplacer une pièce jointe purge son ancien descripteur et son flux, sans
+/// emporter les autres entrées de `/Names`.
+#[test]
+fn remplacement_purge_l_ancien_descripteur() {
+    let bytes = structured_pdf().expect("PDF structuré");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+
+    doc.add_attachment("note.txt", None, b"remplace")
+        .expect("remplacement");
+    assert_eq!(doc.attachments().len(), 1);
+    assert_eq!(doc.attachment_bytes(0).expect("contenu"), b"remplace");
+
+    let written = doc.to_bytes().expect("écriture");
+    let text = String::from_utf8_lossy(&written);
+    assert!(!text.contains("contenu joint"), "l'ancien flux est resté");
+    // Le reste de `/Names` (ici un script) n'est pas emporté.
+    assert!(text.contains("JavaScript"), "l'entrée voisine a disparu");
+}
+
+/// PDF dont l'arbre liste deux descripteurs sous le même nom affiché.
+fn duplicate_attachment_pdf() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut doc = LopdfDoc::with_version("1.7");
+    let page = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+    });
+    let pages = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![page.into()]),
+        "Count" => 1,
+    });
+
+    let first = doc.add_object(Stream::new(dictionary! {}, b"premier".to_vec()));
+    let second = doc.add_object(Stream::new(dictionary! {}, b"second".to_vec()));
+    let spec_a = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Filespec".to_vec()),
+        "F" => Object::string_literal("double.txt"),
+        "UF" => Object::string_literal("double.txt"),
+        "EF" => dictionary! { "F" => first, "UF" => first },
+    });
+    let spec_b = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Filespec".to_vec()),
+        "F" => Object::string_literal("double.txt"),
+        "UF" => Object::string_literal("double.txt"),
+        "EF" => dictionary! { "F" => second, "UF" => second },
+    });
+    let tree = doc.add_object(dictionary! {
+        "Names" => Object::Array(vec![
+            Object::string_literal("cle-a"),
+            Object::Reference(spec_a),
+            Object::string_literal("cle-b"),
+            Object::Reference(spec_b),
+        ]),
+    });
+    let catalog = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => pages,
+        "Names" => dictionary! { "EmbeddedFiles" => tree },
+    });
+    doc.trailer.set("Root", catalog);
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf)?;
+    Ok(buf)
+}
+
+/// PDF dont le descripteur ne porte ni `/F` ni `/UF`.
+fn unnamed_attachment_pdf() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut doc = LopdfDoc::with_version("1.7");
+    let page = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+    });
+    let pages = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![page.into()]),
+        "Count" => 1,
+    });
+
+    let body = doc.add_object(Stream::new(dictionary! {}, b"anonyme".to_vec()));
+    let spec = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Filespec".to_vec()),
+        "EF" => dictionary! { "F" => body, "UF" => body },
+    });
+    let tree = doc.add_object(dictionary! {
+        "Names" => Object::Array(vec![
+            Object::string_literal("cle.txt"),
+            Object::Reference(spec),
+        ]),
+    });
+    let catalog = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => pages,
+        "Names" => dictionary! { "EmbeddedFiles" => tree },
+    });
+    doc.trailer.set("Root", catalog);
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf)?;
+    Ok(buf)
+}
+
+/// Un descripteur sans nom affiché prend la clé de l'arbre, sinon deux
+/// descripteurs anonymes se confondraient.
+#[test]
+fn descripteur_sans_nom_prend_la_cle_de_l_arbre() {
+    let bytes = unnamed_attachment_pdf().expect("PDF");
+    let doc = Document::from_bytes(&bytes).expect("ouverture");
+
+    let names: Vec<String> = doc.attachments().into_iter().map(|a| a.name).collect();
+    assert_eq!(names, vec!["cle.txt".to_owned()]);
+    assert_eq!(doc.attachment_bytes(0).expect("contenu"), b"anonyme");
+}
+
+/// Un nom ne désigne qu'un fichier : remplacer un nom que l'arbre porte en
+/// double ne laisse qu'une entrée, celle du nouveau fichier.
+#[test]
+fn ajout_avec_un_nom_en_double_laisse_une_seule_entree() {
+    let bytes = duplicate_attachment_pdf().expect("PDF");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+    assert_eq!(doc.attachments().len(), 2);
+
+    doc.add_attachment("double.txt", None, b"nouveau")
+        .expect("remplacement");
+    let names: Vec<String> = doc.attachments().into_iter().map(|a| a.name).collect();
+    assert_eq!(names, vec!["double.txt".to_owned()]);
+    assert_eq!(doc.attachment_bytes(0).expect("contenu"), b"nouveau");
+
+    let written = doc.to_bytes().expect("écriture");
+    let text = String::from_utf8_lossy(&written);
+    assert!(!text.contains("premier"), "l'ancien flux est resté");
+    assert!(!text.contains("second"), "l'ancien flux est resté");
+}

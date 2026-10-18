@@ -2937,14 +2937,34 @@ impl YouPdfApp {
         }
     }
 
-    /// Panneau Pièces jointes : liste et extraction.
+    /// Panneau Pièces jointes : ajout, ouverture, extraction et retrait.
     fn attachments_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         self.ensure_structure();
+        let count = self.tabs.get(self.active).map_or(0, |tab| tab.attachments.len());
+
+        let mut add = false;
+        ui.horizontal(|ui| {
+            ui.add_space(4.0);
+            if ui.button(RichText::new("Add Attachment").size(11.0)).clicked() {
+                add = true;
+            }
+            ui.label(
+                RichText::new(format!("{count} file(s)"))
+                    .size(10.0)
+                    .color(pal().muted),
+            );
+        });
+        ui.add_space(4.0);
+        if add {
+            self.add_attachment(ctx);
+            return;
+        }
+
         let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
         if tab.attachments.is_empty() {
-            panel_hint(ui, "No attachments", "Use Insert to attach a file");
+            panel_hint(ui, "No attachments", "Use Add Attachment to embed a file");
             return;
         }
         let rows: Vec<(String, Option<usize>, Option<String>)> = tab
@@ -2953,14 +2973,15 @@ impl YouPdfApp {
             .map(|item| (item.name.clone(), item.size, item.description.clone()))
             .collect();
 
-        let mut save = None;
+        let panel_w = self.panel_w;
+        let mut action: Option<AttachmentAction> = None;
         ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.add_space(6.0);
                 for (idx, (name, size, description)) in rows.iter().enumerate() {
                     let (rect, resp) =
-                        ui.allocate_exact_size(vec2(self.panel_w - 24.0, 44.0), Sense::click());
+                        ui.allocate_exact_size(vec2(panel_w - 24.0, 44.0), Sense::click());
                     if resp.hovered() {
                         ui.painter()
                             .rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
@@ -3002,28 +3023,116 @@ impl YouPdfApp {
                         if save_resp.hovered() { pal().icon_bright } else { pal().icon },
                     );
                     if save_resp.clicked() {
-                        save = Some(idx);
+                        action = Some(AttachmentAction::SaveAs(idx));
+                    } else if resp.double_clicked() {
+                        action = Some(AttachmentAction::Open(idx));
                     }
+                    resp.context_menu(|ui| {
+                        if ui.button("Open").clicked() {
+                            action = Some(AttachmentAction::Open(idx));
+                            ui.close_menu();
+                        }
+                        if ui.button("Save As…").clicked() {
+                            action = Some(AttachmentAction::SaveAs(idx));
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Delete").clicked() {
+                            action = Some(AttachmentAction::Delete(idx));
+                            ui.close_menu();
+                        }
+                    });
                     ui.add_space(4.0);
                 }
             });
 
-        let Some(idx) = save else {
+        match action {
+            Some(AttachmentAction::Open(idx)) => self.open_attachment(idx, ctx),
+            Some(AttachmentAction::SaveAs(idx)) => self.save_attachment(idx, ctx),
+            Some(AttachmentAction::Delete(idx)) => self.delete_attachment(idx, ctx),
+            None => {}
+        }
+    }
+
+    /// Embarque un fichier choisi par l'utilisateur.
+    fn add_attachment(&mut self, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new().set_title("Attach a file").pick_file() else {
             return;
         };
-        let Some((tab, name)) = self
-            .tabs
-            .get(self.active)
-            .zip(rows.get(idx).map(|row| row.0.clone()))
-        else {
-            return;
-        };
-        let bytes = match tab.doc.attachment_bytes(idx) {
+        let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(err) => {
-                self.toast(ctx, format!("Attachment failed: {err}"));
+                self.toast(ctx, format!("Attach failed: {err}"));
                 return;
             }
+        };
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("attachment")
+            .to_owned();
+        let result = self
+            .tabs
+            .get_mut(self.active)
+            .map(|tab| tab.doc.add_attachment(&name, None, &bytes));
+        match result {
+            Some(Ok(())) => {
+                self.mark_document_changed();
+                self.ensure_structure();
+                self.toast(ctx, format!("Attached {name}"));
+            }
+            Some(Err(err)) => self.toast(ctx, format!("Attach failed: {err}")),
+            None => {}
+        }
+    }
+
+    /// Ouvre une pièce jointe dans l'application par défaut du système.
+    ///
+    /// Le fichier est extrait sous un nom assaini, dans un dossier temporaire
+    /// privé et propre à cette extraction : ni un nom hostile ni un lien
+    /// symbolique planté à l'avance ne doivent sortir de ce dossier.
+    fn open_attachment(&mut self, index: usize, ctx: &egui::Context) {
+        let Some((bytes, name)) = self.tabs.get(self.active).and_then(|tab| {
+            let name = tab
+                .attachments
+                .get(index)
+                .map(|item| item.name.clone())
+                .unwrap_or_else(|| format!("attachment-{index}"));
+            tab.doc.attachment_bytes(index).ok().map(|bytes| (bytes, name))
+        }) else {
+            self.toast(ctx, "Attachment failed");
+            return;
+        };
+        let file_name = safe_attachment_name(&name, index);
+        let path = match stage_attachment(&bytes, &file_name) {
+            Ok(path) => path,
+            Err(err) => {
+                self.toast(ctx, format!("Open failed: {err}"));
+                return;
+            }
+        };
+        // Les extractions d'hier ne servent plus à rien : elles partent au
+        // prochain usage, faute de pouvoir être retirées dès l'ouverture
+        // (l'application externe peut encore lire le fichier).
+        let _ = prune_attachment_staging(ATTACHMENT_STAGING_MAX_AGE);
+        match self.open_with_system(&path) {
+            Ok(()) => self.toast(ctx, format!("Opened {}", path.display())),
+            Err(err) => self.toast(ctx, format!("Open failed: {err}")),
+        }
+    }
+
+    /// Écrit une pièce jointe à l'emplacement choisi par l'utilisateur.
+    fn save_attachment(&mut self, index: usize, ctx: &egui::Context) {
+        let Some((bytes, name)) = self.tabs.get(self.active).and_then(|tab| {
+            let name = tab
+                .attachments
+                .get(index)
+                .map(|item| item.name.clone())
+                .unwrap_or_else(|| format!("attachment-{index}"));
+            tab.doc.attachment_bytes(index).ok().map(|bytes| (bytes, name))
+        }) else {
+            self.toast(ctx, "Attachment failed");
+            return;
         };
         let Some(target) = rfd::FileDialog::new().set_file_name(&name).save_file() else {
             return;
@@ -3032,6 +3141,37 @@ impl YouPdfApp {
             Ok(()) => self.toast(ctx, format!("Saved {}", target.display())),
             Err(err) => self.toast(ctx, format!("Write failed: {err}")),
         }
+    }
+
+    /// Retire une pièce jointe du document.
+    fn delete_attachment(&mut self, index: usize, ctx: &egui::Context) {
+        let result = self
+            .tabs
+            .get_mut(self.active)
+            .map(|tab| tab.doc.remove_attachment(index));
+        match result {
+            Some(Ok(())) => {
+                self.mark_document_changed();
+                self.ensure_structure();
+                self.toast(ctx, "Attachment removed");
+            }
+            Some(Err(err)) => self.toast(ctx, format!("Delete failed: {err}")),
+            None => {}
+        }
+    }
+
+    /// Ouvre un fichier avec l'application par défaut du système.
+    fn open_with_system(&self, path: &std::path::Path) -> std::io::Result<()> {
+        #[cfg(target_os = "macos")]
+        let child = std::process::Command::new("open").arg(path).spawn();
+        #[cfg(target_os = "windows")]
+        let child = std::process::Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(path)
+            .spawn();
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        let child = std::process::Command::new("xdg-open").arg(path).spawn();
+        child.map(|_| ())
     }
 
     /// Panneau Aspect : fond du canevas, ombre, taille des vignettes.
@@ -11962,6 +12102,16 @@ struct CommentRow {
     depth: usize,
 }
 
+/// Action demandée par la liste des pièces jointes.
+enum AttachmentAction {
+    /// Ouvrir dans l'application par défaut du système.
+    Open(usize),
+    /// Enregistrer à l'emplacement choisi.
+    SaveAs(usize),
+    /// Retirer du document.
+    Delete(usize),
+}
+
 /// Action demandée par la liste des commentaires.
 enum CommentAction {
     /// Aller à la page visée.
@@ -11976,6 +12126,108 @@ enum CommentAction {
     Send(String, String),
     /// Exporter la liste.
     Export(CommentFormat),
+}
+
+/// Suffixe unique (horloge + processus) des fichiers extraits.
+fn unique_stamp() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or(0);
+    format!("{millis}-{}", std::process::id())
+}
+
+/// Durée de conservation d'une extraction de pièce jointe temporaire.
+const ATTACHMENT_STAGING_MAX_AGE: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Extrait une pièce jointe dans un dossier temporaire privé et unique.
+///
+/// Les pièces jointes peuvent être confidentielles : le dossier n'appartient
+/// qu'à son propriétaire. `create_dir` et `create_new` refusent un chemin déjà
+/// occupé, donc un lien symbolique planté à l'avance ne détourne ni le dossier
+/// ni l'écriture du fichier.
+fn stage_attachment(bytes: &[u8], file_name: &str) -> std::io::Result<std::path::PathBuf> {
+    let dir = std::env::temp_dir().join(format!("youpdf-attach-{}", unique_stamp()));
+    std::fs::create_dir(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let path = dir.join(file_name);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    std::io::Write::write_all(&mut file, bytes)?;
+    Ok(path)
+}
+
+/// Supprime les extractions de pièces jointes plus vieilles que `max_age`.
+///
+/// Seuls les dossiers `youpdf-attach-*` créés par [`stage_attachment`] sont
+/// visés : les autres fichiers temporaires de l'application restent en place.
+fn prune_attachment_staging(max_age: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with("youpdf-attach-") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        let Ok(age) = std::time::SystemTime::now().duration_since(modified) else {
+            continue;
+        };
+        if age < max_age {
+            continue;
+        }
+        let path = entry.path();
+        let outcome = if metadata.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if outcome.is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Nom de fichier sûr pour l'extraction d'une pièce jointe.
+///
+/// Un nom hostile (`../../etc/passwd`, `/absolu`) ne doit pas sortir du
+/// dossier temporaire : tout caractère hors `[A-Za-z0-9._-]` devient `_`, et
+/// un nom vide ou fait de points retombe sur un nom par défaut.
+fn safe_attachment_name(name: &str, index: usize) -> String {
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let safe = safe.trim_start_matches('.');
+    if safe.is_empty() {
+        format!("attachment-{index}")
+    } else {
+        safe.to_owned()
+    }
 }
 
 /// Vrai pour les annotations de marquage de texte, seules à porter une
@@ -12747,4 +12999,5 @@ mod tests {
         assert_eq!(author_initial("Bob"), "B");
         assert_eq!(author_initial(""), "?");
     }
+
 }
