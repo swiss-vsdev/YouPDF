@@ -38,12 +38,29 @@ use youpdf_core::{
 // Palette
 // --------------------------------------------------------------------------
 
-/// Fonds proposés dans le panneau Aspect.
-const CANVAS_STYLES: [Color32; 4] = [
-    Color32::from_rgb(0x30, 0x30, 0x30),
-    Color32::from_rgb(0x1E, 0x1E, 0x1E),
-    Color32::from_rgb(0x4A, 0x4A, 0x4A),
-    Color32::from_rgb(0xD8, 0xD8, 0xD8),
+/// Fonds de canevas nommés par la référence, hors « Auto » (voir
+/// `YouPdfApp::canvas_style`).
+const CANVAS_THEMES: [(&str, Color32); 4] = [
+    ("Dark", Color32::from_rgb(0x30, 0x30, 0x30)),
+    ("Light", Color32::from_rgb(0xEC, 0xEC, 0xEE)),
+    ("Mint", Color32::from_rgb(0xDF, 0xEE, 0xE7)),
+    ("Starry Blue", Color32::from_rgb(0x08, 0x0A, 0x18)),
+];
+
+/// Teintes d'affichage des pages (protection des yeux), en RGBA non
+/// prémultiplié.
+///
+/// La première entrée ne teinte rien : la page garde son blanc d'origine. Les
+/// autres se posent en calque translucide sur la page rendue — le document
+/// lui-même n'est jamais modifié.
+const PAGE_TINTS: [(&str, [u8; 4]); 7] = [
+    ("None", [255, 255, 255, 0]),
+    ("Light Green", [198, 240, 198, 70]),
+    ("Parchment", [245, 233, 200, 90]),
+    ("Sepia", [222, 198, 158, 120]),
+    ("Dark Night", [22, 26, 42, 190]),
+    ("Rose", [255, 214, 219, 80]),
+    ("Sky Blue", [203, 228, 250, 80]),
 ];
 
 const TITLE_H: f32 = 40.0;
@@ -1062,6 +1079,10 @@ pub struct YouPdfApp {
     canvas_style: usize,
     /// Ombre portée sous les pages.
     page_shadow: bool,
+    /// Teinte d'affichage des pages : indice dans `PAGE_TINTS` (0 = aucune).
+    page_tint: usize,
+    /// Filet de 1 pt autour de chaque page.
+    page_border: bool,
     /// Échelle des vignettes du panneau Aspect.
     thumb_scale: f32,
     /// Largeur d'une vignette du panneau Pages, en points (80 à 240).
@@ -1268,6 +1289,8 @@ impl YouPdfApp {
             form_data_format: FormDataFormat::Fdf,
             canvas_style: 0,
             page_shadow: true,
+            page_tint: 0,
+            page_border: false,
             thumb_scale: 1.0,
             thumb_pt: 120.0,
             thumb_selected: BTreeSet::new(),
@@ -3019,13 +3042,16 @@ impl YouPdfApp {
             ui.label(RichText::new("Background").size(11.5).color(pal().muted));
         });
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.add_space(12.0);
-            for (idx, color) in CANVAS_STYLES.iter().enumerate() {
+            // « Auto » puis les quatre fonds nommés.
+            let swatches: Vec<(&str, Color32)> = std::iter::once(("Auto", pal().canvas_bg))
+                .chain(CANVAS_THEMES.iter().copied())
+                .collect();
+            for (idx, (name, color)) in swatches.into_iter().enumerate() {
                 let selected = self.canvas_style == idx;
-                let (rect, resp) =
-                    ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
-                ui.painter().rect_filled(rect, Rounding::same(6.0), *color);
+                let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+                ui.painter().rect_filled(rect, Rounding::same(6.0), color);
                 if selected {
                     ui.painter().rect_stroke(
                         rect.expand(2.0),
@@ -3036,10 +3062,53 @@ impl YouPdfApp {
                 if resp.clicked() {
                     self.canvas_style = idx;
                 }
+                resp.on_hover_text(name);
             }
         });
 
         ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            ui.label(RichText::new("Page tint").size(11.5).color(pal().muted));
+        });
+        ui.add_space(6.0);
+        // Aperçu : chaque pastille montre la teinte posée sur du blanc,
+        // comme sur la page.
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(12.0);
+            for (idx, (name, rgba)) in PAGE_TINTS.iter().enumerate() {
+                let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+                ui.painter()
+                    .rect_filled(rect, Rounding::same(4.0), Color32::WHITE);
+                ui.painter().rect_filled(
+                    rect,
+                    Rounding::same(4.0),
+                    Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]),
+                );
+                if self.page_tint == idx {
+                    ui.painter().rect_stroke(
+                        rect.expand(2.0),
+                        5.0,
+                        Stroke::new(1.5_f32, pal().accent),
+                    );
+                }
+                if resp.clicked() {
+                    self.page_tint = idx;
+                }
+                resp.on_hover_text(*name);
+            }
+        });
+
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            let mut border = self.page_border;
+            if ui.checkbox(&mut border, "Page border").changed() {
+                self.page_border = border;
+            }
+        });
+
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.add_space(12.0);
             let mut shadow = self.page_shadow;
@@ -8325,11 +8394,10 @@ impl YouPdfApp {
     /// Fond du canevas : la teinte du thème pour le réglage par défaut, le
     /// choix explicite du panneau Aspect sinon.
     fn canvas_background(&self) -> Color32 {
-        let style = self.canvas_style.min(CANVAS_STYLES.len() - 1);
-        if style == 0 {
-            pal().canvas_bg
-        } else {
-            CANVAS_STYLES[style]
+        match self.canvas_style {
+            // 0 = Auto : le canevas suit le thème de l'application.
+            0 => pal().canvas_bg,
+            index => CANVAS_THEMES[(index - 1).min(CANVAS_THEMES.len() - 1)].1,
         }
     }
 
@@ -8927,6 +8995,10 @@ impl YouPdfApp {
         let selected_annot = self.selected_annot;
         let has_selection = self.has_annot_selection;
         let show_shadow = self.page_shadow;
+        let tint = PAGE_TINTS[self.page_tint.min(PAGE_TINTS.len() - 1)].1;
+        let tint_color = Color32::from_rgba_unmultiplied(tint[0], tint[1], tint[2], tint[3]);
+        let tint_on = tint[3] > 0;
+        let show_border = self.page_border;
 
         ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -9053,6 +9125,25 @@ impl YouPdfApp {
                                 page_rect,
                                 Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
                                 Color32::WHITE,
+                            );
+                        }
+
+                        // Teinte et filet se posent sur la page rendue, sous
+                        // tout ce que l'interface ajoute ensuite.
+                        if tint_on {
+                            ui.painter().rect_filled(page_rect, Rounding::ZERO, tint_color);
+                        }
+                        if show_border {
+                            // Gris moyen plutôt que la couleur de séparation
+                            // du thème : le filet doit se lire aussi bien sur
+                            // une page blanche que contre un canevas sombre.
+                            ui.painter().rect_stroke(
+                                page_rect,
+                                Rounding::ZERO,
+                                Stroke::new(
+                                    1.0_f32,
+                                    Color32::from_rgba_unmultiplied(0x80, 0x80, 0x88, 170),
+                                ),
                             );
                         }
 
