@@ -1017,6 +1017,8 @@ pub struct YouPdfApp {
     /// Texte du document actif, extrait à l'ouverture du panneau IA.
     ai_doc_text: String,
     /// Disposition des pages du canevas (une, continue, deux, couverture).
+    /// Largeur courante du panneau latéral (redimensionnable, 180–450 pt).
+    panel_w: f32,
     page_layout: PageLayout,
     /// Plein écran natif demandé par le menu `…`.
     fullscreen: bool,
@@ -1203,6 +1205,7 @@ impl YouPdfApp {
             ai_doc_tab: None,
             ai_doc_text: String::new(),
             page_layout: PageLayout::default(),
+            panel_w: PANEL_W,
             fullscreen: false,
             actions_opened: false,
             activity: Vec::new(),
@@ -2108,7 +2111,7 @@ impl YouPdfApp {
                 for (title, page, level) in &entries {
                     let indent = 12.0 + (*level as f32 * 12.0).min(48.0);
                     let (rect, resp) = ui.allocate_exact_size(
-                        vec2(PANEL_W - 24.0, 26.0),
+                        vec2(self.panel_w - 24.0, 26.0),
                         Sense::click(),
                     );
                     if resp.hovered() {
@@ -2261,7 +2264,7 @@ impl YouPdfApp {
                 ui.add_space(6.0);
                 for (idx, (name, kind, page, read_only, value)) in rows.iter().enumerate() {
                     let (rect, resp) = ui
-                        .allocate_exact_size(vec2(PANEL_W - 24.0, 40.0), Sense::click());
+                        .allocate_exact_size(vec2(self.panel_w - 24.0, 40.0), Sense::click());
                     if resp.hovered() {
                         ui.painter()
                             .rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
@@ -2375,7 +2378,7 @@ impl YouPdfApp {
                     }
                     _ => {
                         ui.add_sized(
-                            vec2(PANEL_W - 46.0, 24.0),
+                            vec2(self.panel_w - 46.0, 24.0),
                             TextEdit::singleline(&mut buffer).hint_text("Value"),
                         );
                         ui.add_space(4.0);
@@ -2419,11 +2422,11 @@ impl YouPdfApp {
                 ui.label(RichText::new("Properties").size(11.5).color(pal().icon_bright));
                 ui.add_space(4.0);
                 ui.add_sized(
-                    vec2(PANEL_W - 46.0, 24.0),
+                    vec2(self.panel_w - 46.0, 24.0),
                     TextEdit::singleline(&mut props.name).hint_text("Name"),
                 );
                 ui.add_sized(
-                    vec2(PANEL_W - 46.0, 24.0),
+                    vec2(self.panel_w - 46.0, 24.0),
                     TextEdit::singleline(&mut props.tooltip).hint_text("Tooltip"),
                 );
                 ui.checkbox(&mut props.required, "Required");
@@ -2435,7 +2438,7 @@ impl YouPdfApp {
                     let mut options = props.options.join(", ");
                     if ui
                         .add_sized(
-                            vec2(PANEL_W - 46.0, 24.0),
+                            vec2(self.panel_w - 46.0, 24.0),
                             TextEdit::singleline(&mut options)
                                 .hint_text("Options, comma separated"),
                         )
@@ -2531,7 +2534,7 @@ impl YouPdfApp {
                 ui.add_space(6.0);
                 for (idx, (name, size, description)) in rows.iter().enumerate() {
                     let (rect, resp) =
-                        ui.allocate_exact_size(vec2(PANEL_W - 24.0, 44.0), Sense::click());
+                        ui.allocate_exact_size(vec2(self.panel_w - 24.0, 44.0), Sense::click());
                     if resp.hovered() {
                         ui.painter()
                             .rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
@@ -2651,7 +2654,7 @@ impl YouPdfApp {
         ui.horizontal(|ui| {
             ui.add_space(12.0);
             ui.add_sized(
-                vec2(PANEL_W - 40.0, 18.0),
+                vec2(self.panel_w - 40.0, 18.0),
                 egui::Slider::new(&mut self.thumb_scale, 0.6..=1.6)
                     .show_value(false),
             );
@@ -4003,7 +4006,7 @@ impl YouPdfApp {
                 ui.add_space(6.0);
                 for (idx, kind, text, page, when, color) in &entries {
                     let (rect, resp) = ui
-                        .allocate_exact_size(vec2(PANEL_W - 24.0, 44.0), Sense::click());
+                        .allocate_exact_size(vec2(self.panel_w - 24.0, 44.0), Sense::click());
                     if resp.hovered() {
                         ui.painter()
                             .rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
@@ -4072,9 +4075,10 @@ impl YouPdfApp {
         let Some(panel) = self.panel else {
             return;
         };
-        SidePanel::left("content")
-            .exact_width(PANEL_W)
-            .resizable(false)
+        let panel_resp = SidePanel::left("content")
+            .default_width(self.panel_w)
+            .resizable(true)
+            .width_range(180.0..=450.0)
             .frame(Frame::none().fill(pal().canvas_bg).stroke(Stroke::new(1.0_f32, pal().separator)))
             .show(ctx, |ui| {
                 ui.add_space(10.0);
@@ -4171,6 +4175,9 @@ impl YouPdfApp {
                     Panel::Aspect => self.aspect_panel(ui),
                 }
             });
+        // La largeur réelle suit le glissé ; les panneaux s'y ajustent à la
+        // trame suivante.
+        self.panel_w = panel_resp.response.rect.width();
     }
 
     fn thumbnails(&mut self, ui: &mut egui::Ui) {
@@ -4294,7 +4301,7 @@ impl YouPdfApp {
         ui.horizontal(|ui| {
             ui.add_space(12.0);
             let resp = ui.add_sized(
-                vec2(PANEL_W - 26.0, 28.0),
+                vec2(self.panel_w - 26.0, 28.0),
                 TextEdit::singleline(&mut self.search_query).hint_text("Search text"),
             );
             if std::mem::take(&mut self.find_focus) {
@@ -4315,7 +4322,7 @@ impl YouPdfApp {
             ui.horizontal(|ui| {
                 ui.add_space(12.0);
                 let resp = ui.add_sized(
-                    vec2(PANEL_W - 26.0, 28.0),
+                    vec2(self.panel_w - 26.0, 28.0),
                     TextEdit::singleline(&mut self.replace_text).hint_text("Replace with"),
                 );
                 if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -4379,7 +4386,7 @@ impl YouPdfApp {
                     ui.add_space(6.0);
                     for (idx, query) in self.history.iter().enumerate() {
                         let (rect, resp) =
-                            ui.allocate_exact_size(vec2(PANEL_W - 24.0, 28.0), Sense::click());
+                            ui.allocate_exact_size(vec2(self.panel_w - 24.0, 28.0), Sense::click());
                         ui.painter()
                             .rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
                         ui.painter().text(
@@ -4454,7 +4461,7 @@ impl YouPdfApp {
                     ui.add_space(6.0);
                     for (idx, result) in self.results.iter().enumerate() {
                         let (rect, resp) =
-                            ui.allocate_exact_size(vec2(PANEL_W - 24.0, 28.0), Sense::click());
+                            ui.allocate_exact_size(vec2(self.panel_w - 24.0, 28.0), Sense::click());
                         if resp.hovered() || active == Some(idx) {
                             ui.painter().rect_filled(
                                 rect,
@@ -4895,7 +4902,7 @@ impl YouPdfApp {
         // Les barres flottantes sont ancrées au canevas, pas à la fenêtre :
         // le panneau latéral les décale (comme dans la référence).
         let canvas_left = RAIL_W
-            + if self.panel.is_some() { PANEL_W } else { 0.0 };
+            + if self.panel.is_some() { self.panel_w } else { 0.0 };
 
         // `Outils ▾` à gauche.
         Area::new(Id::new("tools"))
