@@ -8,6 +8,7 @@ Cross-referenced with `docs/UPDF_IMPLEMENTATION_PLAN.md`. Gaps closed since the 
 
 - **Phase 0.1** — Removed dead dependencies (`docx-rs`, `convert-docx` feature, `futures`, `uuid` from `youpdf-ai`); deleted `convert/docx.rs`, the `Converter` trait and `ConversionReport`.
 - **Phase 0.2** — Added `youpdf-core/src/util.rs` (zlib compress/decompress, XML/CSV escaping) and routed `watermark`, `create`, `pdfa`, `office`, `forms`, `convert` through it.
+- **Phase 0.3** — Added `YouPdfApp::show_modal` (centered, chrome_bg frame, 10 pt rounding) and converted 15 centered dialogs to it. The four resizable surfaces (organize, compare, extract, batch) and the activity popover keep their own window.
 
 Unchecked below = still open. The plan document is the authoritative task list.
 
