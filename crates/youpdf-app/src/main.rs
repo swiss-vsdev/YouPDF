@@ -2,6 +2,7 @@
 
 mod ai;
 mod app;
+mod home;
 
 use app::YouPdfApp;
 
