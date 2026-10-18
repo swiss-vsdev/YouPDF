@@ -182,3 +182,218 @@ fn generated_title_decodes_back_to_the_heading_text() {
     assert_eq!(outline.len(), 1);
     assert_eq!(outline[0].title, "Café Général");
 }
+
+/// Aller-retour arbre → plan → arbre : les titres, l'ordre et les niveaux
+/// doivent survivre à une écriture complète (`write_outline`).
+#[test]
+fn ecriture_du_plan_conserve_la_hierarchie() {
+    use youpdf_core::structure::{OutlineEntry, OutlineTarget};
+
+    let mut doc =
+        Document::from_bytes(&text_pdf(&[vec![], vec![], vec![]])).expect("ouverture");
+    let tree = vec![
+        OutlineEntry {
+            title: "Chapitre 1".to_owned(),
+            page: Some(1),
+            target: OutlineTarget::None,
+            children: vec![
+                OutlineEntry {
+                    title: "Section 1.1".to_owned(),
+                    page: Some(2),
+                    target: OutlineTarget::None,
+                    children: Vec::new(),
+                },
+                OutlineEntry {
+                    title: "Section 1.2".to_owned(),
+                    page: None,
+                    target: OutlineTarget::None,
+                    children: Vec::new(),
+                },
+            ],
+        },
+        OutlineEntry {
+            title: "Chapitre 2".to_owned(),
+            page: Some(3),
+            target: OutlineTarget::None,
+            children: Vec::new(),
+        },
+    ];
+
+    let written = doc.write_outline(&tree).expect("écriture du plan");
+    assert_eq!(written, 4);
+
+    let back = doc.outline_tree();
+    // La cible d'origine est relue telle quelle ; les entrées écrites sans
+    // cible portent maintenant la destination `/Fit` calculée.
+    assert_eq!(back[0].title, "Chapitre 1");
+    assert_eq!(back[0].page, Some(1));
+    assert_eq!(back[0].children.len(), 2);
+    assert_eq!(back[0].children[0].title, "Section 1.1");
+    assert_eq!(back[0].children[0].page, Some(2));
+    assert_eq!(back[0].children[1].page, None);
+    assert!(matches!(
+        back[0].children[0].target,
+        youpdf_core::structure::OutlineTarget::Dest(_)
+    ));
+    assert_eq!(back[1].title, "Chapitre 2");
+    assert_eq!(back[1].page, Some(3));
+
+    // La forme à plat reste celle qu'affichent les autres vues ; `outline()`
+    // visite les frères avant de descendre, `outline_tree()` garde le
+    // parcours en profondeur.
+    let flat = doc.outline();
+    let levels: Vec<(String, usize)> = flat
+        .iter()
+        .map(|item| (item.title.clone(), item.level))
+        .collect();
+    assert_eq!(
+        levels,
+        vec![
+            ("Chapitre 1".to_owned(), 0),
+            ("Chapitre 2".to_owned(), 0),
+            ("Section 1.1".to_owned(), 1),
+            ("Section 1.2".to_owned(), 1),
+        ]
+    );
+
+    // Un arbre vide retire le plan.
+    doc.write_outline(&[]).expect("retrait du plan");
+    assert!(doc.outline_tree().is_empty());
+}
+
+/// Une destination d'origine (ici nommée) survit à un renommage : éditer un
+/// signet ne doit pas réécrire la cible des autres.
+#[test]
+fn renommer_un_signet_garde_les_destinations() {
+    use youpdf_core::structure::{OutlineEntry, OutlineTarget};
+
+    let mut doc = Document::from_bytes(&text_pdf(&[vec![], vec![]])).expect("ouverture");
+    let named = OutlineTarget::Dest(Object::Name(b"Chapitre".to_vec()));
+    let mut tree = vec![OutlineEntry {
+        title: "Ancien nom".to_owned(),
+        page: None,
+        target: named.clone(),
+        children: Vec::new(),
+    }];
+    doc.write_outline(&tree).expect("écriture");
+
+    tree[0].title = "Nouveau nom".to_owned();
+    doc.write_outline(&tree).expect("renommage");
+
+    let back = doc.outline_tree();
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].title, "Nouveau nom");
+    assert_eq!(back[0].target, named, "la destination nommée est intacte");
+}
+
+/// Une réécriture ne laisse pas les anciens dictionnaires de signets derrière
+/// elle : vingt renommages ne doivent pas laisser vingt plans morts.
+#[test]
+fn reecrire_le_plan_ne_laisse_pas_d_orphelins() {
+    use youpdf_core::structure::{OutlineEntry, OutlineTarget};
+
+    let mut doc = Document::from_bytes(&text_pdf(&[vec![], vec![]])).expect("ouverture");
+    let mut tree = vec![
+        OutlineEntry {
+            title: "Un".to_owned(),
+            page: Some(1),
+            target: OutlineTarget::None,
+            children: Vec::new(),
+        },
+        OutlineEntry {
+            title: "Deux".to_owned(),
+            page: Some(2),
+            target: OutlineTarget::None,
+            children: Vec::new(),
+        },
+    ];
+
+    for round in 0..20 {
+        tree[0].title = format!("Un ({round})");
+        doc.write_outline(&tree).expect("réécriture");
+    }
+
+    let bytes = doc.to_bytes().expect("sérialisation");
+    let reopened = lopdf::Document::load_mem(&bytes).expect("réouverture");
+    let titled = reopened
+        .objects
+        .values()
+        .filter(|object| {
+            matches!(object, Object::Dictionary(dict) if dict.get(b"Title").is_ok())
+        })
+        .count();
+    assert_eq!(titled, 2, "un seul plan doit subsister dans le fichier");
+    assert_eq!(doc.outline_tree().len(), 2);
+
+    // L'effacement du plan libère aussi ses dictionnaires.
+    doc.clear_outline().expect("effacement du plan");
+    let bytes = doc.to_bytes().expect("sérialisation");
+    let reopened = lopdf::Document::load_mem(&bytes).expect("réouverture");
+    let titled = reopened
+        .objects
+        .values()
+        .filter(|object| {
+            matches!(object, Object::Dictionary(dict) if dict.get(b"Title").is_ok())
+        })
+        .count();
+    assert_eq!(titled, 0, "plus aucun signet ne doit rester");
+}
+
+/// Une entrée qui vise par une action `/GoTo` (et non par `/Dest`) est relue
+/// avec la même action, et sa page reste résolue.
+#[test]
+fn action_goto_traverse_une_reecriture() {
+    use youpdf_core::structure::{OutlineEntry, OutlineTarget};
+
+    let mut doc = Document::from_bytes(&text_pdf(&[vec![], vec![]])).expect("ouverture");
+    let page_id = *doc.page_ids().get(&1).expect("page 1");
+    let action = Object::Dictionary(lopdf::dictionary! {
+        "S" => Object::Name(b"GoTo".to_vec()),
+        "D" => Object::Array(vec![
+            Object::Reference(page_id),
+            Object::Name(b"Fit".to_vec()),
+        ]),
+    });
+    let tree = vec![OutlineEntry {
+        title: "Aller".to_owned(),
+        page: Some(1),
+        target: OutlineTarget::Action(action.clone()),
+        children: Vec::new(),
+    }];
+    doc.write_outline(&tree).expect("écriture");
+
+    let back = doc.outline_tree();
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].page, Some(1), "la page reste résolue par `/A /D`");
+    assert_eq!(back[0].target, OutlineTarget::Action(action));
+}
+
+/// Une destination qui vise une page absente (supprimée depuis) n'est pas
+/// réécrite telle quelle : elle deviendrait une référence morte.
+#[test]
+fn destination_vers_une_page_disparue_est_abandonnee() {
+    use youpdf_core::structure::{OutlineEntry, OutlineTarget};
+
+    let mut doc = Document::from_bytes(&text_pdf(&[vec![], vec![]])).expect("ouverture");
+    let ghost = OutlineTarget::Dest(Object::Array(vec![
+        Object::Reference((9999, 0)),
+        Object::Name(b"Fit".to_vec()),
+    ]));
+    let tree = vec![OutlineEntry {
+        title: "Fantôme".to_owned(),
+        page: None,
+        target: ghost,
+        children: Vec::new(),
+    }];
+    doc.write_outline(&tree).expect("écriture");
+
+    let back = doc.outline_tree();
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].title, "Fantôme");
+    assert_eq!(
+        back[0].target,
+        OutlineTarget::None,
+        "la destination morte est remplacée par une destination nulle"
+    );
+    assert_eq!(back[0].page, None);
+}
