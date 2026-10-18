@@ -10877,6 +10877,24 @@ impl YouPdfApp {
         if zero {
             self.set_zoom(None);
         }
+        // Basculement de mode (Ctrl+1..4).
+        let (m1, m2, m3, m4) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::Num1) && i.modifiers.ctrl,
+                i.key_pressed(egui::Key::Num2) && i.modifiers.ctrl,
+                i.key_pressed(egui::Key::Num3) && i.modifiers.ctrl,
+                i.key_pressed(egui::Key::Num4) && i.modifiers.ctrl,
+            )
+        });
+        if m1 {
+            self.mode = Some(0);
+        } else if m2 {
+            self.mode = Some(1);
+        } else if m3 {
+            self.mode = Some(2);
+        } else if m4 {
+            self.mode = Some(3);
+        }
     }
 
     fn handle_drops(&mut self, ctx: &egui::Context) {
