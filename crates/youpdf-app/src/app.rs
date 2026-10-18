@@ -163,6 +163,32 @@ enum MenuAction {
     Theme(Theme),
 }
 
+/// Action demandée depuis le menu contextuel d'un onglet.
+enum TabAction {
+    Close(usize),
+    CloseOthers(usize),
+    CloseRight(usize),
+    CloseAll,
+    TogglePin(usize),
+    Duplicate(usize),
+    Reveal(usize),
+    CopyPath(usize),
+}
+
+/// Nouvelle position de l'onglet actif après avoir déplacé l'onglet `from`
+/// vers la position `pos` (index dans la liste **après** retrait de `from`).
+fn moved_active(active: usize, from: usize, pos: usize) -> usize {
+    if active == from {
+        return pos;
+    }
+    let after_removal = if active > from { active - 1 } else { active };
+    if after_removal >= pos {
+        after_removal + 1
+    } else {
+        after_removal
+    }
+}
+
 /// Répartit les pages en rangées selon la disposition choisie. Chaque rangée
 /// occupe une ligne du canevas et contient une ou deux pages.
 fn page_layout_rows(layout: PageLayout, total: u32, current: u32) -> Vec<Vec<u32>> {
@@ -771,6 +797,8 @@ struct Tab {
     fragments: HashMap<u32, Vec<TextFragment>>,
     /// Vrai quand plan, formulaires et pièces jointes ont été lus.
     structure_loaded: bool,
+    /// Onglet épinglé : conserve sa position et affiche une punaise.
+    pinned: bool,
 }
 
 impl Tab {
@@ -961,6 +989,10 @@ pub struct YouPdfApp {
     page_entry: String,
     /// Surface d'accueil (fichiers récents) affichée à la place du canevas.
     home_open: bool,
+    /// Onglet en cours de glissé dans la barre de titre (réordonnancement).
+    dragging_tab: Option<usize>,
+    /// Onglet survolé pendant le glissé : cible du dépôt.
+    drag_target: Option<usize>,
     /// État de l'écran d'accueil (filtre, onglet, grille/liste).
     home: HomeView,
     /// Fichiers marqués d'une étoile (persistés dans `~/.youpdf/starred.txt`).
@@ -1151,6 +1183,8 @@ impl YouPdfApp {
             search_word: false,
             page_entry: String::new(),
             home_open: initial.is_none(),
+            dragging_tab: None,
+            drag_target: None,
             home: HomeView::default(),
             stars: home::load_stars(),
             home_thumbs: HashMap::new(),
@@ -1348,6 +1382,7 @@ impl YouPdfApp {
             attachments: Vec::new(),
             fragments: HashMap::new(),
             structure_loaded: false,
+            pinned: false,
         });
         self.active = self.tabs.len() - 1;
         self.panel = Some(Panel::Thumbnails);
@@ -1420,6 +1455,89 @@ impl YouPdfApp {
         self.last_active = self.active;
         if was_active {
             self.reset_document_session();
+        }
+    }
+
+    /// Déplace l'onglet `from` à la position `to` (glissé dans la barre).
+    ///
+    /// `self.active` suit le même document : il est décalé pour le retrait,
+    /// puis pour l'insertion, ce qui évite qu'un glissé change l'onglet affiché.
+    fn move_tab(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.tabs.len() {
+            return;
+        }
+        let after = self.tabs.len() - 1;
+        let tab = self.tabs.remove(from);
+        let pos = to.min(after);
+        self.tabs.insert(pos, tab);
+        self.active = moved_active(self.active, from, pos);
+        self.last_active = self.active;
+    }
+
+    /// Ferme une liste d'onglets.
+    ///
+    /// Un onglet modifié exige une confirmation, et `pending_close` n'en porte
+    /// qu'une : dès qu'un onglet ciblé est modifié, on refuse le lot et on
+    /// laisse l'utilisateur les fermer un par un. Cela évite de fermer des
+    /// index décalés par les retraits.
+    fn close_many(&mut self, ctx: &egui::Context, targets: &[usize]) {
+        let dirty = targets
+            .iter()
+            .any(|&idx| self.tabs.get(idx).is_some_and(|tab| tab.dirty));
+        if dirty {
+            self.toast(ctx, "Close modified tabs one by one");
+            return;
+        }
+        let mut idxs: Vec<usize> = targets.to_vec();
+        idxs.sort_unstable();
+        for idx in idxs.into_iter().rev() {
+            self.close_tab_now(idx);
+        }
+    }
+
+    /// Applique une action du menu contextuel d'un onglet.
+    fn apply_tab_action(&mut self, ctx: &egui::Context, action: TabAction) {
+        let count = self.tabs.len();
+        match action {
+            TabAction::Close(idx) => self.close_tab(idx),
+            TabAction::CloseOthers(keep) => {
+                let targets: Vec<usize> = (0..count).filter(|idx| *idx != keep).collect();
+                self.close_many(ctx, &targets);
+            }
+            TabAction::CloseRight(from) => {
+                let targets: Vec<usize> = (from + 1..count).collect();
+                self.close_many(ctx, &targets);
+            }
+            TabAction::CloseAll => {
+                let targets: Vec<usize> = (0..count).collect();
+                self.close_many(ctx, &targets);
+            }
+            TabAction::TogglePin(idx) => {
+                if let Some(tab) = self.tabs.get_mut(idx) {
+                    tab.pinned = !tab.pinned;
+                }
+            }
+            TabAction::Duplicate(idx) => {
+                let path = self.tabs.get(idx).and_then(|tab| tab.path.clone());
+                match path {
+                    Some(path) => self.open_path_new_tab(path),
+                    None => self.toast(ctx, "This document has no file on disk yet"),
+                }
+            }
+            TabAction::Reveal(idx) => {
+                let path = self.tabs.get(idx).and_then(|tab| tab.path.clone());
+                match path {
+                    Some(path) => self.reveal_path(&path),
+                    None => self.toast(ctx, "This document has no file on disk yet"),
+                }
+            }
+            TabAction::CopyPath(idx) => {
+                let path = self.tabs.get(idx).and_then(|tab| tab.path.clone());
+                match path {
+                    Some(path) => ctx.copy_text(path.display().to_string()),
+                    None => self.toast(ctx, "This document has no file on disk yet"),
+                }
+            }
         }
     }
 
@@ -3592,14 +3710,22 @@ impl YouPdfApp {
 
                     let mut select = None;
                     let mut close = None;
+                    // Actions différées : la boucle emprunte `self.tabs` en
+                    // lecture, elles s'appliquent après.
+                    let mut tab_action: Option<TabAction> = None;
+                    let mut drag_done = false;
+                    let dragging = self.dragging_tab;
                     for (idx, tab) in self.tabs.iter().enumerate() {
                         let selected = idx == self.active;
                         let color = if selected { pal().icon_bright } else { pal().muted };
-                        let label = if tab.dirty {
+                        let mut label = if tab.dirty {
                             format!("{} •", shorten(&tab.title, 22))
                         } else {
                             shorten(&tab.title, 24)
                         };
+                        if tab.pinned {
+                            label = format!("{} {label}", ph::PUSH_PIN);
+                        }
                         let galley = ui.painter().layout_no_wrap(
                             label,
                             FontId::proportional(12.5),
@@ -3608,10 +3734,13 @@ impl YouPdfApp {
                         let width = if selected {
                             (galley.size().x + 56.0).max(170.0)
                         } else {
-                            galley.size().x + 28.0
+                            // 44 pt réservent la place du bouton de fermeture,
+                            // affiché dès le survol.
+                            galley.size().x + 44.0
                         };
+                        let width = width.clamp(120.0, 220.0);
                         let (rect, resp) =
-                            ui.allocate_exact_size(vec2(width, 30.0), Sense::click());
+                            ui.allocate_exact_size(vec2(width, 30.0), Sense::click_and_drag());
 
                         if selected {
                             ui.painter().rect_filled(rect, Rounding::same(8.0), pal().widget_bg);
@@ -3622,13 +3751,21 @@ impl YouPdfApp {
                                 Color32::from_rgb(0x33, 0x33, 0x33),
                             );
                         }
+                        if dragging.is_some() && resp.contains_pointer() {
+                            ui.painter().vline(
+                                rect.left() - 5.0,
+                                rect.y_range(),
+                                Stroke::new(2.0_f32, pal().accent),
+                            );
+                        }
                         ui.painter().galley(
                             pos2(rect.min.x + 14.0, rect.center().y - galley.size().y / 2.0),
                             galley,
                             color,
                         );
 
-                        if selected {
+                        let show_close = selected || resp.hovered();
+                        if show_close {
                             let x_rect = Rect::from_center_size(
                                 pos2(rect.max.x - 16.0, rect.center().y),
                                 vec2(18.0, 18.0),
@@ -3655,7 +3792,69 @@ impl YouPdfApp {
                         if resp.clicked() {
                             select = Some(idx);
                         }
+                        if resp.middle_clicked() {
+                            close = Some(idx);
+                        }
+                        if resp.drag_started() && !tab.pinned {
+                            self.dragging_tab = Some(idx);
+                        }
+                        if dragging.is_some() && resp.contains_pointer() {
+                            self.drag_target = Some(idx);
+                        }
+                        if resp.drag_stopped() {
+                            drag_done = true;
+                        }
+
+                        resp.context_menu(|ui| {
+                            if ui.button("Close Tab").clicked() {
+                                tab_action = Some(TabAction::Close(idx));
+                                ui.close_menu();
+                            }
+                            if ui.button("Close Other Tabs").clicked() {
+                                tab_action = Some(TabAction::CloseOthers(idx));
+                                ui.close_menu();
+                            }
+                            if ui.button("Close Tabs to the Right").clicked() {
+                                tab_action = Some(TabAction::CloseRight(idx));
+                                ui.close_menu();
+                            }
+                            if ui.button("Close All Tabs").clicked() {
+                                tab_action = Some(TabAction::CloseAll);
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            let pin_label = if tab.pinned { "Unpin Tab" } else { "Pin Tab" };
+                            if ui.button(pin_label).clicked() {
+                                tab_action = Some(TabAction::TogglePin(idx));
+                                ui.close_menu();
+                            }
+                            if ui.button("Duplicate Tab").clicked() {
+                                tab_action = Some(TabAction::Duplicate(idx));
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button("Reveal in Finder").clicked() {
+                                tab_action = Some(TabAction::Reveal(idx));
+                                ui.close_menu();
+                            }
+                            if ui.button("Copy File Path").clicked() {
+                                tab_action = Some(TabAction::CopyPath(idx));
+                                ui.close_menu();
+                            }
+                        });
                         ui.add_space(10.0);
+                    }
+
+                    // Dépôt d'un glissé : réordonne si la cible a changé.
+                    if drag_done {
+                        if let Some(from) = self.dragging_tab.take() {
+                            let to = self.drag_target.take().unwrap_or(from);
+                            self.move_tab(from, to);
+                        }
+                    }
+
+                    if let Some(action) = tab_action {
+                        self.apply_tab_action(ctx, action);
                     }
 
                     let plus = icon_button(ui, 24.0, 24.0, false, icon_plus);
@@ -10162,6 +10361,21 @@ mod tests {
 
     fn cachet(rows: &[Vec<u32>]) -> HashSet<u32> {
         rows.iter().flatten().copied().collect()
+    }
+
+    /// L'onglet actif suit son document à travers un réordonnancement.
+    #[test]
+    fn active_tab_follows_a_move() {
+        // [A,B,C], active C (2). Déplacer A (0) vers 1 -> [B,A,C] : C reste à 2.
+        assert_eq!(moved_active(2, 0, 1), 2);
+        // [A,B,C], active A (0). Déplacer C (2) vers 0 -> [C,A,B] : A passe à 1.
+        assert_eq!(moved_active(0, 2, 0), 1);
+        // L'onglet actif lui-même est déplacé : il va là où on le dépose.
+        assert_eq!(moved_active(1, 1, 2), 2);
+        // [A,B,C], active A. Déplacer B (1) vers 0 -> [B,A,C] : A passe à 1.
+        assert_eq!(moved_active(0, 1, 0), 1);
+        // Déplacement sans effet sur les index voisins.
+        assert_eq!(moved_active(0, 1, 2), 0);
     }
 
     /// Chaque disposition doit couvrir exactement les pages, une fois chacune.
