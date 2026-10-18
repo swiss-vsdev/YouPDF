@@ -156,8 +156,7 @@ impl Document {
                 return Err(Error::InvalidInput("image de signature vide".into()));
             }
             // Note : l'intégration de l'image nécessite une conversion
-            // RGB. Cette partie est implémentée dans un helper partagé
-            // avec `convert::docx` (extraction de palette).
+            // RGB, faite ici même (extraction de palette).
             content.extend_from_slice(b"q\n");
             content.extend_from_slice(
                 format!("{:.2} 0 0 {:.2} {:.2} {:.2} cm\n", w, h, x1, y1).as_bytes(),

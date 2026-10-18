@@ -14,10 +14,11 @@ serde_json  = { workspace = true }
 thiserror   = { workspace = true }
 async-trait = { workspace = true }
 reqwest     = { workspace = true }
-tokio       = { workspace = true }
-futures     = { workspace = true }
 tracing     = { workspace = true }
-uuid        = { workspace = true }
 
 # Stockage sécurisé des clés API dans le trousseau système.
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+[dev-dependencies]
+# Le runtime n'est employé que par les tests : `youpdf-app` fait tourner le sien.
+tokio = { workspace = true }
