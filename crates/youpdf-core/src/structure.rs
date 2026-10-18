@@ -1,7 +1,7 @@
 //! Structure du document : signets (plan) et pièces jointes.
 //!
-//! Lecture seule : ces deux structures viennent du catalogue PDF et ne sont
-//! pas modifiées par l'application.
+//! Lecture, écriture du plan (le `/Outlines` du catalogue) et lecture des
+//! pièces jointes.
 
 use lopdf::{Dictionary, Object, ObjectId};
 
@@ -19,6 +19,34 @@ pub struct OutlineItem {
     pub page: Option<usize>,
     /// Profondeur (0 = racine).
     pub level: usize,
+}
+
+/// Ce qu'une entrée de plan vise, tel qu'écrit dans le document.
+///
+/// Conserver la cible d'origine permet à un renommage ou à un déplacement de
+/// ne pas perdre la position de vue (`/XYZ …`) ni les actions (`/A`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum OutlineTarget {
+    /// Aucune cible lisible.
+    None,
+    /// Tableau `/Dest`.
+    Dest(Object),
+    /// Dictionnaire `/A` (souvent un `GoTo`).
+    Action(Object),
+}
+
+/// Entrée de plan, avec ses sous-entrées : la forme que l'interface édite.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutlineEntry {
+    /// Titre affiché.
+    pub title: String,
+    /// Page visée (1-indexée), si connue.
+    pub page: Option<usize>,
+    /// Cible d'origine, réécrite telle quelle. `OutlineTarget::None` signifie
+    /// « écrire une destination `/Fit` sur `page` ».
+    pub target: OutlineTarget,
+    /// Sous-entrées, dans l'ordre d'affichage.
+    pub children: Vec<OutlineEntry>,
 }
 
 /// Fichier embarqué dans le document.
@@ -185,6 +213,271 @@ impl Document {
             .map(|(number, _)| *number as usize)
     }
 
+    /// Plan du document en arbre : titres, pages visées, sous-entrées.
+    ///
+    /// C'est la forme éditable du plan (voir [`Document::write_outline`]),
+    /// l'ordre des enfants est celui de `/First` puis `/Next`.
+    pub fn outline_tree(&self) -> Vec<OutlineEntry> {
+        let Some(root) = self.outline_first() else {
+            return Vec::new();
+        };
+        let pages = self.inner.get_pages();
+        let mut budget = 20_000usize;
+        self.outline_siblings(root, &pages, 0, &mut budget)
+    }
+
+    /// Remplace le plan par l'arbre fourni.
+    ///
+    /// Une liste vide retire `/Outlines`. Une entrée dont la cible est inconnue
+    /// pointe la page donnée (`/Fit`) ; une cible d'origine est reprise telle
+    /// quelle, donc la position de vue et les actions survivent à un
+    /// renommage ou à un déplacement.
+    pub fn write_outline(&mut self, entries: &[OutlineEntry]) -> Result<usize> {
+        // Les objets de l'ancien plan sont libérés après réécriture, sauf s'ils
+        // sont encore visés ailleurs.
+        let doomed = self.outline_object_ids();
+        self.drop_outline_key();
+
+        if entries.is_empty() {
+            self.purge_outline_objects(&doomed);
+            self.touch();
+            return Ok(0);
+        }
+
+        // Aplatir l'arbre : un niveau par profondeur, l'ordre d'affichage
+        // donnant l'ordre des frères.
+        fn walk(
+            entries: &[OutlineEntry],
+            level: usize,
+            rows: &mut Vec<(String, Option<usize>, OutlineTarget, usize)>,
+        ) {
+            for entry in entries {
+                rows.push((
+                    entry.title.clone(),
+                    entry.page,
+                    entry.target.clone(),
+                    level,
+                ));
+                walk(&entry.children, level + 1, rows);
+            }
+        }
+        let mut rows = Vec::new();
+        walk(entries, 0, &mut rows);
+
+        let pages = self.inner.get_pages();
+        let mut item_ids: Vec<ObjectId> = Vec::with_capacity(rows.len());
+        for (title, page, target, _) in &rows {
+            let mut dict = Dictionary::from_iter(vec![(
+                "Title",
+                Object::string_literal(encode_pdf_literal(title)),
+            )]);
+            match target {
+                // Cible d'origine reprise telle quelle : la position de vue et
+                // les actions traversent un renommage ou un déplacement. Une
+                // destination qui vise une page supprimée depuis est abandonnée
+                // plutôt que réécrite avec une référence morte.
+                OutlineTarget::Dest(object) => {
+                    // Un tableau dont le premier élément est une référence de
+                    // page morte est abandonné. Une destination nommée, une
+                    // action indirecte ou un tableau référencé gardent leur
+                    // forme : rien n'est plus risqué que de les réécrire.
+                    let alive = match object {
+                        Object::Array(items) => match items.first() {
+                            Some(Object::Reference(id)) => pages.values().any(|page| page == id),
+                            _ => true,
+                        },
+                        _ => true,
+                    };
+                    // `/Dest null` n'est pas une destination valide : une cible
+                    // morte se traduit par l'absence de clé.
+                    if alive {
+                        dict.set("Dest", object.clone());
+                    }
+                }
+                OutlineTarget::Action(object) => {
+                    // Une clé `/Dest` masquerait `/A` à la relecture.
+                    dict.set("A", object.clone());
+                }
+                OutlineTarget::None => {
+                    // Sans page connue, pas de destination du tout.
+                    if let Some(page_id) = page.and_then(|number| pages.get(&(number as u32)).copied())
+                    {
+                        dict.set(
+                            "Dest",
+                            Object::Array(vec![
+                                Object::Reference(page_id),
+                                Object::Name(b"Fit".to_vec()),
+                            ]),
+                        );
+                    }
+                }
+            }
+            item_ids.push(self.inner_mut().add_object(Object::Dictionary(dict)));
+        }
+
+        let root_id = self
+            .inner_mut()
+            .add_object(Object::Dictionary(Dictionary::from_iter(vec![(
+                "Type",
+                Object::Name(b"Outlines".to_vec()),
+            )])));
+
+        let levels: Vec<usize> = rows.iter().map(|(_, _, _, level)| *level).collect();
+        self.link_outline_levels(&levels, &item_ids, root_id)?;
+
+        self.inner_mut()
+            .catalog_mut()
+            .map_err(|e| Error::Pdf(format!("catalogue : {e}")))?
+            .set("Outlines", Object::Reference(root_id));
+
+        self.purge_outline_objects(&doomed);
+        self.touch();
+        Ok(rows.len())
+    }
+
+    /// Premier signet du plan, s'il existe.
+    fn outline_first(&self) -> Option<ObjectId> {
+        let catalog = self.inner.catalog().ok()?;
+        let outlines = self.dict_entry(catalog, b"Outlines")?;
+        outlines.get(b"First").ok().and_then(|o| self.resolve_id(o))
+    }
+
+    /// Frères d'un signet, chacun avec ses propres sous-entrées.
+    ///
+    /// `depth` borne la descente (un `/First` qui se prend lui-même en boucle
+    /// ferait déborder la pile) et `budget` borne le nombre total d'entrées.
+    fn outline_siblings(
+        &self,
+        first: ObjectId,
+        pages: &std::collections::BTreeMap<u32, ObjectId>,
+        depth: usize,
+        budget: &mut usize,
+    ) -> Vec<OutlineEntry> {
+        let mut out = Vec::new();
+        if depth > MAX_OUTLINE_DEPTH {
+            return out;
+        }
+        let mut node = first;
+        loop {
+            if *budget == 0 {
+                break;
+            }
+            *budget -= 1;
+            let Ok(dict) = self.inner.get_dictionary(node) else {
+                break;
+            };
+            let title = dict
+                .get(b"Title")
+                .and_then(Object::as_str)
+                .map(decode_pdf_text)
+                .unwrap_or_default();
+            if !title.trim().is_empty() {
+                let children = dict
+                    .get(b"First")
+                    .ok()
+                    .and_then(|o| self.resolve_id(o))
+                    .map(|child| self.outline_siblings(child, pages, depth + 1, budget))
+                    .unwrap_or_default();
+                out.push(OutlineEntry {
+                    title,
+                    page: self.outline_page(dict, pages),
+                    target: self.outline_target(dict),
+                    children,
+                });
+            }
+            match dict.get(b"Next").ok().and_then(|o| self.resolve_id(o)) {
+                Some(next) => node = next,
+                None => break,
+            }
+        }
+        out
+    }
+
+    /// Cible écrite d'une entrée de plan (`/Dest` puis `/A`), telle quelle.
+    fn outline_target(&self, node: &Dictionary) -> OutlineTarget {
+        if let Ok(dest) = node.get(b"Dest") {
+            if !matches!(dest, Object::Null) {
+                return OutlineTarget::Dest(dest.clone());
+            }
+        }
+        if let Some(action) = self.dict_entry(node, b"A") {
+            return OutlineTarget::Action(Object::Dictionary(action.clone()));
+        }
+        OutlineTarget::None
+    }
+
+    /// Objets de l'ancien plan : la racine `/Outlines` et chaque signet.
+    fn outline_object_ids(&self) -> Vec<ObjectId> {
+        let mut doomed = Vec::new();
+        let Ok(catalog) = self.inner.catalog() else {
+            return doomed;
+        };
+        let Some(outlines) = self.dict_entry(catalog, b"Outlines") else {
+            return doomed;
+        };
+        if let Ok(root) = catalog.get(b"Outlines").and_then(Object::as_reference) {
+            doomed.push(root);
+        }
+        let Some(first) = outlines.get(b"First").ok().and_then(|o| self.resolve_id(o)) else {
+            return doomed;
+        };
+        let mut stack = vec![first];
+        let mut budget = 20_000usize;
+        while let Some(node) = stack.pop() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            let Ok(dict) = self.inner.get_dictionary(node) else {
+                continue;
+            };
+            doomed.push(node);
+            if let Some(child) = dict.get(b"First").ok().and_then(|o| self.resolve_id(o)) {
+                stack.push(child);
+            }
+            if let Some(next) = dict.get(b"Next").ok().and_then(|o| self.resolve_id(o)) {
+                stack.push(next);
+            }
+        }
+        doomed
+    }
+
+    /// Retire du magasin les objets de l'ancien plan devenus inatteignables.
+    ///
+    /// Le balayage part des racines du trailer : le nouveau plan y est
+    /// rattaché, l'ancien n'y est plus. Un objet que des références vivantes
+    /// partagent avec l'ancien plan (destination nommée, lien vers un signet)
+    /// reste donc atteint et survit.
+    fn purge_outline_objects(&mut self, doomed: &[ObjectId]) {
+        if doomed.is_empty() {
+            return;
+        }
+        let doomed_set: std::collections::HashSet<ObjectId> = doomed.iter().copied().collect();
+        let mut stack: Vec<ObjectId> = self
+            .inner
+            .trailer
+            .iter()
+            .filter_map(|(_, value)| value.as_reference().ok())
+            .collect();
+        let mut reachable: std::collections::HashSet<ObjectId> = std::collections::HashSet::new();
+        while let Some(id) = stack.pop() {
+            if !reachable.insert(id) {
+                continue;
+            }
+            let Some(object) = self.inner.objects.get(&id) else {
+                continue;
+            };
+            let mut refs = std::collections::HashSet::new();
+            collect_references(object, &mut refs);
+            stack.extend(refs);
+        }
+        for id in &doomed_set {
+            if !reachable.contains(id) {
+                self.inner.objects.remove(id);
+            }
+        }
+    }
+
     /// Reconstruit le plan à partir du texte.
     ///
     /// Une ligne dont la taille dépasse nettement celle du corps du texte
@@ -193,9 +486,11 @@ impl Document {
     pub fn generate_outline(&mut self, style: &OutlineStyle) -> Result<usize> {
         let headings = self.detect_headings(style);
         // Toute arborescence précédente est retirée avant d'écrire la neuve.
+        let doomed = self.outline_object_ids();
         self.drop_outline_key();
 
         if headings.is_empty() {
+            self.purge_outline_objects(&doomed);
             self.touch();
             return Ok(0);
         }
@@ -242,6 +537,7 @@ impl Document {
             .map_err(|e| Error::Pdf(format!("catalogue : {e}")))?
             .set("Outlines", Object::Reference(root_id));
 
+        self.purge_outline_objects(&doomed);
         self.touch();
         Ok(headings.len())
     }
@@ -251,7 +547,9 @@ impl Document {
     /// Renvoie le nombre d'entrées qui existaient avant la suppression.
     pub fn clear_outline(&mut self) -> Result<usize> {
         let count = self.outline().len();
+        let doomed = self.outline_object_ids();
         self.drop_outline_key();
+        self.purge_outline_objects(&doomed);
         self.touch();
         Ok(count)
     }
@@ -327,13 +625,30 @@ impl Document {
         item_ids: &[ObjectId],
         root_id: ObjectId,
     ) -> Result<()> {
-        let count = headings.len();
-        // Parent de chaque entrée : le dernier titre de niveau supérieur.
+        let levels: Vec<usize> = headings.iter().map(|heading| heading.level).collect();
+        self.link_outline_levels(&levels, item_ids, root_id)
+    }
+
+    /// Relie une suite d'entrées déjà créées, à partir de leurs niveaux.
+    ///
+    /// Le parent d'une entrée est la dernière entrée rencontrée dont le niveau
+    /// est plus faible : c'est la règle qui donne l'arbre des niveaux.
+    fn link_outline_levels(
+        &mut self,
+        levels: &[usize],
+        item_ids: &[ObjectId],
+        root_id: ObjectId,
+    ) -> Result<()> {
+        let count = levels.len();
+        if count == 0 || item_ids.len() != count {
+            return Ok(());
+        }
+        // Parent de chaque entrée : le dernier niveau supérieur rencontré.
         let mut parent: Vec<Option<usize>> = vec![None; count];
         let mut stack: Vec<usize> = Vec::new();
-        for (index, heading) in headings.iter().enumerate() {
+        for (index, level) in levels.iter().enumerate() {
             while let Some(&top) = stack.last() {
-                if headings[top].level < heading.level {
+                if levels[top] < *level {
                     break;
                 }
                 stack.pop();
@@ -662,6 +977,31 @@ fn group_lines(page: u32, fragments: &[TextFragment]) -> Vec<TextLine> {
 }
 
 /// Décode une chaîne PDF : UTF-16BE avec BOM, sinon Latin-1/ASCII.
+/// Rassemble les identifiants d'objets référencés par `object`, en profondeur.
+fn collect_references(object: &Object, out: &mut std::collections::HashSet<ObjectId>) {
+    match object {
+        Object::Reference(id) => {
+            out.insert(*id);
+        }
+        Object::Array(items) => {
+            for item in items {
+                collect_references(item, out);
+            }
+        }
+        Object::Dictionary(dict) => {
+            for (_, value) in dict.iter() {
+                collect_references(value, out);
+            }
+        }
+        Object::Stream(stream) => {
+            for (_, value) in stream.dict.iter() {
+                collect_references(value, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn decode_pdf_text(bytes: &[u8]) -> String {
     if bytes.starts_with(&[0xFE, 0xFF]) {
         let units: Vec<u16> = bytes[2..]

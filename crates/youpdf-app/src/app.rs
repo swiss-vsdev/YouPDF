@@ -28,8 +28,8 @@ use youpdf_core::{
     AttachmentInfo, Background, Bates, BatesPosition, ComparisonReport, Conformance, CropMargins,
     DifferenceKind, Document, EncryptionOptions, EncryptionStrength, ExtractedTable,
     FieldProperties, FormDataFormat, FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue,
-    MeasureKind, Measurement, NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineItem,
-    OutlineStyle, PageRange, PageBitmap,
+    MeasureKind, Measurement, NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry,
+    OutlineItem, OutlineStyle, OutlineTarget, PageRange, PageBitmap,
     PdfiumRenderer, RedactionRegion, RenderOptions, Renderer, SearchIndex, SearchOptions,
     SearchResult, TextFormat, TextFragment, Watermark, STAMP_NAMES,
 };
@@ -1076,6 +1076,16 @@ pub struct YouPdfApp {
     thumb_drag: Option<usize>,
     /// Page dont la fenêtre « Propriétés de la page » est ouverte.
     page_props: Option<usize>,
+    /// Signets repliés, par clé de chemin (« 0/2 »).
+    bookmark_collapsed: BTreeSet<String>,
+    /// Signet en cours de glissé, par clé de chemin.
+    bookmark_drag: Option<String>,
+    /// Signet dont le titre s'édite en place, par clé de chemin.
+    bookmark_rename: Option<String>,
+    /// Contenu de l'édition en place.
+    bookmark_rename_text: String,
+    /// Vrai quand l'édition en place vient de s'ouvrir : demande le focus.
+    bookmark_rename_focus: bool,
 
     search_query: String,
     search_index: Option<(usize, SearchIndex)>,
@@ -1248,6 +1258,11 @@ impl YouPdfApp {
             thumb_owner: 0,
             thumb_drag: None,
             page_props: None,
+            bookmark_collapsed: BTreeSet::new(),
+            bookmark_drag: None,
+            bookmark_rename: None,
+            bookmark_rename_text: String::new(),
+            bookmark_rename_focus: false,
             search_query: String::new(),
             search_index: None,
             results: Vec::new(),
@@ -1593,6 +1608,15 @@ impl YouPdfApp {
         self.has_annot_selection = false;
         self.text_sel = None;
         self.organize_selected.clear();
+        // Les clés de chemin des signets sont les mêmes d'un document à
+        // l'autre : sans ce nettoyage, le nouveau plan s'ouvrirait en édition
+        // avec le titre de l'ancien.
+        self.bookmark_rename = None;
+        self.bookmark_rename_text.clear();
+        self.bookmark_rename_focus = false;
+        self.bookmark_drag = None;
+        self.bookmark_collapsed.clear();
+        self.thumb_owner = usize::MAX;
         self.replace_open = false;
         self.edit_text = None;
         self.text_draft = None;
@@ -2110,60 +2134,379 @@ impl YouPdfApp {
     }
 
     /// Panneau Signets : plan du document.
-    fn bookmarks_panel(&mut self, ui: &mut egui::Ui) {
+    fn bookmarks_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         self.ensure_structure();
         let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
-        if tab.outline.is_empty() {
-            panel_hint(ui, "No bookmarks", "The document has no outline");
+        let tree = tab.doc.outline_tree();
+
+        let mut generate = false;
+        let mut expand_all = false;
+        let mut collapse_all = false;
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            if ui.small_button("Auto-Generate").clicked() {
+                generate = true;
+            }
+            if ui.small_button("Expand all").clicked() {
+                expand_all = true;
+            }
+            if ui.small_button("Collapse all").clicked() {
+                collapse_all = true;
+            }
+        });
+        ui.add_space(4.0);
+
+        if generate {
+            self.generate_bookmarks(ctx);
             return;
         }
-        let entries: Vec<(String, Option<usize>, usize)> = tab
-            .outline
-            .iter()
-            .map(|item| (item.title.clone(), item.page, item.level))
-            .collect();
+        if expand_all {
+            self.bookmark_collapsed.clear();
+        }
+        if collapse_all {
+            self.bookmark_collapsed = bookmark_all_keys(&tree).into_iter().collect();
+        }
 
+        if tree.is_empty() {
+            panel_hint(
+                ui,
+                "No bookmarks",
+                "Auto-Generate reads the text, or add one from the current page",
+            );
+            return;
+        }
+
+        let current_page = self.tabs[self.active].page;
+        let mut rename_key = self.bookmark_rename.take();
+        let mut rename_text = std::mem::take(&mut self.bookmark_rename_text);
+        let mut request_focus = std::mem::take(&mut self.bookmark_rename_focus);
+        let mut collapsed = std::mem::take(&mut self.bookmark_collapsed);
+        let mut drag_from = self.bookmark_drag.clone();
+        let mut drag_stopped = false;
+        let mut hover_target: Option<(String, bool)> = None;
+        let mut request: Option<BookmarkRequest> = None;
         let mut jump = None;
+
+        let rows = bookmark_rows(&tree, &collapsed);
+        let pointer = ctx.pointer_interact_pos();
+
         ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add_space(6.0);
-                for (title, page, level) in &entries {
-                    let indent = 12.0 + (*level as f32 * 12.0).min(48.0);
+                ui.add_space(4.0);
+                for (key, title, page, depth, has_children, is_collapsed) in &rows {
+                    let indent = 8.0 + (*depth as f32 * 12.0).min(60.0);
                     let (rect, resp) = ui.allocate_exact_size(
-                        vec2(self.panel_w - 24.0, 26.0),
-                        Sense::click(),
+                        vec2((self.panel_w - 24.0).max(140.0), 24.0),
+                        Sense::click_and_drag(),
                     );
                     if resp.hovered() {
                         ui.painter()
                             .rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
                     }
-                    ui.painter().text(
-                        pos2(rect.min.x + indent, rect.center().y),
-                        Align2::LEFT_CENTER,
-                        shorten(title, 30),
-                        FontId::proportional(12.0),
-                        pal().icon_bright,
-                    );
+
+                    // Chevron : replier/déplier ce signet.
+                    let chevron_x = rect.min.x + indent;
+                    if *has_children {
+                        ui.painter().text(
+                            pos2(chevron_x, rect.center().y),
+                            Align2::LEFT_CENTER,
+                            if *is_collapsed {
+                                ph::CARET_RIGHT
+                            } else {
+                                ph::CARET_DOWN
+                            },
+                            FontId::proportional(11.0),
+                            pal().muted,
+                        );
+                    }
+                    let text_x = chevron_x + 14.0;
+
+                    let renaming = rename_key.as_deref() == Some(key.as_str());
+                    if renaming {
+                        let edit_rect = Rect::from_min_max(
+                            pos2(text_x, rect.min.y + 1.0),
+                            pos2(rect.max.x - 34.0, rect.max.y - 1.0),
+                        );
+                        let edit = ui.put(
+                            edit_rect,
+                            TextEdit::singleline(&mut rename_text)
+                                .font(FontId::proportional(12.0)),
+                        );
+                        if request_focus {
+                            edit.request_focus();
+                            request_focus = false;
+                        }
+                        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            rename_key = None;
+                        } else if edit.lost_focus() {
+                            // Le champ se ferme quoi qu'il arrive : sans cela,
+                            // valider un titre inchangé le laisserait ouvert.
+                            rename_key = None;
+                            request =
+                                Some(BookmarkRequest::Rename(key.clone(), rename_text.clone()));
+                        }
+                    } else {
+                        ui.painter().text(
+                            pos2(text_x, rect.center().y),
+                            Align2::LEFT_CENTER,
+                            shorten(title, 30),
+                            FontId::proportional(12.0),
+                            pal().icon_bright,
+                        );
+                    }
                     if let Some(page) = page {
                         ui.painter().text(
-                            pos2(rect.max.x - 10.0, rect.center().y),
+                            pos2(rect.max.x - 8.0, rect.center().y),
                             Align2::RIGHT_CENTER,
                             format!("p.{page}"),
                             FontId::proportional(10.5),
                             pal().muted,
                         );
                     }
-                    if resp.clicked() {
-                        jump = *page;
+
+                    // Cible de dépôt : le bord droit fait du signet glissé un
+                    // enfant, le reste en fait le frère suivant.
+                    if drag_from.is_some() && pointer.map(|p| rect.contains(p)).unwrap_or(false) {
+                        let as_child = pointer.map(|p| p.x > rect.max.x - 30.0).unwrap_or(false);
+                        hover_target = Some((key.clone(), as_child));
+                        ui.painter()
+                            .rect_stroke(rect.shrink(1.0), 6.0, Stroke::new(1.5_f32, pal().accent));
                     }
+
+                    if !renaming && resp.clicked() && !resp.double_clicked() {
+                        let chevron_click = resp
+                            .interact_pointer_pos()
+                            .map(|p| *has_children && p.x < text_x)
+                            .unwrap_or(false);
+                        if chevron_click {
+                            if *is_collapsed {
+                                collapsed.remove(key);
+                            } else {
+                                collapsed.insert(key.clone());
+                            }
+                        } else {
+                            jump = *page;
+                        }
+                    }
+                    if !renaming && resp.double_clicked() {
+                        rename_key = Some(key.clone());
+                        rename_text = title.clone();
+                        request_focus = true;
+                    }
+                    if resp.drag_started() {
+                        drag_from = Some(key.clone());
+                    }
+                    if resp.drag_stopped() {
+                        drag_stopped = true;
+                    }
+                    resp.context_menu(|ui| {
+                        if ui.button("Add Bookmark").clicked() {
+                            request = Some(BookmarkRequest::Add(None, Some(current_page)));
+                            ui.close_menu();
+                        }
+                        if ui.button("Add Sub-Bookmark").clicked() {
+                            request =
+                                Some(BookmarkRequest::Add(Some(key.clone()), Some(current_page)));
+                            ui.close_menu();
+                        }
+                        if ui.button("Rename").clicked() {
+                            rename_key = Some(key.clone());
+                            rename_text = title.clone();
+                            request_focus = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("Set Destination to This Page").clicked() {
+                            request = Some(BookmarkRequest::SetDestination(
+                                key.clone(),
+                                Some(current_page),
+                            ));
+                            ui.close_menu();
+                        }
+                        if ui.button("Delete Bookmark").clicked() {
+                            request = Some(BookmarkRequest::Delete(key.clone()));
+                            ui.close_menu();
+                        }
+                    });
                     ui.add_space(2.0);
                 }
             });
+
+        // Fin du glissé : re-parent ou ré-ordonne.
+        if drag_stopped {
+            if let Some(from) = drag_from.take() {
+                if let Some((target, as_child)) = hover_target {
+                    let from_path = bookmark_path(&from);
+                    let target_path = bookmark_path(&target);
+                    if target != from && !bookmark_is_ancestor(&from_path, &target_path) {
+                        let moved = if as_child {
+                            BookmarkRequest::Move {
+                                from,
+                                parent: Some(target),
+                                index: None,
+                            }
+                        } else {
+                            let parent = if target_path.len() > 1 {
+                                Some(bookmark_key(&target_path[..target_path.len() - 1]))
+                            } else {
+                                None
+                            };
+                            let index = target_path.last().map(|index| index + 1);
+                            BookmarkRequest::Move {
+                                from,
+                                parent,
+                                index,
+                            }
+                        };
+                        request = Some(moved);
+                    }
+                }
+            }
+        }
+
+        self.bookmark_rename = rename_key;
+        self.bookmark_rename_text = rename_text;
+        self.bookmark_rename_focus = request_focus;
+        self.bookmark_collapsed = collapsed;
+        self.bookmark_drag = drag_from;
         if let Some(page) = jump {
             self.jump = Some(page);
+        }
+        if let Some(request) = request {
+            self.apply_bookmark_request(ctx, request);
+        }
+    }
+
+    /// Applique une modification du plan (renommage, ajout, destination,
+    /// suppression, déplacement) puis réécrit `/Outlines`.
+    fn apply_bookmark_request(&mut self, ctx: &egui::Context, request: BookmarkRequest) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let mut tree = tab.doc.outline_tree();
+        let mut changed = false;
+        match request {
+            BookmarkRequest::Rename(key, title) => {
+                if let Some(entry) = bookmark_at_mut(&mut tree, &bookmark_path(&key)) {
+                    if entry.title != title {
+                        entry.title = title;
+                        changed = true;
+                    }
+                }
+            }
+            BookmarkRequest::Delete(key) => {
+                changed = bookmark_take(&mut tree, &bookmark_path(&key)).is_some();
+            }
+            BookmarkRequest::Add(parent, page) => {
+                let entry = OutlineEntry {
+                    title: "New bookmark".to_owned(),
+                    page,
+                    target: OutlineTarget::None,
+                    children: Vec::new(),
+                };
+                match &parent {
+                    Some(key) => {
+                        if let Some(parent) = bookmark_at_mut(&mut tree, &bookmark_path(key)) {
+                            parent.children.push(entry);
+                            changed = true;
+                        }
+                    }
+                    None => {
+                        tree.push(entry);
+                        changed = true;
+                    }
+                }
+            }
+            BookmarkRequest::SetDestination(key, page) => {
+                if let Some(entry) = bookmark_at_mut(&mut tree, &bookmark_path(&key)) {
+                    entry.page = page;
+                    // La cible d'origine est remplacée : sans cela, la
+                    // destination écrite resterait l'ancienne.
+                    entry.target = OutlineTarget::None;
+                    changed = true;
+                }
+            }
+            BookmarkRequest::Move {
+                from,
+                parent,
+                index,
+            } => {
+                let from_path = bookmark_path(&from);
+                let parent_path = parent.as_deref().map(bookmark_path);
+                // Un signet ne peut pas devenir le descendant de lui-même.
+                let illegal = parent_path
+                    .as_deref()
+                    .map(|path| bookmark_is_ancestor(&from_path, path))
+                    .unwrap_or(false);
+                if !illegal {
+                    // Longueur de la liste d'accueil avant tout retrait : c'est
+                    // aussi le point d'insertion quand `index` est absent.
+                    let dest_len = match &parent_path {
+                        Some(path) => bookmark_at(&tree, path).map(|node| node.children.len()),
+                        None => Some(tree.len()),
+                    };
+                    if let (Some(from_index), Some(dest_len)) =
+                        (from_path.last().copied(), dest_len)
+                    {
+                        let from_parent = &from_path[..from_path.len() - 1];
+                        let same_list = match &parent_path {
+                            Some(path) => path.as_slice() == from_parent,
+                            None => from_parent.is_empty(),
+                        };
+                        // `index` compte dans la liste d'avant retrait ; retirer
+                        // un frère situé avant elle décale la cible de un.
+                        let at =
+                            bookmark_insert_index(index, dest_len, same_list, from_index);
+                        if let Some(entry) = bookmark_take(&mut tree, &from_path) {
+                            // Le parent visé a pu se décaler lui aussi si le
+                            // signet retiré le précédait dans son propre niveau.
+                            let shifted = parent_path
+                                .as_deref()
+                                .map(|path| bookmark_shift_path(path, &from_path));
+                            match &shifted {
+                                Some(path) => {
+                                    if let Some(target) = bookmark_at_mut(&mut tree, path) {
+                                        let at = at.min(target.children.len());
+                                        target.children.insert(at, entry);
+                                        changed = true;
+                                    }
+                                }
+                                None => {
+                                    let at = at.min(tree.len());
+                                    tree.insert(at, entry);
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !changed {
+            return;
+        }
+
+        let result = self.tabs.get_mut(self.active).map(|tab| {
+            let written = tab.doc.write_outline(&tree);
+            if written.is_ok() {
+                tab.outline = tab.doc.outline();
+            }
+            written
+        });
+        match result {
+            Some(Ok(_)) => {
+                self.mark_document_changed();
+                self.bookmark_rename = None;
+                self.bookmark_drag = None;
+                // Les chemins ont bougé : les replis mémorisés ne veulent plus
+                // rien dire.
+                self.bookmark_collapsed.clear();
+            }
+            Some(Err(err)) => self.toast(ctx, format!("Bookmark failed: {err}")),
+            None => {}
         }
     }
 
@@ -4260,7 +4603,7 @@ impl YouPdfApp {
                     Panel::Thumbnails => self.thumbnails(ui),
                     Panel::Search => self.search_ui(ctx, ui),
                     Panel::Comments => self.comments_panel(ctx, ui),
-                    Panel::Bookmarks => self.bookmarks_panel(ui),
+                    Panel::Bookmarks => self.bookmarks_panel(ctx, ui),
                     Panel::Forms => self.forms_panel(ctx, ui),
                     Panel::Attachments => self.attachments_panel(ctx, ui),
                     Panel::Aspect => self.aspect_panel(ui),
@@ -7658,13 +8001,18 @@ impl YouPdfApp {
     /// Reconstruit les signets à partir des titres du document.
     fn generate_bookmarks(&mut self, ctx: &egui::Context) {
         let style = OutlineStyle::default();
-        let result = self
-            .tabs
-            .get_mut(self.active)
-            .map(|tab| tab.doc.generate_outline(&style));
+        let result = self.tabs.get_mut(self.active).map(|tab| {
+            let generated = tab.doc.generate_outline(&style);
+            if generated.is_ok() {
+                tab.outline = tab.doc.outline();
+            }
+            generated
+        });
         match result {
+            Some(Ok(0)) => self.toast(ctx, "No headings found"),
             Some(Ok(count)) => {
                 self.mark_document_changed();
+                self.bookmark_collapsed.clear();
                 self.toast(ctx, format!("{count} bookmark(s) created"));
             }
             Some(Err(err)) => self.toast(ctx, format!("Bookmarks failed: {err}")),
@@ -10617,6 +10965,175 @@ enum PageAction {
     Properties(usize),
 }
 
+/// Modifications du plan demandées par le panneau Signets.
+enum BookmarkRequest {
+    /// Renomme l'entrée visée.
+    Rename(String, String),
+    /// Supprime l'entrée visée.
+    Delete(String),
+    /// Ajoute une entrée (page courante) sous le parent visé, ou à la racine.
+    Add(Option<String>, Option<usize>),
+    /// Change la page visée.
+    SetDestination(String, Option<usize>),
+    /// Déplace l'entrée `from` sous `parent`, à la position `index`
+    /// (`None` = en dernier).
+    Move {
+        from: String,
+        parent: Option<String>,
+        index: Option<usize>,
+    },
+}
+
+/// Clé de chemin d'un signet : indices de frères, séparés par `/`.
+fn bookmark_key(path: &[usize]) -> String {
+    path.iter()
+        .map(|index| index.to_string())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Chemin d'indices décrit par une clé de chemin.
+fn bookmark_path(key: &str) -> Vec<usize> {
+    key.split('/')
+        .filter_map(|part| part.parse::<usize>().ok())
+        .collect()
+}
+
+/// Position d'insertion d'un signet déplacé, dans la liste d'accueil.
+///
+/// `index` compte dans la liste d'*avant* retrait, `dest_len` en est la
+/// longueur avant retrait. Retirer un frère situé avant la cible décale
+/// celle-ci de un : sans cet ajustement, un déplacement vers le bas atterrit
+/// un cran trop loin.
+fn bookmark_insert_index(
+    index: Option<usize>,
+    dest_len: usize,
+    same_list: bool,
+    from_index: usize,
+) -> usize {
+    let mut at = index.unwrap_or(dest_len);
+    if same_list && from_index < at {
+        at -= 1;
+    }
+    at
+}
+
+/// Décale un chemin quand un frère qui le précède vient d'être retiré.
+///
+/// Seul le niveau du nœud retiré compte, et seulement pour ses propres frères :
+/// la cible doit partager la liste parente du nœud retiré, sinon rien ne bouge.
+/// Un `removed` préfixe de `path` (nœud visé dans le sous-arbre retiré) est
+/// écarté par l'appelant avant d'arriver ici.
+fn bookmark_shift_path(path: &[usize], removed: &[usize]) -> Vec<usize> {
+    let mut out = path.to_vec();
+    let depth = removed.len();
+    // Trop court pour être un frère : c'est un ancêtre, jamais décalé.
+    if depth == 0 || path.len() < depth {
+        return out;
+    }
+    // Une autre liste parente : le retrait ne la concerne pas.
+    if path[..depth - 1] != removed[..depth - 1] {
+        return out;
+    }
+    if path[depth - 1] > removed[depth - 1] {
+        out[depth - 1] -= 1;
+    }
+    out
+}
+
+/// Entrée visée par un chemin de frères.
+fn bookmark_at<'a>(tree: &'a [OutlineEntry], path: &[usize]) -> Option<&'a OutlineEntry> {
+    let (index, rest) = path.split_first()?;
+    let entry = tree.get(*index)?;
+    if rest.is_empty() {
+        Some(entry)
+    } else {
+        bookmark_at(&entry.children, rest)
+    }
+}
+
+/// Entrée visée par un chemin de frères, en écriture.
+fn bookmark_at_mut<'a>(
+    tree: &'a mut [OutlineEntry],
+    path: &[usize],
+) -> Option<&'a mut OutlineEntry> {
+    let (index, rest) = path.split_first()?;
+    let entry = tree.get_mut(*index)?;
+    if rest.is_empty() {
+        Some(entry)
+    } else {
+        bookmark_at_mut(&mut entry.children, rest)
+    }
+}
+
+/// Retire l'entrée visée de l'arbre et la renvoie.
+fn bookmark_take(tree: &mut Vec<OutlineEntry>, path: &[usize]) -> Option<OutlineEntry> {
+    let (index, rest) = path.split_first()?;
+    if rest.is_empty() {
+        if *index < tree.len() {
+            return Some(tree.remove(*index));
+        }
+        return None;
+    }
+    let entry = tree.get_mut(*index)?;
+    bookmark_take(&mut entry.children, rest)
+}
+
+/// Vrai si `path` est `other` ou l'un de ses ancêtres.
+fn bookmark_is_ancestor(path: &[usize], other: &[usize]) -> bool {
+    other.len() >= path.len() && other[..path.len()] == *path
+}
+
+/// Une ligne du panneau Signets : `(clé, titre, page, profondeur, a des
+/// enfants, replié)`.
+type BookmarkRow = (String, String, Option<usize>, usize, bool, bool);
+
+/// Lignes visibles d'un arbre de signets.
+fn bookmark_rows(tree: &[OutlineEntry], collapsed: &BTreeSet<String>) -> Vec<BookmarkRow> {
+    fn walk(
+        entries: &[OutlineEntry],
+        prefix: &mut Vec<usize>,
+        collapsed: &BTreeSet<String>,
+        rows: &mut Vec<BookmarkRow>,
+    ) {
+        for (index, entry) in entries.iter().enumerate() {
+            prefix.push(index);
+            let key = bookmark_key(prefix);
+            let folded = collapsed.contains(&key);
+            rows.push((
+                key,
+                entry.title.clone(),
+                entry.page,
+                prefix.len() - 1,
+                !entry.children.is_empty(),
+                folded,
+            ));
+            if !folded {
+                walk(&entry.children, prefix, collapsed, rows);
+            }
+            prefix.pop();
+        }
+    }
+    let mut rows = Vec::new();
+    walk(tree, &mut Vec::new(), collapsed, &mut rows);
+    rows
+}
+
+/// Toutes les clés de chemin d'un arbre (pour « Collapse all »).
+fn bookmark_all_keys(tree: &[OutlineEntry]) -> Vec<String> {
+    fn walk(entries: &[OutlineEntry], prefix: &mut Vec<usize>, out: &mut Vec<String>) {
+        for (index, entry) in entries.iter().enumerate() {
+            prefix.push(index);
+            out.push(bookmark_key(prefix));
+            walk(&entry.children, prefix, out);
+            prefix.pop();
+        }
+    }
+    let mut out = Vec::new();
+    walk(tree, &mut Vec::new(), &mut out);
+    out
+}
+
 /// Opérations de la fenêtre « Organiser les pages ».
 #[derive(Clone, Copy)]
 enum OrganizeAction {
@@ -10938,6 +11455,103 @@ mod tests {
         assert_eq!(moved_active(0, 1, 0), 1);
         // Déplacement sans effet sur les index voisins.
         assert_eq!(moved_active(0, 1, 2), 0);
+    }
+
+    /// Les lignes du panneau Signets suivent les replis et la profondeur.
+    #[test]
+    fn bookmark_rows_respect_folding() {
+        let tree = vec![OutlineEntry {
+            title: "Chapitre 1".to_owned(),
+            page: Some(1),
+            target: OutlineTarget::None,
+            children: vec![OutlineEntry {
+                title: "Section 1.1".to_owned(),
+                page: Some(2),
+                target: OutlineTarget::None,
+                children: Vec::new(),
+            }],
+        }];
+
+        let rows = bookmark_rows(&tree, &BTreeSet::new());
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.0.as_str(), row.1.as_str(), row.3, row.4))
+                .collect::<Vec<_>>(),
+            vec![("0", "Chapitre 1", 0, true), ("0/0", "Section 1.1", 1, false)]
+        );
+
+        let folded: BTreeSet<String> = ["0".to_owned()].into_iter().collect();
+        let rows = bookmark_rows(&tree, &folded);
+        assert_eq!(rows.len(), 1, "un parent replié cache ses enfants");
+        assert!(rows[0].5, "la ligne se sait repliée");
+    }
+
+    /// Déplacer un signet vers le bas ne doit pas atterrir un cran trop loin :
+    /// la cible est comptée dans la liste d'avant retrait.
+    #[test]
+    fn bookmark_insert_index_compensates_the_removal() {
+        // [A,B,C], déposer A (0) après B (index cible 2) -> insertion à 1.
+        assert_eq!(bookmark_insert_index(Some(2), 3, true, 0), 1);
+        // Déposer C (2) après A (index cible 1) : rien ne se décale -> 1.
+        assert_eq!(bookmark_insert_index(Some(1), 3, true, 2), 1);
+        // Parents différents : aucun ajustement.
+        assert_eq!(bookmark_insert_index(Some(2), 3, false, 0), 2);
+        // Sans index : en fin de liste, ajusté du retrait dans la même liste.
+        assert_eq!(bookmark_insert_index(None, 3, true, 0), 2);
+        assert_eq!(bookmark_insert_index(None, 3, false, 0), 3);
+    }
+
+    /// Le chemin du parent visé se décale quand le signet retiré le précède.
+    #[test]
+    fn bookmark_shift_path_follows_the_removal() {
+        // Retirer le frère 0 décale tout ce qui le suit d'un cran.
+        assert_eq!(bookmark_shift_path(&[1, 2], &[0]), vec![0, 2]);
+        // Retirer un frère d'un sous-niveau décale ses suivants au même niveau.
+        assert_eq!(bookmark_shift_path(&[0, 3], &[0, 2]), vec![0, 2]);
+        // Même racine, sous-arbre différent : rien ne bouge.
+        assert_eq!(bookmark_shift_path(&[1, 0], &[0, 2]), vec![1, 0]);
+        // Un ancêtre du nœud visé n'est pas décalé.
+        assert_eq!(bookmark_shift_path(&[0], &[0, 2]), vec![0]);
+    }
+
+    /// Déplacer un signet le retire de son ancien parent et le pose au bon
+    /// endroit ; on ne peut pas le déposer dans sa propre descendance.
+    #[test]
+    fn bookmark_move_reparents_and_reorders() {
+        let mut tree = vec![
+            OutlineEntry {
+                title: "A".to_owned(),
+                page: None,
+                target: OutlineTarget::None,
+                children: vec![OutlineEntry {
+                    title: "A.1".to_owned(),
+                    page: None,
+                    target: OutlineTarget::None,
+                    children: Vec::new(),
+                }],
+            },
+            OutlineEntry {
+                title: "B".to_owned(),
+                page: None,
+                target: OutlineTarget::None,
+                children: Vec::new(),
+            },
+        ];
+
+        let entry = bookmark_take(&mut tree, &bookmark_path("0/0")).expect("prise");
+        assert_eq!(entry.title, "A.1");
+        tree.push(entry);
+        assert_eq!(
+            tree.iter().map(|e| e.title.as_str()).collect::<Vec<_>>(),
+            vec!["A", "B", "A.1"]
+        );
+
+        assert!(bookmark_is_ancestor(&bookmark_path("0"), &bookmark_path("0/0")));
+        assert!(!bookmark_is_ancestor(&bookmark_path("0"), &bookmark_path("1")));
+        assert_eq!(bookmark_key(&[1, 2]), "1/2");
+        assert_eq!(bookmark_path("1/2"), vec![1, 2]);
+
+        assert_eq!(bookmark_all_keys(&tree).len(), 3);
     }
 
     /// Les formats usuels portent un nom ; les autres la taille brute.
