@@ -23,6 +23,7 @@ use lopdf::{Dictionary, Object, ObjectId, Stream};
 use youpdf_shared::{Error, Result};
 
 use crate::document::Document;
+use crate::util::{csv_escape, escape_xml, unescape_xml};
 
 /// Type d'un champ de formulaire.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -875,30 +876,12 @@ fn set_bit(flags: &mut i64, bit: i64, on: bool) {
     }
 }
 
-/// Cite un champ CSV si nécessaire (RFC 4180).
-fn csv_field(s: &str) -> String {
-    if s.contains('"') || s.contains(',') || s.contains('\n') || s.contains('\r') {
-        let mut out = String::with_capacity(s.len() + 2);
-        out.push('"');
-        for c in s.chars() {
-            if c == '"' {
-                out.push('"');
-            }
-            out.push(c);
-        }
-        out.push('"');
-        out
-    } else {
-        s.to_string()
-    }
-}
-
 fn export_csv(pairs: &[(String, String)]) -> String {
     let mut out = String::from("name,value\n");
     for (name, value) in pairs {
-        out.push_str(&csv_field(name));
+        out.push_str(&csv_escape(name));
         out.push(',');
-        out.push_str(&csv_field(value));
+        out.push_str(&csv_escape(value));
         out.push('\n');
     }
     out
@@ -937,31 +920,6 @@ fn export_json(pairs: &[(String, String)]) -> String {
     out
 }
 
-/// Échappe une chaîne pour un contenu XML.
-fn xml_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
-fn xml_unescape(s: &str) -> String {
-    // `&amp;` en dernier : sinon `&amp;lt;` deviendrait `<`.
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
-}
-
 fn export_xfdf(pairs: &[(String, String)]) -> String {
     let mut out = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
@@ -969,9 +927,9 @@ fn export_xfdf(pairs: &[(String, String)]) -> String {
     );
     for (name, value) in pairs {
         out.push_str("<field name=\"");
-        out.push_str(&xml_escape(name));
+        out.push_str(&escape_xml(name));
         out.push_str("\"><value>");
-        out.push_str(&xml_escape(value));
+        out.push_str(&escape_xml(value));
         out.push_str("</value></field>");
     }
     out.push_str("</fields></xfdf>");
@@ -1252,12 +1210,12 @@ fn parse_xfdf(data: &str) -> Vec<(String, String)> {
         let Some(end) = rest.find('"') else {
             break;
         };
-        let name = xml_unescape(&rest[..end]);
+        let name = unescape_xml(&rest[..end]);
         rest = &rest[end + 1..];
         if let Some(vstart) = rest.find("<value>") {
             let after = &rest[vstart + 7..];
             if let Some(vend) = after.find("</value>") {
-                pairs.push((name, xml_unescape(&after[..vend])));
+                pairs.push((name, unescape_xml(&after[..vend])));
                 rest = &after[vend + 8..];
             }
         }

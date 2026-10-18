@@ -2,6 +2,15 @@
 
 This document tracks the feature gap between YouPDF and UPDF.app v2.5.6, based on the audit of the UPDF.app bundle.
 
+## Implementation progress
+
+Cross-referenced with `docs/UPDF_IMPLEMENTATION_PLAN.md`. Gaps closed since the audit:
+
+- **Phase 0.1** — Removed dead dependencies (`docx-rs`, `convert-docx` feature, `futures`, `uuid` from `youpdf-ai`); deleted `convert/docx.rs`, the `Converter` trait and `ConversionReport`.
+- **Phase 0.2** — Added `youpdf-core/src/util.rs` (zlib compress/decompress, XML/CSV escaping) and routed `watermark`, `create`, `pdfa`, `office`, `forms`, `convert` through it.
+
+Unchecked below = still open. The plan document is the authoritative task list.
+
 ## 1. Window Chrome & Layout
 *   **UPDF:** Tabbed interface with `+` new tab, Home house button, traffic lights, avatar, notifications.
 *   **YouPDF:** Basic tab support, no Home/start screen, no notifications, no cloud/account/avatar integration.

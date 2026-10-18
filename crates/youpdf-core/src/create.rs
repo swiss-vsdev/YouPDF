@@ -15,6 +15,7 @@ use lopdf::{dictionary, Dictionary, Object, ObjectId, Stream};
 use youpdf_shared::{Error, Result};
 
 use crate::document::Document;
+use crate::util::flate_compress;
 
 /// Crée un document de `pages` pages vierges.
 ///
@@ -185,21 +186,6 @@ fn color_space(color: image::ColorType) -> &'static [u8] {
         | image::ColorType::La16 => b"DeviceGray",
         _ => b"DeviceRGB",
     }
-}
-
-/// Compresse en zlib (flux `/FlateDecode`).
-fn flate_compress(data: &[u8]) -> Result<Vec<u8>> {
-    use flate2::write::ZlibEncoder;
-    use flate2::Compression;
-    use std::io::Write;
-
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(data)
-        .map_err(|e| Error::Internal(format!("compression image : {e}")))?;
-    encoder
-        .finish()
-        .map_err(|e| Error::Internal(format!("compression image : {e}")))
 }
 
 impl Document {

@@ -40,10 +40,15 @@ Override the search path with `YOUPDF_PDFIUM_DIR=/path/to/dir`.
 
 ## Status
 
-v0.1 — viewer: tabs, thumbnails, search, zoom, continuous scroll.
-Planned: annotation, page organizing, forms, redaction, protection, OCR,
-conversion, batch, AI assistant. See `docs/` in the project history for the
-UX spec and plan.
+Implemented: tabs, home/recents, thumbnails, search & replace, zoom,
+continuous scroll, page layouts, slideshow, text selection and copy, in-place
+text and image editing, annotations (markup, ink, shapes, stamps, signatures),
+forms (fill and build), page organizing, crop, watermark, header/footer, Bates
+numbering, compression, protection (RC4/AES-256), redaction and sanitizing,
+OCR, measurement, document comparison, batch processing, Office export
+(Word/Excel/PowerPoint, flow and exact layout), AI assistant.
+
+In progress: 1:1 UPDF parity per `docs/UPDF_IMPLEMENTATION_PLAN.md`.
 
 ## License
 

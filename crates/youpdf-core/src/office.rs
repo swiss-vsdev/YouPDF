@@ -23,6 +23,7 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use crate::document::Document;
+use crate::util::escape_xml;
 
 /// Format Office proposé à l'export.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -422,22 +423,6 @@ fn root_rels(target: &str) -> String {
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="{target}"/></Relationships>"#
     )
-}
-
-/// Échappe un texte pour XML (`&`, `<`, `>`, `"`, `'`).
-fn escape_xml(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 /// Retire les caractères interdits en XML 1.0 (contrôles C0 sauf tabulation,
