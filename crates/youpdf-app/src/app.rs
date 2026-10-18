@@ -24,14 +24,14 @@ use youpdf_core::compress::CompressionLevel;
 use youpdf_core::render::NullRenderer;
 use youpdf_core::ocr::{make_searchable, TesseractEngine};
 use youpdf_core::{
-    blank_document, document_from_images, fold_case, Annotation, AnnotationKind, AnnotationStyle,
-    AttachmentInfo, Background, Bates, BatesPosition, ComparisonReport, Conformance, CropMargins,
-    DifferenceKind, Document, EncryptionOptions, EncryptionStrength, ExtractedTable,
-    FieldProperties, FormDataFormat, FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue,
-    MeasureKind, Measurement, NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry,
-    OutlineItem, OutlineStyle, OutlineTarget, PageRange, PageBitmap,
-    PdfiumRenderer, RedactionRegion, RenderOptions, Renderer, SearchIndex, SearchOptions,
-    SearchResult, TextFormat, TextFragment, Watermark, STAMP_NAMES,
+    blank_document, document_from_images, export_comments, fold_case, Annotation, AnnotationKind,
+    AnnotationState, AnnotationStyle, AttachmentInfo, Background, Bates, BatesPosition,
+    CommentFormat, ComparisonReport, Conformance, CropMargins, DifferenceKind, Document,
+    EncryptionOptions, EncryptionStrength, ExtractedTable, FieldProperties, FormDataFormat,
+    FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, MeasureKind, Measurement,
+    NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem, OutlineStyle,
+    OutlineTarget, PageRange, PageBitmap, PdfiumRenderer, RedactionRegion, RenderOptions, Renderer,
+    SearchIndex, SearchOptions, SearchResult, TextFormat, TextFragment, Watermark, STAMP_NAMES,
 };
 
 // --------------------------------------------------------------------------
@@ -1086,6 +1086,22 @@ pub struct YouPdfApp {
     bookmark_rename_text: String,
     /// Vrai quand l'édition en place vient de s'ouvrir : demande le focus.
     bookmark_rename_focus: bool,
+    /// Recherche plein texte de la liste des commentaires.
+    comment_search: String,
+    /// Filtre par type, par auteur, par couleur et par état de revue.
+    comment_kind: Option<AnnotationKind>,
+    comment_author: Option<String>,
+    comment_color: Option<[u8; 3]>,
+    comment_state: CommentStateFilter,
+    /// Tri de la liste.
+    comment_sort: CommentSort,
+    /// Commentaire auquel on répond : identifiant du parent et texte saisi.
+    comment_reply: Option<String>,
+    comment_reply_text: String,
+    /// Texte cité sous chaque surlignage, calculé une fois par document.
+    comment_quotes: HashMap<String, String>,
+    /// Onglet auquel appartient `comment_quotes`.
+    comment_quote_owner: usize,
 
     search_query: String,
     search_index: Option<(usize, SearchIndex)>,
@@ -1263,6 +1279,16 @@ impl YouPdfApp {
             bookmark_rename: None,
             bookmark_rename_text: String::new(),
             bookmark_rename_focus: false,
+            comment_search: String::new(),
+            comment_kind: None,
+            comment_author: None,
+            comment_color: None,
+            comment_state: CommentStateFilter::All,
+            comment_sort: CommentSort::Page,
+            comment_reply: None,
+            comment_reply_text: String::new(),
+            comment_quotes: HashMap::new(),
+            comment_quote_owner: usize::MAX,
             search_query: String::new(),
             search_index: None,
             results: Vec::new(),
@@ -1616,6 +1642,18 @@ impl YouPdfApp {
         self.bookmark_rename_focus = false;
         self.bookmark_drag = None;
         self.bookmark_collapsed.clear();
+        // La liste de commentaires repart de zéro : filtres, tri, citation et
+        // réponse en cours visent tous le document précédent.
+        self.comment_search.clear();
+        self.comment_kind = None;
+        self.comment_author = None;
+        self.comment_color = None;
+        self.comment_state = CommentStateFilter::All;
+        self.comment_sort = CommentSort::Page;
+        self.comment_reply = None;
+        self.comment_reply_text.clear();
+        self.comment_quotes.clear();
+        self.comment_quote_owner = usize::MAX;
         self.thumb_owner = usize::MAX;
         self.replace_open = false;
         self.edit_text = None;
@@ -3252,6 +3290,7 @@ impl YouPdfApp {
             .rev()
             .find(|(_, a)| {
                 a.page == page
+                    && a.reply_to.is_none()
                     && point[0] >= a.rect[0] - 4.0
                     && point[0] <= a.rect[2] + 4.0
                     && point[1] >= a.rect[1] - 4.0
@@ -4380,8 +4419,10 @@ impl YouPdfApp {
 
     // -- Panneau Commentaires ----------------------------------------------
 
+    /// Liste des commentaires : filtres, tri, réponses et export.
     fn comments_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         self.ensure_annots();
+        self.ensure_comment_quotes();
         let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
@@ -4403,94 +4444,533 @@ impl YouPdfApp {
             return;
         }
 
-        let entries: Vec<(usize, String, String, usize, String, [u8; 3])> = tab
-            .annots
-            .iter()
-            .enumerate()
-            .map(|(i, a)| {
-                (
-                    i,
-                    annot_label(a.kind).to_owned(),
-                    if a.content.is_empty() {
-                        "(no text)".to_owned()
-                    } else {
-                        a.content.clone()
-                    },
-                    a.page,
-                    a.created_at.clone(),
-                    a.style.color,
-                )
-            })
-            .collect();
+        let panel_w = self.panel_w;
+        let quotes = &self.comment_quotes;
+        let now = chrono::Utc::now();
 
-        let mut jump = None;
-        let mut remove = None;
+        // L'état de l'interface est relu en fin de fonction : les fermetures
+        // de peinture ne peuvent pas emprunter `self`.
+        let mut filter = self.comment_filter();
+        let mut sort = self.comment_sort;
+        let reply_open = self.comment_reply.clone();
+        let mut reply_text = self.comment_reply_text.clone();
+        let mut action: Option<CommentAction> = None;
+
+        // Types, auteurs et couleurs réellement présents : proposer un filtre
+        // qui ne peut rien retenir n'apporte rien.
+        let mut kinds: Vec<AnnotationKind> = tab.annots.iter().map(|a| a.kind).collect();
+        kinds.sort_by_key(|kind| kind.pdf_subtype());
+        kinds.dedup();
+        let mut authors: Vec<String> = tab.annots.iter().map(|a| a.author.clone()).collect();
+        authors.sort();
+        authors.dedup();
+        let mut colors: Vec<[u8; 3]> = tab.annots.iter().map(|a| a.style.color).collect();
+        colors.sort_unstable();
+        colors.dedup();
+
+        ui.horizontal(|ui| {
+            ui.add_space(4.0);
+            ui.menu_button(RichText::new("Export Comments").size(11.0), |ui| {
+                for format in CommentFormat::ALL {
+                    if ui.button(format.display_name()).clicked() {
+                        action = Some(CommentAction::Export(format));
+                        ui.close_menu();
+                    }
+                }
+            });
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.add_space(4.0);
+            ui.add_sized(
+                [panel_w - 32.0, 20.0],
+                TextEdit::singleline(&mut filter.query).hint_text("Search comments"),
+            );
+        });
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(4.0);
+            egui::ComboBox::from_id_salt("comment-kind")
+                .width(70.0)
+                .selected_text(filter.kind.map_or("All types", annot_label))
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(filter.kind.is_none(), "All types")
+                        .clicked()
+                    {
+                        filter.kind = None;
+                    }
+                    for kind in &kinds {
+                        if ui
+                            .selectable_label(filter.kind == Some(*kind), annot_label(*kind))
+                            .clicked()
+                        {
+                            filter.kind = Some(*kind);
+                        }
+                    }
+                });
+            egui::ComboBox::from_id_salt("comment-author")
+                .width(76.0)
+                .selected_text(filter.author.as_deref().unwrap_or("All authors"))
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(filter.author.is_none(), "All authors")
+                        .clicked()
+                    {
+                        filter.author = None;
+                    }
+                    for author in &authors {
+                        if ui
+                            .selectable_label(filter.author.as_deref() == Some(author.as_str()), author)
+                            .clicked()
+                        {
+                            filter.author = Some(author.clone());
+                        }
+                    }
+                });
+            egui::ComboBox::from_id_salt("comment-color")
+                .width(74.0)
+                .selected_text(filter.color.map_or_else(|| "All colors".to_owned(), hex_color))
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(filter.color.is_none(), "All colors")
+                        .clicked()
+                    {
+                        filter.color = None;
+                    }
+                    for color in &colors {
+                        let label = RichText::new(hex_color(*color)).color(Color32::from_rgb(
+                            color[0], color[1], color[2],
+                        ));
+                        if ui
+                            .selectable_label(filter.color == Some(*color), label)
+                            .clicked()
+                        {
+                            filter.color = Some(*color);
+                        }
+                    }
+                });
+            egui::ComboBox::from_id_salt("comment-state")
+                .width(78.0)
+                .selected_text(filter.state.display_name())
+                .show_ui(ui, |ui| {
+                    for state in CommentStateFilter::ALL {
+                        if ui
+                            .selectable_label(filter.state == state, state.display_name())
+                            .clicked()
+                        {
+                            filter.state = state;
+                        }
+                    }
+                });
+        });
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(4.0);
+            ui.label(RichText::new("Sort").size(10.0).color(pal().muted));
+            for (choice, name) in [
+                (CommentSort::Page, "Page"),
+                (CommentSort::Date, "Date"),
+                (CommentSort::Author, "Author"),
+            ] {
+                if ui
+                    .selectable_label(sort == choice, RichText::new(name).size(10.0))
+                    .clicked()
+                {
+                    sort = choice;
+                }
+            }
+        });
+        ui.add_space(2.0);
+        ui.separator();
+
+        let rows = comment_rows(&tab.annots, &filter, sort);
+        if rows.is_empty() {
+            ui.add_space(10.0);
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    RichText::new("No comment matches")
+                        .size(11.0)
+                        .color(pal().muted),
+                );
+            });
+        }
+
         ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add_space(6.0);
-                for (idx, kind, text, page, when, color) in &entries {
-                    let (rect, resp) = ui
-                        .allocate_exact_size(vec2(self.panel_w - 24.0, 44.0), Sense::click());
-                    if resp.hovered() {
-                        ui.painter()
-                            .rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
-                    }
-                    let swatch = Rect::from_center_size(
-                        pos2(rect.min.x + 16.0, rect.center().y),
-                        vec2(10.0, 10.0),
-                    );
-                    ui.painter().rect_filled(
-                        swatch,
-                        Rounding::same(2.0),
-                        Color32::from_rgb(color[0], color[1], color[2]),
-                    );
-                    ui.painter().text(
-                        pos2(rect.min.x + 28.0, rect.min.y + 12.0),
-                        Align2::LEFT_CENTER,
-                        format!("{kind} · p.{page}"),
-                        FontId::proportional(11.5),
-                        pal().icon_bright,
-                    );
-                    ui.painter().text(
-                        pos2(rect.min.x + 28.0, rect.min.y + 28.0),
-                        Align2::LEFT_CENTER,
-                        shorten(text, 26),
-                        FontId::proportional(11.0),
-                        pal().muted,
-                    );
-                    ui.painter().text(
-                        pos2(rect.max.x - 10.0, rect.min.y + 12.0),
-                        Align2::RIGHT_CENTER,
-                        when.get(..10).unwrap_or(""),
-                        FontId::proportional(9.5),
-                        pal().muted,
-                    );
-                    let x_rect = Rect::from_center_size(
-                        pos2(rect.max.x - 16.0, rect.max.y - 12.0),
-                        vec2(16.0, 16.0),
-                    );
-                    let x_resp = ui.interact(x_rect, Id::new(("annot-x", *idx)), Sense::click());
-                    icon_close(
-                        ui.painter(),
-                        x_rect,
-                        if x_resp.hovered() { pal().icon_bright } else { pal().muted },
-                    );
-                    if x_resp.clicked() {
-                        remove = Some(*idx);
-                    } else if resp.clicked() {
-                        jump = Some(*page);
-                    }
+                ui.add_space(4.0);
+                for row in &rows {
+                    let card_w = (panel_w - 16.0 - row.depth as f32 * 14.0).max(80.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(4.0 + row.depth as f32 * 14.0);
+                        ui.vertical(|ui| {
+                            let response = ui
+                                .scope(|ui| {
+                                    ui.set_width(card_w);
+                                    ui.horizontal(|ui| {
+                                        // Avatar : l'initiale de l'auteur.
+                                        let (rect, _) = ui
+                                            .allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
+                                        ui.painter().circle_filled(
+                                            rect.center(),
+                                            9.0,
+                                            pal().widget_bg,
+                                        );
+                                        ui.painter().text(
+                                            rect.center(),
+                                            Align2::CENTER_CENTER,
+                                            author_initial(&row.author),
+                                            FontId::proportional(10.0),
+                                            pal().icon_bright,
+                                        );
+                                        ui.vertical(|ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    RichText::new(&row.author).size(11.5).strong(),
+                                                );
+                                                ui.label(
+                                                    RichText::new(relative_time(
+                                                        &row.created_at,
+                                                        now,
+                                                    ))
+                                                    .size(9.5)
+                                                    .color(pal().muted),
+                                                );
+                                            });
+                                            ui.horizontal(|ui| {
+                                                let (swatch, _) = ui.allocate_exact_size(
+                                                    vec2(8.0, 8.0),
+                                                    Sense::hover(),
+                                                );
+                                                ui.painter().rect_filled(
+                                                    swatch,
+                                                    Rounding::same(2.0),
+                                                    Color32::from_rgb(
+                                                        row.color[0],
+                                                        row.color[1],
+                                                        row.color[2],
+                                                    ),
+                                                );
+                                                ui.label(
+                                                    RichText::new(format!(
+                                                        "{} · p.{}",
+                                                        annot_label(row.kind),
+                                                        row.page
+                                                    ))
+                                                    .size(10.0)
+                                                    .color(pal().icon_bright),
+                                                );
+                                            });
+                                        });
+                                    });
+                                    // Texte visé par le surlignage.
+                                    if let Some(quote) = quotes.get(&row.id) {
+                                        if !quote.is_empty() && is_markup(row.kind) {
+                                            ui.label(
+                                                RichText::new(format!("“{quote}”"))
+                                                    .size(10.0)
+                                                    .italics()
+                                                    .color(pal().muted),
+                                            );
+                                        }
+                                    }
+                                    if !row.content.is_empty() {
+                                        ui.label(RichText::new(&row.content).size(11.0));
+                                    }
+                                    ui.horizontal(|ui| {
+                                        ui.menu_button(
+                                            RichText::new(format!(
+                                                "{} {}",
+                                                comment_state_icon(row.state),
+                                                row.state.display_name()
+                                            ))
+                                            .size(9.5)
+                                            .color(comment_state_color(row.state)),
+                                            |ui| {
+                                                for state in AnnotationState::ALL {
+                                                    if ui
+                                                        .selectable_label(
+                                                            row.state == state,
+                                                            state.display_name(),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        action = Some(CommentAction::SetState(
+                                                            row.id.clone(),
+                                                            state,
+                                                        ));
+                                                        ui.close_menu();
+                                                    }
+                                                }
+                                            },
+                                        );
+                                        if ui
+                                            .button(RichText::new("Reply").size(9.5))
+                                            .clicked()
+                                        {
+                                            action =
+                                                Some(CommentAction::Reply(row.id.clone()));
+                                        }
+                                    });
+                                    if reply_open.as_deref() == Some(row.id.as_str()) {
+                                        ui.horizontal(|ui| {
+                                            let edit = ui.add_sized(
+                                                [(card_w - 56.0).max(60.0), 20.0],
+                                                TextEdit::singleline(&mut reply_text)
+                                                    .hint_text("Reply…"),
+                                            );
+                                            // Entrée valide la saisie ; la
+                                            // perte de focus seule (clic
+                                            // ailleurs) n'envoie rien.
+                                            let entered = edit.lost_focus()
+                                                && !reply_text.trim().is_empty()
+                                                && ui.input(|i| {
+                                                    i.key_pressed(egui::Key::Enter)
+                                                });
+                                            let send = ui
+                                                .button(RichText::new("Send").size(9.5))
+                                                .clicked();
+                                            if send || entered {
+                                                action = Some(CommentAction::Send(
+                                                    row.id.clone(),
+                                                    reply_text.clone(),
+                                                ));
+                                            }
+                                        });
+                                    }
+                                })
+                                .response;
+                            // Carte cliquable : saut vers la page visée.
+                            let card = response.interact(Sense::click());
+                            if card.clicked() && action.is_none() {
+                                action = Some(CommentAction::Jump(row.page));
+                            }
+                            card.context_menu(|ui| {
+                                if ui.button("Reply").clicked() {
+                                    action = Some(CommentAction::Reply(row.id.clone()));
+                                    ui.close_menu();
+                                }
+                                if ui.button("Delete").clicked() {
+                                    action = Some(CommentAction::Delete(row.id.clone()));
+                                    ui.close_menu();
+                                }
+                            });
+                        });
+                    });
                     ui.add_space(4.0);
                 }
             });
 
-        if let Some(idx) = remove {
-            self.remove_annot(idx);
-            let _ = ctx;
+        // Les filtres et la réponse en cours repartent dans l'application…
+        self.comment_search = filter.query.clone();
+        self.comment_kind = filter.kind;
+        self.comment_author = filter.author.clone();
+        self.comment_color = filter.color;
+        self.comment_state = filter.state;
+        self.comment_sort = sort;
+        self.comment_reply = reply_open;
+        self.comment_reply_text = reply_text;
+        // …puis l'action demandée a le dernier mot.
+        match action {
+            Some(CommentAction::Jump(page)) => self.jump = Some(page),
+            Some(CommentAction::Delete(id)) => self.remove_comment_thread(&id, ctx),
+            Some(CommentAction::SetState(id, state)) => self.set_comment_state(&id, state),
+            Some(CommentAction::Reply(id)) => {
+                // Recliquer sur « Reply » referme la zone de saisie.
+                if self.comment_reply.as_deref() == Some(id.as_str()) {
+                    self.comment_reply = None;
+                } else {
+                    self.comment_reply = Some(id);
+                }
+                self.comment_reply_text.clear();
+            }
+            Some(CommentAction::Send(parent, text)) => self.send_comment_reply(&parent, &text, ctx),
+            Some(CommentAction::Export(format)) => self.export_comments_dialog(format, ctx),
+            None => {}
         }
-        if let Some(page) = jump {
-            self.jump = Some(page);
+    }
+
+    /// Construit les filtres courants de la liste des commentaires.
+    fn comment_filter(&self) -> CommentFilter {
+        CommentFilter {
+            kind: self.comment_kind,
+            author: self.comment_author.clone(),
+            color: self.comment_color,
+            state: self.comment_state,
+            query: self.comment_search.clone(),
+        }
+    }
+
+    /// Calcule une fois par document le texte cité sous chaque surlignage.
+    fn ensure_comment_quotes(&mut self) {
+        let Self {
+            tabs,
+            comment_quotes,
+            comment_quote_owner,
+            active,
+            ..
+        } = self;
+        if *comment_quote_owner != *active {
+            comment_quotes.clear();
+            *comment_quote_owner = *active;
+        }
+        let Some(tab) = tabs.get(*active) else {
+            return;
+        };
+        // Un seul passage par page : l'extraction de texte coûte bien plus
+        // cher que la comparaison de rectangles.
+        let mut by_page: std::collections::BTreeMap<u32, Vec<(String, [f32; 4])>> =
+            std::collections::BTreeMap::new();
+        for annot in &tab.annots {
+            if annot.reply_to.is_some()
+                || !is_markup(annot.kind)
+                || comment_quotes.contains_key(&annot.id)
+            {
+                continue;
+            }
+            // Le rectangle est dans le repère affiché ; l'extraction de texte
+            // travaille dans celui de la page.
+            let rect = tab.doc.page_view(annot.page as u32).page_rect(annot.rect);
+            by_page
+                .entry(annot.page as u32)
+                .or_default()
+                .push((annot.id.clone(), rect));
+        }
+        for (page, requests) in by_page {
+            let rects: Vec<[f32; 4]> = requests.iter().map(|(_, rect)| *rect).collect();
+            let texts = tab.doc.text_in_rects(page, &rects);
+            for ((id, _), text) in requests.into_iter().zip(texts) {
+                comment_quotes.insert(id, text);
+            }
+        }
+    }
+
+    /// Supprime un commentaire et toute sa descendance de réponses.
+    fn remove_comment_thread(&mut self, id: &str, ctx: &egui::Context) {
+        let mut doomed: Vec<String> = vec![id.to_owned()];
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            // Fermeture transitive par largeur : chaque réponse trouvée
+            // étend la liste à explorer.
+            let mut cursor = 0;
+            while cursor < doomed.len() {
+                let parent = doomed[cursor].clone();
+                cursor += 1;
+                for annot in &tab.annots {
+                    if annot.reply_to.as_deref() == Some(parent.as_str())
+                        && !doomed.contains(&annot.id)
+                    {
+                        doomed.push(annot.id.clone());
+                    }
+                }
+            }
+            let before = tab.annots.len();
+            if before == doomed.len().min(before) && !tab.annots.iter().any(|a| a.id == id) {
+                return;
+            }
+            tab.undo.push(tab.annots.clone());
+            if tab.undo.len() > 60 {
+                tab.undo.remove(0);
+            }
+            tab.redo.clear();
+            tab.annots.retain(|annot| !doomed.contains(&annot.id));
+            if tab.annots.len() != before {
+                tab.dirty = true;
+            }
+        }
+        if self.has_annot_selection {
+            self.has_annot_selection = false;
+        }
+        for id in &doomed {
+            self.comment_quotes.remove(id);
+        }
+        if self.comment_reply.as_deref() == Some(id) {
+            self.comment_reply = None;
+            self.comment_reply_text.clear();
+        }
+        let _ = ctx;
+    }
+
+    /// Applique un état de revue à un commentaire.
+    fn set_comment_state(&mut self, id: &str, state: AnnotationState) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let Some(index) = tab.annots.iter().position(|annot| annot.id == id) else {
+            return;
+        };
+        if tab.annots[index].state == state {
+            return;
+        }
+        tab.undo.push(tab.annots.clone());
+        if tab.undo.len() > 60 {
+            tab.undo.remove(0);
+        }
+        tab.redo.clear();
+        tab.annots[index].state = state;
+        tab.dirty = true;
+    }
+
+    /// Ajoute une réponse à un commentaire.
+    ///
+    /// Une réponse est une note invisible sur la page : elle vit dans le fil,
+    /// pas comme marque du document.
+    fn send_comment_reply(&mut self, parent: &str, text: &str, ctx: &egui::Context) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let Some((page, rect, color)) = self.tabs.get(self.active).and_then(|tab| {
+            tab.annots
+                .iter()
+                .find(|annot| annot.id == parent)
+                .map(|annot| (annot.page, annot.rect, annot.style.color))
+        }) else {
+            return;
+        };
+        let mut reply = Annotation::new(page, AnnotationKind::Note, rect);
+        reply.content = text.to_owned();
+        reply.reply_to = Some(parent.to_owned());
+        reply.style.color = color;
+        self.push_annot(reply);
+        self.comment_reply = None;
+        self.comment_reply_text.clear();
+        self.toast(ctx, "Reply added");
+    }
+
+    /// Exporte les commentaires affichés (filtres et tri compris).
+    fn export_comments_dialog(&mut self, format: CommentFormat, ctx: &egui::Context) {
+        let filter = self.comment_filter();
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let rows = comment_rows(&tab.annots, &filter, self.comment_sort);
+        let annots: Vec<Annotation> = rows
+            .iter()
+            .filter_map(|row| tab.annots.get(row.index).cloned())
+            .collect();
+        // Les rectangles en mémoire sont dans le repère affiché ; l'export
+        // les veut dans celui de la page.
+        let annots = annots_to_page(&tab.doc, &annots);
+        let data = match export_comments(&annots, format) {
+            Ok(data) => data,
+            Err(err) => {
+                self.toast(ctx, format!("Export failed: {err}"));
+                return;
+            }
+        };
+        let stem = self
+            .active_stem()
+            .unwrap_or_else(|| "comments".to_owned());
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter(format.display_name(), &[format.extension()])
+            .set_file_name(format!("{stem}-comments.{}", format.extension()))
+            .save_file()
+        {
+            match std::fs::write(&path, data) {
+                Ok(()) => self.toast(ctx, "Comments exported"),
+                Err(err) => self.toast(ctx, format!("Export failed: {err}")),
+            }
         }
     }
 
@@ -11279,6 +11759,320 @@ fn annot_label(kind: AnnotationKind) -> &'static str {
     }
 }
 
+/// Tri de la liste des commentaires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommentSort {
+    /// Par page, puis par date.
+    Page,
+    /// Du plus récent au plus ancien.
+    Date,
+    /// Par auteur, puis par page.
+    Author,
+}
+
+/// Filtre par état de revue (« coché »).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommentStateFilter {
+    /// Tous les commentaires.
+    All,
+    /// Ceux qui n'ont pas encore été relus.
+    Unchecked,
+    /// Un état précis.
+    State(AnnotationState),
+}
+
+impl CommentStateFilter {
+    /// Les choix du menu, dans l'ordre.
+    const ALL: [Self; 6] = [
+        Self::All,
+        Self::Unchecked,
+        Self::State(AnnotationState::Accepted),
+        Self::State(AnnotationState::Rejected),
+        Self::State(AnnotationState::Cancelled),
+        Self::State(AnnotationState::Completed),
+    ];
+
+    /// Libellé anglais pour l'interface.
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::All => "All status",
+            Self::Unchecked => "Unchecked",
+            Self::State(state) => state.display_name(),
+        }
+    }
+
+    /// Vrai quand l'état de revue passe le filtre.
+    fn matches(self, state: AnnotationState) -> bool {
+        match self {
+            Self::All => true,
+            Self::Unchecked => state == AnnotationState::None,
+            Self::State(wanted) => state == wanted,
+        }
+    }
+}
+
+/// Filtres de la liste des commentaires.
+#[derive(Debug, Clone)]
+struct CommentFilter {
+    kind: Option<AnnotationKind>,
+    author: Option<String>,
+    color: Option<[u8; 3]>,
+    state: CommentStateFilter,
+    /// Recherche plein texte, insensible à la casse.
+    query: String,
+}
+
+impl CommentFilter {
+    /// Vrai quand le commentaire passe tous les filtres.
+    fn matches(&self, annotation: &Annotation) -> bool {
+        if let Some(kind) = self.kind {
+            if annotation.kind != kind {
+                return false;
+            }
+        }
+        if let Some(author) = &self.author {
+            if &annotation.author != author {
+                return false;
+            }
+        }
+        if let Some(color) = self.color {
+            if annotation.style.color != color {
+                return false;
+            }
+        }
+        if !self.state.matches(annotation.state) {
+            return false;
+        }
+        let query = self.query.trim();
+        if !query.is_empty() {
+            let query = query.to_lowercase();
+            let haystack = format!("{} {}", annotation.content, annotation.author).to_lowercase();
+            if !haystack.contains(&query) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Une ligne de la liste des commentaires, prête à peindre.
+struct CommentRow {
+    /// Indice dans `Tab::annots`.
+    index: usize,
+    id: String,
+    page: usize,
+    kind: AnnotationKind,
+    content: String,
+    author: String,
+    created_at: String,
+    color: [u8; 3],
+    state: AnnotationState,
+    /// 0 pour un commentaire, 1 et plus pour une réponse imbriquée.
+    depth: usize,
+}
+
+/// Action demandée par la liste des commentaires.
+enum CommentAction {
+    /// Aller à la page visée.
+    Jump(usize),
+    /// Supprimer le commentaire et ses réponses.
+    Delete(String),
+    /// Changer l'état de revue.
+    SetState(String, AnnotationState),
+    /// Ouvrir la zone de réponse sous ce commentaire.
+    Reply(String),
+    /// Envoyer une réponse.
+    Send(String, String),
+    /// Exporter la liste.
+    Export(CommentFormat),
+}
+
+/// Vrai pour les annotations de marquage de texte, seules à porter une
+/// citation (« le texte visé »).
+fn is_markup(kind: AnnotationKind) -> bool {
+    matches!(
+        kind,
+        AnnotationKind::Highlight
+            | AnnotationKind::Underline
+            | AnnotationKind::StrikeOut
+            | AnnotationKind::Squiggly
+    )
+}
+
+/// Indices des commentaires, dans l'ordre de tri demandé.
+fn comment_order(annots: &[Annotation], sort: CommentSort) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..annots.len()).collect();
+    match sort {
+        CommentSort::Page => order.sort_by_key(|index| {
+            (
+                annots[*index].page,
+                annots[*index].created_at.clone(),
+                annots[*index].id.clone(),
+            )
+        }),
+        CommentSort::Date => order.sort_by(|a, b| {
+            annots[*b]
+                .created_at
+                .cmp(&annots[*a].created_at)
+                .then(annots[*a].page.cmp(&annots[*b].page))
+                .then(annots[*a].id.cmp(&annots[*b].id))
+        }),
+        CommentSort::Author => order.sort_by(|a, b| {
+            annots[*a]
+                .author
+                .to_lowercase()
+                .cmp(&annots[*b].author.to_lowercase())
+                .then(annots[*a].page.cmp(&annots[*b].page))
+                .then(annots[*a].id.cmp(&annots[*b].id))
+        }),
+    }
+    order
+}
+
+/// Construit les lignes affichées : filtres, tri, puis réponses imbriquées
+/// sous leur parent.
+///
+/// Une réponse dont le parent est filtré remonte à la racine : elle reste
+/// visible plutôt que d'être perdue. Un commentaire sans racine (réponse
+/// circulaire) est posé à plat, pour la même raison.
+fn comment_rows(annots: &[Annotation], filter: &CommentFilter, sort: CommentSort) -> Vec<CommentRow> {
+    use std::collections::HashSet;
+
+    let included: HashSet<String> = annots
+        .iter()
+        .filter(|annotation| filter.matches(annotation))
+        .map(|annotation| annotation.id.clone())
+        .collect();
+    let order = comment_order(annots, sort);
+
+    let mut rows = Vec::new();
+    let mut emitted: HashSet<String> = HashSet::new();
+    for index in &order {
+        let annotation = &annots[*index];
+        if !included.contains(annotation.id.as_str()) {
+            continue;
+        }
+        let orphan = annotation
+            .reply_to
+            .as_deref()
+            .map_or(true, |parent| !included.contains(parent));
+        if orphan {
+            append_thread(annots, &order, &included, *index, 0, &mut rows, &mut emitted);
+        }
+    }
+    // Réponses circulaires : jamais atteintes depuis une racine.
+    for index in &order {
+        let annotation = &annots[*index];
+        if included.contains(annotation.id.as_str()) && !emitted.contains(annotation.id.as_str()) {
+            append_thread(annots, &order, &included, *index, 0, &mut rows, &mut emitted);
+        }
+    }
+    rows
+}
+
+/// Ajoute un commentaire puis ses réponses, récursivement.
+fn append_thread(
+    annots: &[Annotation],
+    order: &[usize],
+    included: &std::collections::HashSet<String>,
+    index: usize,
+    depth: usize,
+    rows: &mut Vec<CommentRow>,
+    emitted: &mut std::collections::HashSet<String>,
+) {
+    let annotation = &annots[index];
+    // `emitted` rompt aussi les cycles : un commentaire déjà posé n'y revient
+    // jamais.
+    if !emitted.insert(annotation.id.clone()) {
+        return;
+    }
+    rows.push(CommentRow {
+        index,
+        id: annotation.id.clone(),
+        page: annotation.page,
+        kind: annotation.kind,
+        content: annotation.content.clone(),
+        author: annotation.author.clone(),
+        created_at: annotation.created_at.clone(),
+        color: annotation.style.color,
+        state: annotation.state,
+        depth,
+    });
+    for child in order {
+        let reply = &annots[*child];
+        if reply.reply_to.as_deref() != Some(annotation.id.as_str())
+            || !included.contains(reply.id.as_str())
+        {
+            continue;
+        }
+        append_thread(annots, order, included, *child, depth + 1, rows, emitted);
+    }
+}
+
+/// Distance au présent, en clair (« 5 min », « 3 h », « 2 d »).
+fn relative_time(when: &str, now: chrono::DateTime<chrono::Utc>) -> String {
+    let Ok(then) = chrono::DateTime::parse_from_rfc3339(when) else {
+        return when.get(..10).unwrap_or("").to_owned();
+    };
+    let seconds = (now - then.with_timezone(&chrono::Utc)).num_seconds();
+    if seconds < 60 {
+        return "now".to_owned();
+    }
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{minutes} min");
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{hours} h");
+    }
+    let days = hours / 24;
+    if days < 30 {
+        return format!("{days} d");
+    }
+    let months = days / 30;
+    if months < 12 {
+        return format!("{months} mo");
+    }
+    format!("{} y", months / 12)
+}
+
+/// Initiale d'auteur, pour l'avatar de la carte.
+fn author_initial(author: &str) -> String {
+    author
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_owned())
+}
+
+/// Couleur d'affichage `#RRGGBB`.
+fn hex_color(color: [u8; 3]) -> String {
+    format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2])
+}
+
+/// Icône du marqueur d'état.
+fn comment_state_icon(state: AnnotationState) -> &'static str {
+    match state {
+        AnnotationState::None => ph::CHAT_CIRCLE,
+        AnnotationState::Accepted => ph::CHECK_CIRCLE,
+        AnnotationState::Rejected => ph::X_CIRCLE,
+        AnnotationState::Cancelled => ph::PROHIBIT,
+        AnnotationState::Completed => ph::CHECK,
+    }
+}
+
+/// Couleur du marqueur d'état.
+fn comment_state_color(state: AnnotationState) -> Color32 {
+    match state {
+        AnnotationState::None => pal().muted,
+        AnnotationState::Accepted => Color32::from_rgb(72, 168, 104),
+        AnnotationState::Rejected => Color32::from_rgb(206, 88, 84),
+        AnnotationState::Cancelled => Color32::from_rgb(206, 158, 72),
+        AnnotationState::Completed => pal().icon_bright,
+    }
+}
+
 /// Dessine les annotations d'une page ; coordonnées PDF → écran.
 fn draw_annots(
     painter: &Painter,
@@ -11289,7 +12083,8 @@ fn draw_annots(
     selected: Option<usize>,
 ) {
     for (idx, annot) in tab.annots.iter().enumerate() {
-        if annot.page != page as usize {
+        // Une réponse vit dans le fil de discussion, pas sur la page.
+        if annot.page != page as usize || annot.reply_to.is_some() {
             continue;
         }
         let to_screen =
@@ -11718,5 +12513,147 @@ mod tests {
             frag("petit", [10.0, 100.0, 35.0, 112.0], 12.0),
         ];
         assert_eq!(selection_text(&frags, None), "petit grand");
+    }
+
+    /// Commentaire de test, avec un identifiant et un auteur choisis.
+    fn comment(id: &str, page: usize, author: &str, when: &str) -> Annotation {
+        let mut annot = Annotation::new(page, AnnotationKind::Highlight, [0.0, 0.0, 10.0, 10.0]);
+        annot.id = id.to_owned();
+        annot.author = author.to_owned();
+        annot.created_at = when.to_owned();
+        annot
+    }
+
+    fn filter_all() -> CommentFilter {
+        CommentFilter {
+            kind: None,
+            author: None,
+            color: None,
+            state: CommentStateFilter::All,
+            query: String::new(),
+        }
+    }
+
+    /// Les réponses s'imbriquent sous leur parent, dans l'ordre du fil.
+    #[test]
+    fn comment_rows_nest_replies_under_their_parent() {
+        let mut reply = comment("r1", 1, "Bob", "2026-01-02T00:00:00Z");
+        reply.reply_to = Some("p1".to_owned());
+        let mut deep = comment("r2", 1, "Bob", "2026-01-03T00:00:00Z");
+        deep.reply_to = Some("r1".to_owned());
+        let annots = vec![comment("p1", 1, "Alice", "2026-01-01T00:00:00Z"), reply, deep];
+
+        let rows = comment_rows(&annots, &filter_all(), CommentSort::Page);
+
+        let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(ids, vec!["p1", "r1", "r2"]);
+        assert_eq!(rows[0].depth, 0);
+        assert_eq!(rows[1].depth, 1);
+        assert_eq!(rows[2].depth, 2);
+    }
+
+    /// Une réponse dont le parent est filtré remonte à la racine : elle
+    /// reste visible.
+    #[test]
+    fn comment_rows_promote_an_orphaned_reply() {
+        let mut child = comment("r1", 1, "Bob", "2026-01-02T00:00:00Z");
+        child.reply_to = Some("p1".to_owned());
+        let annots = vec![comment("p1", 1, "Alice", "2026-01-01T00:00:00Z"), child];
+
+        let filter = CommentFilter {
+            author: Some("Bob".to_owned()),
+            ..filter_all()
+        };
+        let rows = comment_rows(&annots, &filter, CommentSort::Page);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "r1");
+        assert_eq!(rows[0].depth, 0);
+    }
+
+    /// Une réponse circulaire ne disparaît pas de la liste.
+    #[test]
+    fn comment_rows_survive_a_reply_cycle() {
+        let mut a = comment("a", 1, "Alice", "2026-01-01T00:00:00Z");
+        a.reply_to = Some("b".to_owned());
+        let mut b = comment("b", 1, "Bob", "2026-01-02T00:00:00Z");
+        b.reply_to = Some("a".to_owned());
+
+        let rows = comment_rows(&[a, b], &filter_all(), CommentSort::Page);
+
+        assert_eq!(rows.len(), 2, "les deux commentaires apparaissent");
+    }
+
+    /// Les filtres de type, d'auteur et d'état se cumulent.
+    #[test]
+    fn comment_filter_stacks_criteria() {
+        let mut accepted = comment("a", 1, "Alice", "2026-01-01T00:00:00Z");
+        accepted.state = AnnotationState::Accepted;
+        accepted.content = "ligne trouvée".to_owned();
+        let mut other = comment("b", 1, "Bob", "2026-01-02T00:00:00Z");
+        other.kind = AnnotationKind::Note;
+        let annots = vec![accepted, other];
+
+        let filter = CommentFilter {
+            kind: Some(AnnotationKind::Highlight),
+            author: Some("Alice".to_owned()),
+            state: CommentStateFilter::State(AnnotationState::Accepted),
+            query: "trouvée".to_owned(),
+            ..filter_all()
+        };
+        let rows = comment_rows(&annots, &filter, CommentSort::Page);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "a");
+
+        // Le même filtre, une case à côté : plus rien ne passe.
+        let missed = CommentFilter {
+            query: "absente".to_owned(),
+            ..filter
+        };
+        assert!(comment_rows(&annots, &missed, CommentSort::Page).is_empty());
+
+        // « Unchecked » ne retient que l'état nul.
+        let unchecked = CommentFilter {
+            state: CommentStateFilter::Unchecked,
+            ..filter_all()
+        };
+        let rows = comment_rows(&annots, &unchecked, CommentSort::Page);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "b");
+    }
+
+    /// Le tri par date va du plus récent au plus ancien.
+    #[test]
+    fn comment_date_sort_is_newest_first() {
+        let annots = vec![
+            comment("vieux", 1, "Alice", "2026-01-01T00:00:00Z"),
+            comment("neuf", 3, "Bob", "2026-03-01T00:00:00Z"),
+        ];
+        let rows = comment_rows(&annots, &filter_all(), CommentSort::Date);
+        let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(ids, vec!["neuf", "vieux"]);
+    }
+
+    /// L'horodatage relatif se lit par paliers.
+    #[test]
+    fn relative_time_follows_its_buckets() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T12:00:00Z")
+            .expect("date de référence")
+            .with_timezone(&chrono::Utc);
+
+        assert_eq!(relative_time("2026-06-15T11:59:30Z", now), "now");
+        assert_eq!(relative_time("2026-06-15T11:30:00Z", now), "30 min");
+        assert_eq!(relative_time("2026-06-15T07:00:00Z", now), "5 h");
+        assert_eq!(relative_time("2026-06-12T12:00:00Z", now), "3 d");
+        // Date illisible : on retombe sur le jour seul.
+        assert_eq!(relative_time("hier", now), "");
+    }
+
+    /// L'avatar reprend la première lettre de l'auteur, en capitale.
+    #[test]
+    fn author_initial_is_uppercased() {
+        assert_eq!(author_initial("alice"), "A");
+        assert_eq!(author_initial("Bob"), "B");
+        assert_eq!(author_initial(""), "?");
     }
 }

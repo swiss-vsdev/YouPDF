@@ -46,7 +46,10 @@ pub mod structure;
 pub mod util;
 pub mod watermark;
 
-pub use annotate::{Annotation, AnnotationKind, AnnotationStyle, STAMP_NAMES, stamp_name};
+pub use annotate::{
+    export_comments, stamp_name, Annotation, AnnotationKind, AnnotationState, AnnotationStyle,
+    CommentFormat, STAMP_NAMES,
+};
 pub use compare::{ComparisonReport, Difference, DifferenceKind};
 pub use convert::{ImageFormat, TextFormat};
 pub use create::{blank_document, document_from_images};

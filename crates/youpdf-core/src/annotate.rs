@@ -206,6 +206,75 @@ impl AnnotationStyle {
     }
 }
 
+/// État de revue d'une annotation (`/State` + `/StateModel Review`).
+///
+/// C'est le marqueur « coché » de la liste de commentaires : Acrobat et UPDF
+/// relisent un commentaire accepté, rejeté, annulé ou terminé.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnotationState {
+    /// Aucun état : commentaire non relu.
+    #[default]
+    None,
+    /// Accepté.
+    Accepted,
+    /// Rejeté.
+    Rejected,
+    /// Annulé.
+    Cancelled,
+    /// Terminé.
+    Completed,
+}
+
+impl AnnotationState {
+    /// Nom `/State` du PDF.
+    pub fn pdf_name(self) -> &'static [u8] {
+        match self {
+            Self::None => b"None",
+            Self::Accepted => b"Accepted",
+            Self::Rejected => b"Rejected",
+            Self::Cancelled => b"Cancelled",
+            Self::Completed => b"Completed",
+        }
+    }
+
+    /// Depuis un nom `/State`. Un nom inconnu retombe sur [`Self::None`].
+    pub fn from_pdf_name(name: &[u8]) -> Self {
+        match name {
+            b"Accepted" => Self::Accepted,
+            b"Rejected" => Self::Rejected,
+            b"Cancelled" => Self::Cancelled,
+            b"Completed" => Self::Completed,
+            _ => Self::None,
+        }
+    }
+
+    /// Libellé anglais pour l'interface.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Accepted => "Accepted",
+            Self::Rejected => "Rejected",
+            Self::Cancelled => "Cancelled",
+            Self::Completed => "Completed",
+        }
+    }
+
+    /// Vrai quand la revue a abouti (accepté ou terminé).
+    pub fn is_resolved(self) -> bool {
+        matches!(self, Self::Accepted | Self::Completed)
+    }
+
+    /// Les cinq états, dans l'ordre du menu.
+    pub const ALL: [Self; 5] = [
+        Self::None,
+        Self::Accepted,
+        Self::Rejected,
+        Self::Cancelled,
+        Self::Completed,
+    ];
+}
+
 /// Une annotation posée par l'utilisateur.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Annotation {
@@ -229,6 +298,12 @@ pub struct Annotation {
     pub ink_points: Vec<Vec<[f32; 2]>>,
     /// Horodatage ISO 8601 (rempli à la création).
     pub created_at: String,
+    /// État de revue (`/State`). Voir [`AnnotationState`].
+    #[serde(default)]
+    pub state: AnnotationState,
+    /// `/NM` de l'annotation à laquelle celle-ci répond (`/IRT`).
+    #[serde(default)]
+    pub reply_to: Option<String>,
 }
 
 /// Date PDF (`D:AAAAMMJJHHmmSSZ`) pour l'entrée `/M`.
@@ -537,6 +612,8 @@ impl Annotation {
             },
             ink_points: Vec::new(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            state: AnnotationState::None,
+            reply_to: None,
         }
     }
 
@@ -758,6 +835,15 @@ impl Annotation {
             }
         }
 
+        // État de revue : `/StateModel Review` est obligatoire pour que les
+        // lecteurs interprètent `/State` (sinon la clé est ignorée).
+        if self.state != AnnotationState::None {
+            d.set("StateModel", Object::Name(b"Review".to_vec()));
+            d.set("State", Object::Name(self.state.pdf_name().to_vec()));
+        }
+        // `/IRT` est une référence indirecte : elle est posée par
+        // `apply_annotations`, qui connaît l'objet du parent.
+
         d
     }
 }
@@ -814,9 +900,18 @@ impl Document {
                 }
 
                 // Reconstitue l'annotation.
-                let Some(ann) = parse_annotation(annot_dict, &nm, page_num as usize) else {
+                let Some(mut ann) = parse_annotation(annot_dict, &nm, page_num as usize) else {
                     continue;
                 };
+                // `/IRT` vise l'objet du parent ; on remonte à son `/NM`.
+                ann.reply_to = annot_dict
+                    .get(b"IRT")
+                    .ok()
+                    .and_then(|o| o.as_reference().ok())
+                    .and_then(|parent_id| self.inner().get_dictionary(parent_id).ok())
+                    .and_then(|parent| parent.get(b"NM").ok())
+                    .and_then(|o| o.as_str().ok())
+                    .map(|bytes| String::from_utf8_lossy(bytes).to_string());
                 out.push(ann);
             }
         }
@@ -864,6 +959,9 @@ impl Document {
         }
 
         // 3. Ajouter les nouvelles.
+        // Chaque annotation créée garde de quoi résoudre `/IRT` : (objet,
+        // identifiant, identifiant du parent visé).
+        let mut created: Vec<(ObjectId, String, Option<String>)> = Vec::new();
         for (page_num, anns) in by_page {
             let page_id = self
                 .page_id(page_num as u32)
@@ -918,6 +1016,7 @@ impl Document {
 
                 let id = self.inner_mut().add_object(Object::Dictionary(dict));
                 annot_refs.push(Object::Reference(id));
+                created.push((id, ann.id.clone(), ann.reply_to.clone()));
             }
 
             // Récupérer / créer le tableau /Annots de la page.
@@ -946,6 +1045,32 @@ impl Document {
                 }
                 _ => {
                     dict.set("Annots", Object::Array(annot_refs));
+                }
+            }
+        }
+
+        // 4. Réponses : `/IRT` est une référence indirecte vers l'objet du
+        //    parent. Elle se pose au second passage, une fois tous les objets
+        //    créés — un parent peut se trouver sur une autre page.
+        if created.iter().any(|(_, _, reply)| reply.is_some()) {
+            let by_name: std::collections::HashMap<&str, ObjectId> = created
+                .iter()
+                .map(|(id, name, _)| (name.as_str(), *id))
+                .collect();
+            for (id, _, reply) in &created {
+                let Some(parent_name) = reply else {
+                    continue;
+                };
+                let Some(&parent_id) = by_name.get(parent_name.as_str()) else {
+                    // Parent absent : la réponse reste sans lien plutôt que
+                    // de pointer un objet inexistant.
+                    continue;
+                };
+                if let Ok(dict) = self.inner_mut().get_dictionary_mut(*id) {
+                    dict.set("IRT", Object::Reference(parent_id));
+                    // `/RT R` : réponse proprement dite (et non un simple
+                    // commentaire « en réponse à »).
+                    dict.set("RT", Object::Name(b"R".to_vec()));
                 }
             }
         }
@@ -1443,6 +1568,13 @@ fn parse_annotation(dict: &Dictionary, id: &str, page: usize) -> Option<Annotati
         }
     }
 
+    let state = dict
+        .get(b"State")
+        .ok()
+        .and_then(|o| o.as_name().ok())
+        .map(AnnotationState::from_pdf_name)
+        .unwrap_or_default();
+
     Some(Annotation {
         id: id.to_string(),
         page,
@@ -1458,5 +1590,277 @@ fn parse_annotation(dict: &Dictionary, id: &str, page: usize) -> Option<Annotati
         },
         ink_points,
         created_at,
+        state,
+        // `/IRT` est une référence indirecte : elle est résolue par
+        // `read_annotations`, qui seule a accès au document.
+        reply_to: None,
     })
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Export d'une liste de commentaires
+// ────────────────────────────────────────────────────────────────────────
+
+/// Format d'export de la liste de commentaires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommentFormat {
+    /// Markdown lisible (rapport).
+    Markdown,
+    /// CSV `page,type,author,date,state,reply_to,content`.
+    Csv,
+    /// XFDF, le format d'échange de commentaires d'Acrobat.
+    Xfdf,
+    /// FDF, conteneur PDF de commentaires.
+    Fdf,
+}
+
+impl CommentFormat {
+    /// Nom lisible pour l'interface.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Markdown => "Markdown",
+            Self::Csv => "CSV",
+            Self::Xfdf => "XFDF",
+            Self::Fdf => "FDF",
+        }
+    }
+
+    /// Extension de fichier.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Markdown => "md",
+            Self::Csv => "csv",
+            Self::Xfdf => "xfdf",
+            Self::Fdf => "fdf",
+        }
+    }
+
+    /// Les quatre formats, dans l'ordre du menu.
+    pub const ALL: [Self; 4] = [Self::Csv, Self::Markdown, Self::Xfdf, Self::Fdf];
+}
+
+/// Exporte une liste de commentaires vers `format`.
+///
+/// L'ordre reçu est conservé : l'appelant l'a déjà trié. Les réponses
+/// (`reply_to`) sont indentées en Markdown et portent leur lien `/IRT`
+/// ailleurs.
+pub fn export_comments(annotations: &[Annotation], format: CommentFormat) -> Result<Vec<u8>> {
+    match format {
+        CommentFormat::Markdown => Ok(export_comments_markdown(annotations).into_bytes()),
+        CommentFormat::Csv => Ok(export_comments_csv(annotations).into_bytes()),
+        CommentFormat::Xfdf => Ok(export_comments_xfdf(annotations).into_bytes()),
+        CommentFormat::Fdf => export_comments_fdf(annotations),
+    }
+}
+
+/// Nom du sous-type PDF, stable et lisible par les autres outils.
+fn comment_type_name(annotation: &Annotation) -> String {
+    String::from_utf8_lossy(annotation.kind.pdf_subtype()).to_string()
+}
+
+/// Jour seul de l'horodatage (`AAAA-MM-JJ`).
+fn comment_day(annotation: &Annotation) -> &str {
+    annotation.created_at.get(..10).unwrap_or("")
+}
+
+/// Date PDF (`D:AAAAMMJJHHmmSSZ`) depuis l'horodatage interne.
+///
+/// Les formats d'échange de commentaires attendent une date PDF, pas une
+/// chaîne RFC 3339.
+fn comment_pdf_date(annotation: &Annotation) -> String {
+    chrono::DateTime::parse_from_rfc3339(&annotation.created_at)
+        .map(|date| pdf_date(date.with_timezone(&chrono::Utc)))
+        .unwrap_or_else(|_| annotation.created_at.clone())
+}
+
+fn export_comments_markdown(annotations: &[Annotation]) -> String {
+    let mut out = String::from("# Comments\n");
+    for annotation in annotations {
+        out.push('\n');
+        if annotation.reply_to.is_some() {
+            // Une réponse se place sous son commentaire parent.
+            out.push_str(&format!(
+                "#### ↳ Reply · {} · {}\n",
+                annotation.author,
+                comment_day(annotation)
+            ));
+        } else {
+            out.push_str(&format!(
+                "## p.{} · {} · {} · {}\n",
+                annotation.page,
+                comment_type_name(annotation),
+                annotation.author,
+                comment_day(annotation)
+            ));
+            if annotation.state != AnnotationState::None {
+                out.push_str(&format!("\n**Status:** {}\n", annotation.state.display_name()));
+            }
+        }
+        if !annotation.content.is_empty() {
+            out.push('\n');
+            out.push_str(&annotation.content);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn export_comments_csv(annotations: &[Annotation]) -> String {
+    use crate::util::csv_escape;
+
+    let mut out = String::from("page,type,author,date,state,reply_to,content\n");
+    for annotation in annotations {
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{}\n",
+            annotation.page,
+            csv_escape(&comment_type_name(annotation)),
+            csv_escape(&annotation.author),
+            csv_escape(comment_day(annotation)),
+            csv_escape(annotation.state.display_name()),
+            csv_escape(annotation.reply_to.as_deref().unwrap_or("")),
+            csv_escape(&annotation.content),
+        ));
+    }
+    out
+}
+
+/// Nom d'élément XFDF associé à un type d'annotation.
+fn xfdf_element(kind: AnnotationKind) -> &'static str {
+    match kind {
+        AnnotationKind::Highlight => "highlight",
+        AnnotationKind::Underline => "underline",
+        AnnotationKind::StrikeOut => "strikeout",
+        AnnotationKind::Squiggly => "squiggly",
+        AnnotationKind::Note => "text",
+        AnnotationKind::FreeText => "freetext",
+        AnnotationKind::Square => "square",
+        AnnotationKind::Circle => "circle",
+        AnnotationKind::Line | AnnotationKind::Arrow => "line",
+        AnnotationKind::Ink => "ink",
+        AnnotationKind::Stamp => "stamp",
+        AnnotationKind::Link => "link",
+        AnnotationKind::FileAttachment => "fileattachment",
+    }
+}
+
+fn export_comments_xfdf(annotations: &[Annotation]) -> String {
+    use crate::util::escape_xml;
+
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\">\n<annots>\n",
+    );
+    for annotation in annotations {
+        let element = xfdf_element(annotation.kind);
+        let color = format!(
+            "#{:02X}{:02X}{:02X}",
+            annotation.style.color[0], annotation.style.color[1], annotation.style.color[2]
+        );
+        out.push_str(&format!(
+            "<{element} page=\"{}\" rect=\"{:.2},{:.2},{:.2},{:.2}\" color=\"{color}\" \
+             date=\"{}\" title=\"{}\" name=\"{}\" subject=\"{}\"",
+            annotation.page.saturating_sub(1),
+            annotation.rect[0],
+            annotation.rect[1],
+            annotation.rect[2],
+            annotation.rect[3],
+            escape_xml(&comment_pdf_date(annotation)),
+            escape_xml(&annotation.author),
+            escape_xml(&annotation.id),
+            escape_xml(&comment_type_name(annotation)),
+        ));
+        if annotation.state != AnnotationState::None {
+            out.push_str(&format!(" state=\"{}\"", annotation.state.display_name()));
+        }
+        if let Some(parent) = &annotation.reply_to {
+            out.push_str(&format!(" inreplyto=\"{}\"", escape_xml(parent)));
+        }
+        out.push('>');
+        if !annotation.content.is_empty() {
+            out.push_str(&format!(
+                "<contents>{}</contents>",
+                escape_xml(&annotation.content)
+            ));
+        }
+        out.push_str(&format!("</{element}>\n"));
+    }
+    out.push_str("</annots>\n</xfdf>\n");
+    out
+}
+
+/// Dictionnaire FDF d'une annotation (sans `/IRT`, posé au second passage).
+fn fdf_annot_dict(annotation: &Annotation) -> Dictionary {
+    let mut d = Dictionary::new();
+    d.set("Type", Object::Name(b"Annot".to_vec()));
+    d.set("Subtype", Object::Name(annotation.kind.pdf_subtype().to_vec()));
+    d.set(
+        "Rect",
+        Object::Array(vec![
+            Object::Real(annotation.rect[0]),
+            Object::Real(annotation.rect[1]),
+            Object::Real(annotation.rect[2]),
+            Object::Real(annotation.rect[3]),
+        ]),
+    );
+    // `/Page` est l'indice de page, base zéro, comme dans tout FDF.
+    d.set(
+        "Page",
+        Object::Integer(annotation.page.saturating_sub(1) as i64),
+    );
+    d.set("NM", Object::string_literal(annotation.id.as_str()));
+    d.set("T", Object::string_literal(annotation.author.as_str()));
+    // `/M` est une date PDF, comme dans `to_pdf_dict`.
+    d.set("M", Object::string_literal(comment_pdf_date(annotation)));
+    if !annotation.content.is_empty() {
+        d.set("Contents", Object::string_literal(annotation.content.as_str()));
+    }
+    if annotation.state != AnnotationState::None {
+        d.set("StateModel", Object::Name(b"Review".to_vec()));
+        d.set("State", Object::Name(annotation.state.pdf_name().to_vec()));
+    }
+    d
+}
+
+fn export_comments_fdf(annotations: &[Annotation]) -> Result<Vec<u8>> {
+    let mut doc = lopdf::Document::with_version("1.2");
+
+    // Les annotations sont des objets indirects : `/IRT` peut alors viser
+    // l'objet parent plutôt que de le recopier.
+    let mut ids: Vec<(String, Option<String>, lopdf::ObjectId)> = Vec::new();
+    for annotation in annotations {
+        let id = doc.add_object(Object::Dictionary(fdf_annot_dict(annotation)));
+        ids.push((annotation.id.clone(), annotation.reply_to.clone(), id));
+    }
+    for (name, reply, id) in &ids {
+        let Some(parent) = reply else { continue };
+        let Some((_, _, parent_id)) = ids.iter().find(|(other, _, _)| other == parent) else {
+            continue;
+        };
+        if name == parent {
+            continue;
+        }
+        if let Ok(dict) = doc.get_dictionary_mut(*id) {
+            dict.set("IRT", Object::Reference(*parent_id));
+        }
+    }
+
+    let mut fdf = Dictionary::new();
+    fdf.set(
+        "Annots",
+        Object::Array(ids.iter().map(|(_, _, id)| Object::Reference(*id)).collect()),
+    );
+    let root = doc.add_object(Object::Dictionary(
+        dictionary! { "FDF" => Object::Dictionary(fdf) },
+    ));
+    doc.trailer.set("Root", Object::Reference(root));
+
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes)
+        .map_err(|e| Error::Pdf(format!("export FDF : {e}")))?;
+    // Un FDF est un PDF dont seul l'en-tête change ; les lecteurs refusent
+    // un conteneur étiqueté « PDF ».
+    if bytes.starts_with(b"%PDF-1.2") {
+        bytes[..8].copy_from_slice(b"%FDF-1.2");
+    }
+    Ok(bytes)
 }

@@ -58,6 +58,32 @@ const MIN_CELL_GAP: f32 = 12.0;
 const GAP_FACTOR: f32 = 2.5;
 
 impl Document {
+    /// Texte contenu dans un rectangle de page (coordonnées PDF).
+    ///
+    /// Sert à citer la phrase visée par un surlignage dans la liste des
+    /// commentaires. Un fragment compte quand son centre tombe dans le
+    /// rectangle ; le résultat suit l'ordre de lecture (haut en bas, gauche
+    /// à droite) et garde les sauts de ligne.
+    pub fn text_in_rect(&self, page: u32, rect: [f32; 4]) -> String {
+        self.text_in_rects(page, &[rect])
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    }
+
+    /// Variante groupée de [`Self::text_in_rect`] : la page n'est analysée
+    /// qu'une fois pour tous les rectangles, ce qui compte quand la liste des
+    /// commentaires en demande un par surlignage.
+    pub fn text_in_rects(&self, page: u32, rects: &[[f32; 4]]) -> Vec<String> {
+        let Ok(fragments) = self.extract_text_fragments(page) else {
+            return rects.iter().map(|_| String::new()).collect();
+        };
+        rects
+            .iter()
+            .map(|rect| text_of_rect(&fragments, *rect))
+            .collect()
+    }
+
     /// Repère les tableaux alignés des pages.
     ///
     /// Retourne un tableau par suite de lignes alignées d'au moins trois
@@ -172,6 +198,54 @@ struct Cell {
 /// Tolérance verticale pour la ligne, élargie avec la taille de police.
 fn line_tolerance(font_size: f32) -> f32 {
     LINE_TOL.max(font_size * 0.3)
+}
+
+/// Texte des fragments dont le centre tombe dans `rect`.
+///
+/// Les fragments sortent dans l'ordre de lecture (haut en bas puis gauche à
+/// droite) ; deux fragments d'une même ligne sont joints par une espace, deux
+/// lignes par un saut de ligne.
+fn text_of_rect(fragments: &[TextFragment], rect: [f32; 4]) -> String {
+    let mut hits: Vec<&TextFragment> = fragments
+        .iter()
+        .filter(|fragment| {
+            let cx = (fragment.rect[0] + fragment.rect[2]) / 2.0;
+            let cy = (fragment.rect[1] + fragment.rect[3]) / 2.0;
+            cx >= rect[0] && cx <= rect[2] && cy >= rect[1] && cy <= rect[3]
+        })
+        .collect();
+    hits.sort_by(|a, b| {
+        let top = |fragment: &TextFragment| (fragment.rect[1] + fragment.rect[3]) / 2.0;
+        // Coordonnées PDF : la plus grande ordonnée est la plus haute.
+        top(b)
+            .partial_cmp(&top(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                a.rect[0]
+                    .partial_cmp(&b.rect[0])
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+
+    let mut out = String::new();
+    let mut previous_top: Option<f32> = None;
+    for fragment in hits {
+        let text = fragment.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let top = (fragment.rect[1] + fragment.rect[3]) / 2.0;
+        match previous_top {
+            Some(previous) if (previous - top).abs() > line_tolerance(fragment.font_size) => {
+                out.push('\n');
+            }
+            Some(_) => out.push(' '),
+            None => {}
+        }
+        out.push_str(text);
+        previous_top = Some(top);
+    }
+    out
 }
 
 /// Regroupe les fragments d'une page en lignes, de haut en bas.

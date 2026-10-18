@@ -4439,6 +4439,7 @@ dependencies = [
 name = "youpdf-app"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "eframe",
  "egui",
  "egui-phosphor",
