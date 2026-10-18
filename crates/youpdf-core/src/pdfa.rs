@@ -18,6 +18,7 @@ use youpdf_shared::{Error, Result};
 
 use crate::document::Document;
 use crate::render::{RenderOptions, Renderer};
+use crate::util::flate_compress;
 
 /// Nom du profil colorimétrique déclaré (pas d'octets ICC embarqués).
 const SRGB_PROFILE: &str = "sRGB IEC61966-2.1";
@@ -60,21 +61,6 @@ impl Conformance {
             Conformance::PdfX4 => b"GTS_PDFX",
         }
     }
-}
-
-/// Compresse en zlib (flux `/FlateDecode`).
-fn flate_compress(data: &[u8]) -> Result<Vec<u8>> {
-    use flate2::write::ZlibEncoder;
-    use flate2::Compression;
-    use std::io::Write;
-
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(data)
-        .map_err(|e| Error::Internal(format!("compression XMP : {e}")))?;
-    encoder
-        .finish()
-        .map_err(|e| Error::Internal(format!("compression XMP : {e}")))
 }
 
 /// Identifiant de document `/ID` : 16 octets dérivés de l'horodatage courant

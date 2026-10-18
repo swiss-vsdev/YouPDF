@@ -19,6 +19,7 @@
 //! - [`compare`]  : comparaison de deux documents
 //! - [`compress`] : recompression des flux et objets inutilisés
 //! - [`watermark`]: filigranes, en-têtes et numéros de page
+//! - [`util`]     : aides partagées (zlib, échappement XML/CSV)
 
 pub mod annotate;
 pub mod compare;
@@ -42,6 +43,7 @@ pub mod render;
 pub mod search;
 pub mod signature;
 pub mod structure;
+pub mod util;
 pub mod watermark;
 
 pub use annotate::{Annotation, AnnotationKind, AnnotationStyle, STAMP_NAMES, stamp_name};

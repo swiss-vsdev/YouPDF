@@ -26,6 +26,7 @@ use youpdf_shared::{Error, Result};
 
 use crate::document::{Document, PageView};
 use crate::edit::{encode_pdf_literal, load_image_rgb};
+use crate::util::flate_compress;
 
 /// Nom de ressource de la police posée par ce module.
 const WM_FONT_NAME: &str = "YouPdfF1";
@@ -558,37 +559,6 @@ fn bates_ops(b: &Bates, label: &str, view: PageView) -> Vec<u8> {
     out
 }
 
-/// Enveloppe zlib d'un tampon : en-tête zlib, blocs deflate « stored »,
-/// puis somme de contrôle Adler-32. Le résultat est un flux `/FlateDecode`
-/// valide pour tout décodeur.
-// ponytail: blocs « stored », pas de codage entropique ; passer à un vrai
-// deflate (flate2) si la taille des images d'arrière-plan devient un souci.
-fn zlib_store(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len() + 16);
-    // CMF/FLG : deflate, fenêtre 32 K, somme (0x78, 0x01) multiple de 31.
-    out.extend_from_slice(&[0x78, 0x01]);
-    if data.is_empty() {
-        out.extend_from_slice(&[0x01, 0x00, 0x00, 0xFF, 0xFF]);
-    }
-    let mut chunks = data.chunks(65_535).peekable();
-    while let Some(chunk) = chunks.next() {
-        let last = chunks.peek().is_none();
-        out.push(u8::from(last));
-        let len = chunk.len() as u16;
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&(!len).to_le_bytes());
-        out.extend_from_slice(chunk);
-    }
-    let mut a: u32 = 1;
-    let mut b: u32 = 0;
-    for &byte in data {
-        a = (a + byte as u32) % 65_521;
-        b = (b + a) % 65_521;
-    }
-    out.extend_from_slice(&((b << 16) | a).to_be_bytes());
-    out
-}
-
 /// Construit le flux XObject image d'un arrière-plan depuis un fichier.
 ///
 /// Un JPEG est recopié tel quel (`/DCTDecode`) ; tout autre format est
@@ -601,7 +571,7 @@ fn background_image_stream(path: &std::path::Path) -> Result<(Stream, u32, u32)>
         (w, h, raw, "DCTDecode")
     } else {
         let (pixels, w, h) = load_image_rgb(path)?;
-        (w, h, zlib_store(&pixels), "FlateDecode")
+        (w, h, flate_compress(&pixels)?, "FlateDecode")
     };
 
     let dict = dictionary! {

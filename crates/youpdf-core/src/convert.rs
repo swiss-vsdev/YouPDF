@@ -13,6 +13,7 @@ use youpdf_shared::{Error, Result};
 
 use crate::document::Document;
 use crate::render::{PdfiumRenderer, RenderOptions, Renderer};
+use crate::util::{csv_escape, escape_xml};
 
 /// Format texte proposé à l'export.
 ///
@@ -161,11 +162,11 @@ impl Document {
                         if line.is_empty() {
                             continue;
                         }
-                        out.push_str(&csv_field(&page_number.to_string()));
+                        out.push_str(&csv_escape(&page_number.to_string()));
                         out.push(',');
-                        out.push_str(&csv_field(&(line_index + 1).to_string()));
+                        out.push_str(&csv_escape(&(line_index + 1).to_string()));
                         out.push(',');
-                        out.push_str(&csv_field(line));
+                        out.push_str(&csv_escape(line));
                         out.push('\n');
                     }
                 }
@@ -282,32 +283,6 @@ fn escape_html(text: &str) -> String {
 /// Nettoie un titre pour une ligne Markdown.
 fn escape_markdown(text: &str) -> String {
     text.replace(['\n', '\r'], " ").trim().to_string()
-}
-
-/// Encode un champ CSV selon la RFC 4180 : guillemets uniquement si le champ
-/// contient `"`, `,`, `\n` ou `\r`, guillemets internes doublés.
-fn csv_field(text: &str) -> String {
-    if text.contains(['"', ',', '\n', '\r']) {
-        format!("\"{}\"", text.replace('"', "\"\""))
-    } else {
-        text.to_string()
-    }
-}
-
-/// Échappe un texte pour XML (`&`, `<`, `>`, `"`, `'`).
-fn escape_xml(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 /// Échappe un texte pour RTF.
