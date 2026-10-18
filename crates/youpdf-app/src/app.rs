@@ -996,6 +996,10 @@ pub struct YouPdfApp {
     search_case: bool,
     /// Filtre « mots entiers » de la recherche.
     search_word: bool,
+    /// Inclure les titres de signets dans les résultats.
+    search_bookmarks: bool,
+    /// Inclure le texte des commentaires dans les résultats.
+    search_comments: bool,
     /// Saisie de la page à atteindre (pastille bas-droite).
     page_entry: String,
     /// Surface d'accueil (fichiers récents) affichée à la place du canevas.
@@ -1194,6 +1198,8 @@ impl YouPdfApp {
             search_rects_page: None,
             search_case: false,
             search_word: false,
+            search_bookmarks: false,
+            search_comments: false,
             page_entry: String::new(),
             home_open: initial.is_none(),
             dragging_tab: None,
@@ -3382,7 +3388,12 @@ impl YouPdfApp {
             whole_word: self.search_word,
         };
         if let Some((_, index)) = &self.search_index {
-            self.results = index.search_with(&query, 200, options);
+            let mut results = index.search_with(&query, 200, options);
+            // Les signets et les commentaires ne vivent pas dans le texte des
+            // pages : on les ajoute à la main quand les filtres les demandent.
+            let synonyms = self.bookmark_comment_matches(&query, options);
+            results.extend(synonyms);
+            self.results = results;
             let count = self.results.len();
             self.history.retain(|q| q != &query);
             self.history.insert(0, query);
@@ -3393,8 +3404,63 @@ impl YouPdfApp {
         }
     }
 
-    // -- Recherche active, remplacement, caviardage ------------------------
+    /// Résultats synthétiques pour les signets et les commentaires.
+    ///
+    /// Actifs seulement si les filtres correspondants sont cochés : les
+    /// titres de signets et le texte des commentaires ne font pas partie du
+    /// texte des pages, donc le moteur ne les voit pas.
+    fn bookmark_comment_matches(
+        &self,
+        query: &str,
+        options: SearchOptions,
+    ) -> Vec<SearchResult> {
+        let mut out = Vec::new();
+        if !self.search_bookmarks && !self.search_comments {
+            return out;
+        }
+        let Some(tab) = self.tabs.get(self.active) else {
+            return out;
+        };
+        let needle = if options.case_sensitive {
+            query.to_owned()
+        } else {
+            fold_case(query)
+        };
+        if needle.is_empty() {
+            return out;
+        }
 
+        if self.search_bookmarks {
+            for item in tab.doc.outline() {
+                if let Some(pos) = find_query(&item.title, &needle, options.case_sensitive) {
+                    out.push(SearchResult {
+                        page: item.page.unwrap_or(1),
+                        start: pos,
+                        end: pos + needle.len(),
+                        context: format!("Bookmark · {}", item.title),
+                    });
+                }
+            }
+        }
+        if self.search_comments {
+            for annot in &tab.annots {
+                if annot.content.is_empty() {
+                    continue;
+                }
+                if let Some(pos) = find_query(&annot.content, &needle, options.case_sensitive) {
+                    out.push(SearchResult {
+                        page: annot.page,
+                        start: pos,
+                        end: pos + needle.len(),
+                        context: format!("Comment · {}", annot.content),
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    // -- Recherche active, remplacement, caviardage ------------------------
     /// Passe au résultat suivant (`delta` = ±1) et y saute.
     fn search_step(&mut self, delta: isize) {
         if self.results.is_empty() {
@@ -4119,7 +4185,10 @@ impl YouPdfApp {
                                     Color32::from_rgb(0x33, 0x33, 0x33),
                                 );
                             }
-                            let active = self.search_case || self.search_word;
+                            let active = self.search_case
+                                || self.search_word
+                                || self.search_bookmarks
+                                || self.search_comments;
                             icon_funnel(
                                 ui.painter(),
                                 rect.shrink(7.0),
@@ -4148,6 +4217,12 @@ impl YouPdfApp {
                                         .changed();
                                     refilter |= ui
                                         .checkbox(&mut self.search_word, "Whole words")
+                                        .changed();
+                                    refilter |= ui
+                                        .checkbox(&mut self.search_bookmarks, "Include bookmarks")
+                                        .changed();
+                                    refilter |= ui
+                                        .checkbox(&mut self.search_comments, "Include comments")
                                         .changed();
                                 },
                             );
@@ -10202,6 +10277,19 @@ impl ZoomMode {
     ];
 }
 
+/// Cherche `needle` dans `hay`, selon la casse demandée.
+///
+/// `needle` est déjà plié si la recherche est insensible à la casse ;
+/// `fold_case` préservant la longueur en octets, l'index trouvé reste valable
+/// dans la chaîne d'origine.
+fn find_query(hay: &str, needle: &str, case_sensitive: bool) -> Option<usize> {
+    if case_sensitive {
+        hay.find(needle)
+    } else {
+        fold_case(hay).find(needle)
+    }
+}
+
 /// Vrai si le réglage `mode` correspond au zoom courant de l'onglet.
 fn zoom_choice_matches(mode: ZoomMode, zoom: Option<f32>, fit_page: bool) -> bool {
     match mode {
@@ -10454,6 +10542,14 @@ mod tests {
         assert_eq!(page_size_label(842.0, 595.0), "A4 landscape");
         assert_eq!(page_size_label(612.0, 792.0), "Letter portrait");
         assert_eq!(page_size_label(1000.0, 500.0), "1000 × 500 pt");
+    }
+
+    /// La recherche de texte respecte la casse et retrouve une sous-chaîne.
+    #[test]
+    fn find_query_matches_with_and_without_case() {
+        assert_eq!(find_query("Hello World", "world", false), Some(6));
+        assert_eq!(find_query("Hello World", "world", true), None);
+        assert_eq!(find_query("accents ÉglIsE", "église", false), Some(8));
     }
 
     /// Chaque disposition doit couvrir exactement les pages, une fois chacune.

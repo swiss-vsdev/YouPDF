@@ -16,6 +16,7 @@ Unchecked below = still open. The plan document is the authoritative task list.
 - **Phase 1.2** — Tab bar: auto-width tabs (120–220 pt), close button on active/hover, middle-click close, drag-to-reorder with an insertion bar and active-tab tracking, and a right-click menu (close, close others/right/all, pin, duplicate, reveal, copy path). A pinned tab keeps its position.
 - **Phase 1.3** — Docked bottom status bar (26 pt) replacing the floating zoom overlay: first/prev/next/last page, a page-number field, a layout picker, zoom out / preset / zoom in, a slideshow button, and a right cluster with the displayed page size, the render engine and a lock icon for encrypted files.
 - **Phase 2.1** — The left rail already carried the eight tools with tooltips; the content side panel is now resizable (drag handle, 180–450 pt) and every panel sizes itself to the current width. The floating toolbars follow it.
+- **Phase 2.2** — Search panel already had the action row (search / replace / delete / redact), the history list and the result list; the filter popover now also offers *Include bookmarks* and *Include comments*, which add synthetic results (bookmark titles and comment text) on top of the page-text matches.
 
 ## 1. Window Chrome & Layout
 *   **UPDF:** Tabbed interface with `+` new tab, Home house button, traffic lights, avatar, notifications.
