@@ -47,6 +47,7 @@ const CANVAS_STYLES: [Color32; 4] = [
 ];
 
 const TITLE_H: f32 = 40.0;
+const STATUS_H: f32 = 26.0;
 const RAIL_W: f32 = 52.0;
 const PANEL_W: f32 = 210.0;
 const PAGE_SPACING: f32 = 16.0;
@@ -71,6 +72,14 @@ enum PageLayout {
 }
 
 impl PageLayout {
+    /// Toutes les dispositions, dans l'ordre du menu.
+    const ALL: [PageLayout; 4] = [
+        PageLayout::Single,
+        PageLayout::Continuous,
+        PageLayout::TwoPages,
+        PageLayout::Cover,
+    ];
+
     fn label(self) -> &'static str {
         match self {
             PageLayout::Single => "Single page",
@@ -799,6 +808,8 @@ struct Tab {
     structure_loaded: bool,
     /// Onglet épinglé : conserve sa position et affiche une punaise.
     pinned: bool,
+    /// Vrai si le fichier sur disque est chiffré (cadenas de la barre d'état).
+    protected: bool,
 }
 
 impl Tab {
@@ -1356,6 +1367,10 @@ impl YouPdfApp {
     /// deux fois.
     fn push_document(&mut self, mut doc: Document, path: Option<PathBuf>) {
         let title = doc.display_name();
+        let protected = path
+            .as_deref()
+            .map(Document::file_is_encrypted)
+            .unwrap_or(false);
         let annots = annots_to_display(&doc, doc.read_annotations());
         if !annots.is_empty() && doc.clear_youpdf_annotations().is_err() {
             tracing::warn!("purge des annotations impossible");
@@ -1383,6 +1398,7 @@ impl YouPdfApp {
             fragments: HashMap::new(),
             structure_loaded: false,
             pinned: false,
+            protected,
         });
         self.active = self.tabs.len() - 1;
         self.panel = Some(Panel::Thumbnails);
@@ -1598,6 +1614,9 @@ impl YouPdfApp {
                 tab.dirty = false;
                 tab.structural_dirty = false;
                 tab.baseline_annots = tab.annots.clone();
+                // L'écriture rétablit l'état réel du fichier : le cadenas
+                // suit, sans quoi il mentirait après une déprotection.
+                tab.protected = Document::file_is_encrypted(&path);
                 self.toast(ctx, format!("Saved {}", path.display()));
             }
             Err(err) => self.toast(ctx, format!("Save failed: {err}")),
@@ -1628,6 +1647,7 @@ impl YouPdfApp {
                 tab.structural_dirty = false;
                 tab.baseline_annots = tab.annots.clone();
                 tab.path = Some(path.clone());
+                tab.protected = Document::file_is_encrypted(&path);
                 tab.title = path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -9016,194 +9036,214 @@ impl YouPdfApp {
     // -- Superpositions ----------------------------------------------------
 
     /// Pastille bas-droite : page · zoom, façon « organize » de la référence.
-    fn zoom_overlay(&mut self, ctx: &egui::Context) {
-        if self.home_open {
+    /// Barre d'état inférieure : navigation de page, disposition, zoom,
+    /// diaporama, dimensions de page et état de protection.
+    ///
+    /// Remplace l'ancienne barre de zoom flottante : un seul endroit porte les
+    /// réglages de vue, comme dans UPDF.
+    fn status_bar(&mut self, ctx: &egui::Context) {
+        if self.home_open || self.tabs.is_empty() {
             return;
         }
-        let Some(tab) = self.active_tab() else {
+        let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
-        let (page, total, zoom_label) = (
-            tab.page,
-            tab.total(),
-            tab.zoom
-                .map(|z| format!("{:.0}%", z * 100.0))
-                .unwrap_or_else(|| "Fit".to_owned()),
-        );
-        let engine = self.renderer_label;
+        let page = tab.page;
+        let total = tab.total();
+        let zoom_fit_page = tab.zoom_fit_page;
         let current_zoom = tab.zoom;
-        let tab_zoom_fit_page = tab.zoom_fit_page;
-        let mut delta = 0.0_f32;
+        let zoom_label = current_zoom
+            .map(|z| format!("{:.0}%", z * 100.0))
+            .unwrap_or_else(|| {
+                if zoom_fit_page {
+                    "Fit page".to_owned()
+                } else {
+                    "Fit width".to_owned()
+                }
+            });
+        let layout = self.page_layout;
+        let protected = tab.protected;
+        let engine = self.renderer_label;
+        let view = tab.doc.page_view(page as u32);
+        let (view_w, view_h) = view.display_size();
+        let size_label = page_size_label(view_w, view_h);
+
         let mut goto: Option<usize> = None;
+        let mut delta = 0.0_f32;
+        let mut layout_choice: Option<PageLayout> = None;
         let mut zoom_choice: Option<ZoomMode> = None;
-        let mut page_text = std::mem::take(&mut self.page_entry);
+        let mut slideshow = false;
 
-        Area::new(Id::new("zoombar"))
-            .anchor(Align2::RIGHT_BOTTOM, vec2(-14.0, -12.0))
-            .order(Order::Foreground)
+        TopBottomPanel::bottom("statusbar")
+            .exact_height(STATUS_H)
+            .frame(Frame::none().fill(pal().chrome_bg))
             .show(ctx, |ui| {
-                Frame::none()
-                    .fill(Color32::from_rgba_unmultiplied(0x28, 0x28, 0x28, 0xF0))
-                    .rounding(Rounding::same(8.0))
-                    .inner_margin(Margin::symmetric(8.0, 4.0))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let (rect, minus) = ui
-                                .allocate_exact_size(vec2(20.0, 20.0), Sense::click());
-                            if minus.hovered() {
-                                ui.painter().rect_filled(
-                                    rect,
-                                    Rounding::same(5.0),
-                                    pal().hover_bg,
-                                );
-                            }
-                            icon_minus(
-                                ui.painter(),
-                                rect.shrink(2.0),
-                                if minus.hovered() { pal().icon_bright } else { pal().icon },
-                            );
-                            if minus.clicked() {
-                                delta = -1.0;
-                            }
+                ui.horizontal_centered(|ui| {
+                    ui.add_space(6.0);
 
-                            // Numéro de page : clic = saut direct.
-                            let (rect, page_resp) =
-                                ui.allocate_exact_size(vec2(46.0, 20.0), Sense::click());
-                            if page_resp.hovered() {
-                                ui.painter().rect_filled(rect, Rounding::same(5.0), pal().hover_bg);
-                            }
-                            ui.painter().text(
-                                rect.center(),
-                                Align2::CENTER_CENTER,
-                                format!("{page} / {total}"),
-                                FontId::proportional(11.0),
-                                if page_resp.hovered() { pal().icon_bright } else { pal().muted },
-                            );
-                            let just_opened = page_resp.clicked();
-                            if just_opened {
-                                page_text.clear();
-                                ui.memory_mut(|m| m.toggle_popup(Id::new("page_jump")));
-                            }
-                            egui::popup_above_or_below_widget(
-                                ui,
-                                Id::new("page_jump"),
-                                &page_resp,
-                                egui::AboveOrBelow::Above,
-                                egui::PopupCloseBehavior::CloseOnClickOutside,
-                                |ui| {
-                                    ui.set_min_width(130.0);
-                                    ui.label(
-                                        RichText::new("Go to page").size(11.0).color(pal().muted),
-                                    );
-                                    ui.add_space(4.0);
-                                    let field = ui.add(
-                                        TextEdit::singleline(&mut page_text)
-                                            .desired_width(90.0)
-                                            .hint_text("1"),
-                                    );
-                                    // Le champ prend le focus à l'ouverture
-                                    // seulement : le redemander à chaque
-                                    // trame empêcherait `lost_focus` de
-                                    // signaler la validation par Entrée.
-                                    if just_opened {
-                                        field.request_focus();
-                                    }
-                                    if field.lost_focus()
-                                        && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                    {
-                                        goto = page_text.trim().parse::<usize>().ok();
-                                    }
-                                },
-                            );
+                    // Navigation de page.
+                    if status_button(ui, ph::CARET_DOUBLE_LEFT, "First page") {
+                        goto = Some(1);
+                    }
+                    if status_button(ui, ph::CARET_LEFT, "Previous page") {
+                        if page > 1 {
+                            goto = Some(page - 1);
+                        }
+                    }
+                    // Le champ reprend la page courante tant qu'il n'a pas le
+                    // focus ; sinon une saisie en cours serait écrasée.
+                    let page_field = Id::new("status-page-entry");
+                    if !ui.memory(|m| m.has_focus(page_field)) {
+                        self.page_entry = page.to_string();
+                    }
+                    let field = ui.add_sized(
+                        vec2(34.0, 18.0),
+                        TextEdit::singleline(&mut self.page_entry)
+                            .id(page_field)
+                            .hint_text("1"),
+                    );
+                    if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        goto = self.page_entry.trim().parse::<usize>().ok();
+                    }
+                    ui.label(
+                        RichText::new(format!("of {total}"))
+                            .size(11.0)
+                            .color(pal().muted),
+                    );
+                    if status_button(ui, ph::CARET_RIGHT, "Next page") {
+                        if page < total {
+                            goto = Some(page + 1);
+                        }
+                    }
+                    if status_button(ui, ph::CARET_DOUBLE_RIGHT, "Last page") {
+                        goto = Some(total);
+                    }
 
-                            ui.add_space(6.0);
-                            // Étiquette de zoom : clic = réglages prédéfinis.
-                            let text = if tab_zoom_fit_page {
-                                format!("{zoom_label} · page")
-                            } else {
-                                zoom_label.clone()
-                            };
-                            let (rect, zoom_resp) = ui.allocate_exact_size(
-                                vec2(
-                                    ui.painter()
-                                        .layout_no_wrap(
-                                            text.clone(),
-                                            FontId::proportional(11.0),
-                                            pal().muted,
-                                        )
-                                        .size()
-                                        .x
-                                        + 12.0,
-                                    20.0,
-                                ),
-                                Sense::click(),
-                            );
-                            if zoom_resp.hovered() {
-                                ui.painter().rect_filled(rect, Rounding::same(5.0), pal().hover_bg);
-                            }
-                            ui.painter().text(
-                                rect.center(),
-                                Align2::CENTER_CENTER,
-                                &text,
-                                FontId::proportional(11.0),
-                                if zoom_resp.hovered() { pal().icon_bright } else { pal().muted },
-                            );
-                            if zoom_resp.clicked() {
-                                ui.memory_mut(|m| m.toggle_popup(Id::new("zoom_menu")));
-                            }
-                            egui::popup_above_or_below_widget(
-                                ui,
-                                Id::new("zoom_menu"),
-                                &zoom_resp,
-                                egui::AboveOrBelow::Above,
-                                egui::PopupCloseBehavior::CloseOnClick,
-                                |ui| {
-                                    ui.set_min_width(150.0);
-                                    for (label, mode) in ZoomMode::CHOICES {
-                                        let selected = zoom_choice_matches(*mode, current_zoom, tab_zoom_fit_page);
-                                        if menu_row(ui, label, if selected { "✓" } else { "" }) {
-                                            zoom_choice = Some(*mode);
-                                        }
-                                    }
-                                },
-                            );
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
 
-                            ui.add_space(6.0);
-                            ui.label(RichText::new(engine).size(10.0).color(pal().muted));
-                            let (rect, plus) = ui
-                                .allocate_exact_size(vec2(20.0, 20.0), Sense::click());
-                            if plus.hovered() {
-                                ui.painter().rect_filled(rect, Rounding::same(5.0), pal().hover_bg);
+                    // Disposition des pages.
+                    let layout_resp = ui
+                        .add(
+                            Button::new(
+                                RichText::new(ph::SQUARES_FOUR).size(13.0).color(pal().icon),
+                            )
+                            .frame(false),
+                        )
+                        .on_hover_text(format!("Layout: {}", layout.label()));
+                    if layout_resp.clicked() {
+                        ui.memory_mut(|m| m.toggle_popup(Id::new("layout_menu")));
+                    }
+                    egui::popup_above_or_below_widget(
+                        ui,
+                        Id::new("layout_menu"),
+                        &layout_resp,
+                        egui::AboveOrBelow::Above,
+                        egui::PopupCloseBehavior::CloseOnClick,
+                        |ui| {
+                            ui.set_min_width(170.0);
+                            for choice in PageLayout::ALL {
+                                let mark = if choice == layout { "✓" } else { "" };
+                                if menu_row(ui, choice.label(), mark) {
+                                    layout_choice = Some(choice);
+                                }
                             }
-                            icon_plus(
-                                ui.painter(),
-                                rect.shrink(2.0),
-                                if plus.hovered() { pal().icon_bright } else { pal().icon },
-                            );
-                            if plus.clicked() {
-                                delta = 1.0;
+                        },
+                    );
+
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+
+                    // Zoom.
+                    if status_button(ui, ph::MINUS, "Zoom out") {
+                        delta = -1.0;
+                    }
+                    let text = if zoom_fit_page {
+                        format!("{zoom_label} · page")
+                    } else {
+                        zoom_label.clone()
+                    };
+                    let zoom_resp = ui
+                        .add(
+                            Button::new(RichText::new(&text).size(11.0).color(pal().muted))
+                                .frame(false),
+                        )
+                        .on_hover_text("Zoom presets");
+                    if zoom_resp.clicked() {
+                        ui.memory_mut(|m| m.toggle_popup(Id::new("zoom_menu")));
+                    }
+                    egui::popup_above_or_below_widget(
+                        ui,
+                        Id::new("zoom_menu"),
+                        &zoom_resp,
+                        egui::AboveOrBelow::Above,
+                        egui::PopupCloseBehavior::CloseOnClick,
+                        |ui| {
+                            ui.set_min_width(150.0);
+                            for (label, mode) in ZoomMode::CHOICES {
+                                let selected =
+                                    zoom_choice_matches(*mode, current_zoom, zoom_fit_page);
+                                if menu_row(ui, label, if selected { "✓" } else { "" }) {
+                                    zoom_choice = Some(*mode);
+                                }
                             }
-                        });
+                        },
+                    );
+                    if status_button(ui, ph::PLUS, "Zoom in") {
+                        delta = 1.0;
+                    }
+
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+
+                    if status_button(ui, ph::PLAY, "Slideshow (F5)") {
+                        slideshow = true;
+                    }
+
+                    // Graphe de droite : dimensions et protection.
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.add_space(6.0);
+                        let (lock_glyph, lock_tip, lock_color) = if protected {
+                            (ph::LOCK_SIMPLE, "Protected document", pal().accent)
+                        } else {
+                            (ph::LOCK_OPEN, "No restrictions", pal().muted)
+                        };
+                        ui.add(
+                            Button::new(RichText::new(lock_glyph).size(12.0).color(lock_color))
+                                .frame(false),
+                        )
+                        .on_hover_text(lock_tip);
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(size_label).size(11.0).color(pal().muted));
+                        ui.add_space(6.0);
+                        ui.label(RichText::new(engine).size(10.0).color(pal().muted));
                     });
+                });
             });
 
-        self.page_entry = page_text;
-        if let Some(choice) = zoom_choice {
-            self.set_zoom_mode(choice);
-        }
         if let Some(target) = goto {
-            // La fenêtre de saisie a rempli son rôle : on la referme.
-            ctx.memory_mut(|m| m.toggle_popup(Id::new("page_jump")));
             if (1..=total).contains(&target) {
                 self.jump = Some(target);
             } else {
                 self.toast(ctx, format!("Page out of range (1–{total})"));
             }
         }
+        if let Some(choice) = layout_choice {
+            self.set_page_layout(ctx, choice);
+        }
+        if let Some(choice) = zoom_choice {
+            self.set_zoom_mode(choice);
+        }
         if delta < 0.0 {
             self.zoom_by(1.0 / 1.1);
         } else if delta > 0.0 {
             self.zoom_by(1.1);
+        }
+        if slideshow {
+            self.enter_slideshow(ctx);
         }
     }
 
@@ -9358,6 +9398,7 @@ impl eframe::App for YouPdfApp {
         self.title_bar(ctx);
         self.rail(ctx);
         self.side_panel(ctx);
+        self.status_bar(ctx);
         CentralPanel::default()
             .frame(Frame::none().fill(self.canvas_background()))
             .show(ctx, |ui| {
@@ -9368,7 +9409,6 @@ impl eframe::App for YouPdfApp {
                 }
             });
         self.toolbar(ctx);
-        self.zoom_overlay(ctx);
         self.properties_window(ctx);
         self.close_confirm_window(ctx);
         self.export_window(ctx);
@@ -9865,6 +9905,33 @@ fn glyph(p: &Painter, r: Rect, c: Color32, ch: &str) {
     );
 }
 
+/// Petit bouton d'icône de la barre d'état.
+fn status_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
+    let resp = ui
+        .add(Button::new(RichText::new(glyph).size(13.0).color(pal().icon)).frame(false))
+        .on_hover_text(tip);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp.clicked()
+}
+
+/// Libellé lisible d'un format de page : nom usuel si connu, sinon la taille.
+fn page_size_label(width: f32, height: f32) -> String {
+    let near = |a: f32, b: f32| (a - b).abs() < 3.0;
+    if near(width, 595.0) && near(height, 842.0) {
+        "A4 portrait".to_owned()
+    } else if near(width, 842.0) && near(height, 595.0) {
+        "A4 landscape".to_owned()
+    } else if near(width, 612.0) && near(height, 792.0) {
+        "Letter portrait".to_owned()
+    } else if near(width, 792.0) && near(height, 612.0) {
+        "Letter landscape".to_owned()
+    } else {
+        format!("{width:.0} × {height:.0} pt")
+    }
+}
+
 fn icon_home(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::HOUSE);
 }
@@ -10009,11 +10076,6 @@ fn icon_check(p: &Painter, r: Rect, c: Color32) {
 }
 fn icon_layout(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::LAYOUT);
-}
-
-// Icônes d'application (fichiers, zoom, gestion de pages).
-fn icon_minus(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::MINUS);
 }
 
 /// Sous-rectangles d'une ligne couvrant chaque occurrence de `needle`.
@@ -10376,6 +10438,15 @@ mod tests {
         assert_eq!(moved_active(0, 1, 0), 1);
         // Déplacement sans effet sur les index voisins.
         assert_eq!(moved_active(0, 1, 2), 0);
+    }
+
+    /// Les formats usuels portent un nom ; les autres la taille brute.
+    #[test]
+    fn page_size_label_names_common_formats() {
+        assert_eq!(page_size_label(595.0, 842.0), "A4 portrait");
+        assert_eq!(page_size_label(842.0, 595.0), "A4 landscape");
+        assert_eq!(page_size_label(612.0, 792.0), "Letter portrait");
+        assert_eq!(page_size_label(1000.0, 500.0), "1000 × 500 pt");
     }
 
     /// Chaque disposition doit couvrir exactement les pages, une fois chacune.
