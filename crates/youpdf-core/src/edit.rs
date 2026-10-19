@@ -1089,6 +1089,28 @@ impl Document {
         Ok(found)
     }
 
+    /// Pose la matrice qui dessine une image sur sa page.
+    ///
+    /// Sert au déplacement et au redimensionnement d'un bloc image : l'origine
+    /// se déplace, les vecteurs s'allongent, mais les pixels ne sont jamais
+    /// réencodés. L'opération est donc exacte et réversible, à la différence
+    /// d'une réécriture par patch.
+    pub fn set_image_matrix(&mut self, info: &ImageInfo, matrix: [f32; 6]) -> Result<()> {
+        let page_id = self
+            .page_id(info.page as u32)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let name = info.resource_name.clone();
+        let found = self.edit_image_draw(page_id, &name, |operations, index| {
+            if let Some(position) = preceding_cm(operations, index) {
+                operations[position].operands = matrix_operands(matrix);
+            }
+        })?;
+        if !found {
+            return Err(Error::NotFound(format!("matrice de l'image {name}")));
+        }
+        Ok(())
+    }
+
     /// Réécrit la matrice qui dessine une image pour la tourner ou la
     /// retourner.
     ///
@@ -1438,12 +1460,30 @@ impl Document {
         background: Option<[f32; 3]>,
         style: &TextStyle,
     ) -> Result<()> {
+        self.replace_text_fragment_at(fragment, new_text, fragment.rect, background, style)
+    }
+
+    /// Réécrit un fragment de texte à un autre emplacement.
+    ///
+    /// `target` est la boîte où poser le nouveau texte, en points ; le fragment
+    /// d'origine est masqué comme pour une réécriture sur place. C'est ce qui
+    /// déplace ou redimensionne un bloc : le texte est réécrit, il n'est pas
+    /// translaté dans le flux, donc la police d'origine est perdue (voir les
+    /// limites de [`Document::replace_text_fragment`]).
+    pub fn replace_text_fragment_at(
+        &mut self,
+        fragment: &TextFragment,
+        new_text: &str,
+        target: [f32; 4],
+        background: Option<[f32; 3]>,
+        style: &TextStyle,
+    ) -> Result<()> {
         let page_id = self
             .page_id(fragment.page as u32)
             .map_err(|e| Error::Pdf(format!("page : {e}")))?;
 
         // 1. Préparer le flux de patch.
-        let [x1, y1, x2, y2] = fragment.rect;
+        let [x1, y1, x2, y2] = target;
         let w = x2 - x1;
 
         // Le flux est construit en **octets** : un `String` intermédiaire puis
@@ -1476,17 +1516,25 @@ impl Document {
         let last_baseline = first_baseline - (line_count - 1.0) * line_step;
         let mask_bottom = (last_baseline - size * 0.3).min(y1) - 1.0;
 
-        // Rectangle de masquage : couleur contrôlée, par défaut blanc.
+        // Rectangle de masquage : couleur contrôlée, par défaut blanc. Il
+        // couvre l'emplacement d'origine **et** le nouveau : sans cela, un bloc
+        // déplacé laisserait son ancien texte derrière lui. Quand les deux
+        // coïncident, la réunion redonne exactement l'ancien rectangle.
         let bg = background.unwrap_or([1.0, 1.0, 1.0]);
+        let [ox1, oy1, ox2, oy2] = fragment.rect;
+        let mask_x1 = (ox1 - 1.0).min(x1 - 1.0);
+        let mask_y1 = (oy1 - 1.0).min(mask_bottom);
+        let mask_x2 = (ox2 + 1.0).max(x2 + 1.0);
+        let mask_y2 = (oy2 + 1.0).max(y2 + 1.0);
         content.extend_from_slice(
             format!("q\n{:.2} {:.2} {:.2} rg\n{:.2} {:.2} {:.2} {:.2} re\nf\nQ\n",
                 bg[0],
                 bg[1],
                 bg[2],
-                x1 - 1.0,
-                mask_bottom,
-                w + 2.0,
-                (y2 + 1.0 - mask_bottom).max(1.0))
+                mask_x1,
+                mask_y1,
+                mask_x2 - mask_x1,
+                (mask_y2 - mask_y1).max(1.0))
             .as_bytes(),
         );
 

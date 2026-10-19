@@ -744,6 +744,8 @@ struct TextDraft {
     buffer: String,
     /// Premier affichage : demande le focus clavier.
     fresh: bool,
+    caret_at: Option<f32>,
+    single_line: bool,
 }
 
 /// Édition en cours du texte d'un bloc de la page (mode Édition).
@@ -3558,6 +3560,8 @@ impl YouPdfApp {
             rect,
             buffer,
             fresh: true,
+            caret_at: None,
+            single_line: true,
         });
         self.draft_annot_kind = annot_kind;
         if draft_kind == DraftKind::Stamp {
