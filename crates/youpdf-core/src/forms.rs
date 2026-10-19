@@ -93,6 +93,8 @@ pub struct FormField {
     pub multiline: bool,
     /// Numéro de page (1-indexé), si le champ en a une.
     pub page: Option<usize>,
+    /// Rectangle du champ en repère page : `[x1, y1, x2, y2]`.
+    pub rect: [f32; 4],
 }
 
 /// Description d'un champ de formulaire à créer.
@@ -316,6 +318,27 @@ impl Document {
                 .and_then(|o| o.as_reference().ok())
                 .and_then(|page_id| self.page_number_of(page_id));
 
+            // Rectangle du champ.
+            let rect = {
+                dict.get(b"Rect")
+                    .and_then(|o| o.as_array())
+                    .and_then(|arr| {
+                        let vals: Vec<f32> = arr
+                            .iter()
+                            .filter_map(|o| o.as_i64().ok())
+                            .map(|v| v as f32)
+                            .collect();
+                        if vals.len() >= 4 {
+                            Ok(Some([vals[0], vals[1], vals[2], vals[3]]))
+                        } else {
+                            Ok(None)
+                        }
+                    })
+                    .unwrap_or(None)
+                    .map(|r| r)
+                    .unwrap_or([0.0, 0.0, 0.0, 0.0])
+            };
+
             if !full_name.is_empty() {
                 out.push(FormField {
                     object_id: field_id,
@@ -328,6 +351,7 @@ impl Document {
                     required,
                     multiline,
                     page,
+                    rect,
                 });
             }
         }
@@ -519,6 +543,7 @@ impl Document {
             required: false,
             multiline: false,
             page: Some(field.page as usize),
+            rect: [0.0, 0.0, 0.0, 0.0],
         })
     }
 

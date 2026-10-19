@@ -1253,6 +1253,12 @@ pub struct YouPdfApp {
     form_edit: Option<(usize, String)>,
     /// Brouillon des propriétés du champ sélectionné.
     form_props: Option<(usize, FieldProperties)>,
+    /// Champ de formulaire en cours de édition interactive (lecteur).
+    form_editing: Option<usize>,
+    /// Dernier champ survolé pour surlignage.
+    form_hover: Option<usize>,
+    /// Teinte bleue sur tous les champs remplissables.
+    form_highlight: bool,
     /// Format choisi pour l'échange de données de formulaire.
     form_data_format: FormDataFormat,
     /// Fond du canevas choisi dans Aspect.
@@ -1352,6 +1358,9 @@ impl YouPdfApp {
             inspector_target: None,
             content_selection: None,
             content_drag: None,
+            form_editing: None,
+            form_hover: None,
+            form_highlight: true,
             inspector_size: None,
             inspector_text_ui: TextStyleUi::default(),
             selected_image: None,
@@ -2831,6 +2840,11 @@ impl YouPdfApp {
             }
         });
         ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.add_space(2.0);
+            ui.checkbox(&mut self.form_highlight, "Highlight fields");
+        });
+        ui.add_space(2.0);
 
         if import {
             let format = self.form_data_format;
@@ -3723,6 +3737,61 @@ impl YouPdfApp {
                     && point[1] <= a.rect[3] + 4.0
             })
             .map(|(idx, _)| idx)
+    }
+    /// Hit-test sur un champ de formulaire sur la page `page` aux coordonnées `point`.
+    /// Renvoie l'index du champ dans `tab.forms`, ou `None`.
+    fn form_hit_test(&self, page: usize, point: [f32; 2]) -> Option<usize> {
+        let tab = self.tabs.get(self.active)?;
+        tab.forms
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, f)| f.page == Some(page + 1) && {
+                point[0] >= f.rect[0] - 3.0 && point[0] <= f.rect[2] + 3.0 && point[1] >= f.rect[1] - 3.0 && point[1] <= f.rect[3] + 3.0
+            })
+            .map(|(idx, _)| idx)
+    }
+
+    /// Valide la saisie d'un champ de formulaire faite sur la page.
+    fn commit_form_edit(&mut self) {
+        let Some((idx, buffer)) = self.form_edit.take() else {
+            return;
+        };
+        self.form_editing = None;
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let Some(field) = tab.forms.get(idx).cloned() else {
+            return;
+        };
+        let value = if field.kind == FormFieldKind::Radio {
+            if buffer.is_empty() {
+                "Off"
+            } else {
+                "Yes"
+            }
+        } else {
+            buffer.as_str()
+        };
+        if tab.doc.fill_form_field(&field, value).is_ok() {
+            // Un bouton radio sélectionné désélectionne ses frères.
+            if field.kind == FormFieldKind::Radio && value != "Off" {
+                let siblings: Vec<FormField> = tab
+                    .forms
+                    .iter()
+                    .filter(|other| {
+                        other.kind == FormFieldKind::Radio
+                            && other.name == field.name
+                            && other.object_id != field.object_id
+                    })
+                    .cloned()
+                    .collect();
+                for other in siblings {
+                    let _ = tab.doc.fill_form_field(&other, "Off");
+                }
+            }
+            tab.forms = tab.doc.read_form_fields();
+        }
     }
 
     /// Indice du tracé de crayon réellement touché à `point`, en ignorant les
@@ -9796,6 +9865,12 @@ impl YouPdfApp {
         // L'inspecteur suit la sélection : la trame du canevas le calcule, la
         // barre d'outils (dessinée après) le pose.
         let mode = self.mode;
+        let form_highlight = self.form_highlight;
+        let form_editing = self.form_editing;
+        let form_hover = self.form_hover;
+        let mut form_draft = self.form_edit.take();
+        let mut form_commit = false;
+        let mut form_cancel = false;
         let mut inspector_target: Option<InspectorTarget> = None;
         // L'image sélectionnée et le rognage en cours sont lus une fois : la
         // trame du canevas emprunte les onglets, elle ne peut pas toucher à
@@ -10034,8 +10109,126 @@ impl YouPdfApp {
                         };
                         draw_annots(ui.painter(), tab, page, page_rect, scale, selected);
 
-                        // Annotation sélectionnée : l'inspecteur se pose
-                        // au-dessus d'elle (mode Commentaire).
+                        // Champs de formulaire : teinte bleue quand le
+                        // surlignage est actif, plus le champ en cours
+                        // d'édition.
+                        if form_highlight || form_editing.is_some() {
+                            for (index, field) in tab.forms.iter().enumerate() {
+                                if field.page != Some(page as usize) || field.rect == [0.0; 4] {
+                                    continue;
+                                }
+                                let [x1, y1, x2, y2] = field.rect;
+                                let rect = Rect::from_min_max(
+                                    pos2(
+                                        page_rect.min.x + x1.min(x2) * scale,
+                                        page_rect.max.y - y1.max(y2) * scale,
+                                    ),
+                                    pos2(
+                                        page_rect.min.x + x1.max(x2) * scale,
+                                        page_rect.max.y - y1.min(y2) * scale,
+                                    ),
+                                );
+                                let active = form_editing == Some(index)
+                                    || form_hover == Some(index);
+                                ui.painter().rect_filled(
+                                    rect,
+                                    Rounding::same(2.0),
+                                    Color32::from_rgba_unmultiplied(
+                                        70,
+                                        130,
+                                        220,
+                                        if active { 70 } else { 34 },
+                                    ),
+                                );
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    Rounding::same(2.0),
+                                    Stroke::new(
+                                        if active { 1.5 } else { 1.0 },
+                                        Color32::from_rgb(70, 130, 220),
+                                    ),
+                                );
+                            }
+                        }
+
+                        // Éditeur en place du champ de formulaire touché.
+                        if let Some((idx, buffer)) = form_draft.as_mut() {
+                            if let Some(field) = tab.forms.get(*idx) {
+                                if field.page == Some(page as usize) && field.rect != [0.0; 4] {
+                                    let [x1, y1, x2, y2] = field.rect;
+                                    let rect = Rect::from_min_max(
+                                        pos2(
+                                            page_rect.min.x + x1.min(x2) * scale,
+                                            page_rect.max.y - y1.max(y2) * scale,
+                                        ),
+                                        pos2(
+                                            page_rect.min.x + x1.max(x2) * scale,
+                                            page_rect.max.y - y1.min(y2) * scale,
+                                        ),
+                                    );
+                                    ui.painter().rect_filled(
+                                        rect.expand(1.0),
+                                        Rounding::same(2.0),
+                                        Color32::WHITE,
+                                    );
+                                    ui.painter().rect_stroke(
+                                        rect,
+                                        Rounding::same(2.0),
+                                        Stroke::new(1.5_f32, pal().accent),
+                                    );
+                                    let single_line = !field.multiline;
+                                    if matches!(
+                                        field.kind,
+                                        FormFieldKind::Choice | FormFieldKind::MultiChoice
+                                    ) {
+                                        egui::ComboBox::from_id_salt(("form-choice", *idx))
+                                            .width(rect.width())
+                                            .selected_text(if buffer.is_empty() {
+                                                "Select…".to_string()
+                                            } else {
+                                                buffer.clone()
+                                            })
+                                            .show_ui(ui, |ui| {
+                                                for option in &field.options {
+                                                    if ui
+                                                        .selectable_label(buffer == option, option)
+                                                        .clicked()
+                                                    {
+                                                        *buffer = option.clone();
+                                                        form_commit = true;
+                                                    }
+                                                }
+                                            });
+                                        ui.painter().rect_stroke(
+                                            rect,
+                                            Rounding::same(2.0),
+                                            Stroke::new(1.5_f32, pal().accent),
+                                        );
+                                    } else {
+                                        let edit = if single_line {
+                                            TextEdit::singleline(buffer)
+                                        } else {
+                                            TextEdit::multiline(buffer)
+                                        };
+                                        let resp = ui.put(
+                                            rect.shrink(3.0),
+                                            edit.frame(false).desired_width(f32::INFINITY),
+                                        );
+                                        if ui.memory(|m| m.focused().is_none()) {
+                                            resp.request_focus();
+                                        }
+                                        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                            form_cancel = true;
+                                        } else if (single_line
+                                            && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                                            || (resp.lost_focus() && !inspector_hovered)
+                                        {
+                                            form_commit = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         if mode == Some(0) {
                             if let Some(idx) = selected {
                                 if let Some(annot) = tab.annots.get(idx) {
@@ -10732,7 +10925,15 @@ impl YouPdfApp {
                                     }
                                 }
                             }
-                            ToolAction::None => {}
+                            ToolAction::None => {
+                                // Mode lecture : un clic peut viser un champ
+                                // de formulaire.
+                                if resp.clicked() {
+                                    if let Some(p) = resp.interact_pointer_pos() {
+                                        pending_hit = Some((page as usize, to_pdf(p)));
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -10765,6 +10966,13 @@ impl YouPdfApp {
             });
 
         self.edit_text = draft;
+        self.form_edit = form_draft;
+        if form_cancel {
+            self.form_edit = None;
+            self.form_editing = None;
+        } else if form_commit {
+            self.commit_form_edit();
+        }
         self.text_sel = sel;
         self.inspector_target = inspector_target;
         if let Some(crop) = crop_next {
@@ -10873,26 +11081,57 @@ impl YouPdfApp {
             self.push_annot(annot);
         }
         if let Some((page, point)) = pending_hit {
-            match action {
-                ToolAction::Erase => {
-                    // La gomme vise le tracé avant la boîte englobante :
-                    // cliquer dans le vide à l'intérieur d'un tracé ne doit
-                    // pas l'effacer.
-                    if let Some(idx) = self.ink_hit_test(page, point) {
-                        self.remove_annot(idx);
-                    } else if let Some(idx) = self.hit_test(page, point) {
-                        // Un tracé n'est effacé qu'en le touchant : sa boîte
-                        // englobante ne suffit pas.
-                        let ink = self
-                            .tabs
-                            .get(self.active)
-                            .and_then(|tab| tab.annots.get(idx))
-                            .map_or(false, |annot| annot.kind == AnnotationKind::Ink);
-                        if !ink {
-                            self.remove_annot(idx);
+            // Vérifier d'abord si un champ de formulaire a été touché (mode Lecture).
+            if self.mode.is_none() || self.mode == Some(0) {
+                if let Some(form_idx) = self.form_hit_test(page, point) {
+                    let field = self.tabs[self.active].forms[form_idx].clone();
+                    match &field.kind {
+                        FormFieldKind::Text => {
+                            self.form_editing = Some(form_idx);
+                            self.form_edit =
+                                Some((form_idx, field.value.clone().unwrap_or_default()));
+                        }
+                        FormFieldKind::Checkbox => {
+                            let checked = matches!(
+                                field.value.as_deref(),
+                                Some("/Yes") | Some("Yes") | Some("1")
+                            );
+                            let new_value = if checked { "Off" } else { "Yes" };
+                            if let Some(tab) = self.tabs.get_mut(self.active) {
+                                let _ = tab.doc.fill_form_field(&field, new_value);
+                                tab.forms = tab.doc.read_form_fields();
+                            }
+                            self.form_editing = None;
+                        }
+                        FormFieldKind::Radio => {
+                            if let Some(tab) = self.tabs.get_mut(self.active) {
+                                let _ = tab.doc.fill_form_field(&field, "Yes");
+                                let siblings: Vec<FormField> = tab
+                                    .forms
+                                    .iter()
+                                    .filter(|other| {
+                                        other.kind == FormFieldKind::Radio
+                                            && other.name == field.name
+                                            && other.object_id != field.object_id
+                                    })
+                                    .cloned()
+                                    .collect();
+                                for other in siblings {
+                                    let _ = tab.doc.fill_form_field(&other, "Off");
+                                }
+                                tab.forms = tab.doc.read_form_fields();
+                            }
+                            self.form_editing = None;
+                        }
+                        _ => {
+                            self.form_editing = Some(form_idx);
+                            self.form_edit =
+                                Some((form_idx, field.value.clone().unwrap_or_default()));
                         }
                     }
                 }
+            }
+            match action {
                 ToolAction::Select => {
                     if let Some(idx) = self.hit_test(page, point) {
                         self.selected_annot = idx;
