@@ -236,3 +236,47 @@ fn reinitialiser_le_formulaire() {
     let case = fields.iter().find(|f| f.name == "Case").expect("champ Case");
     assert_eq!(case.value.as_deref(), Some("Off"));
 }
+
+/// Les réglages d'apparence et de format se relisent après écriture.
+#[test]
+fn proprietes_de_champ_aller_retour() {
+    use youpdf_core::forms::FieldProperties;
+
+    let mut doc = Document::from_bytes(&page_blanche()).expect("ouverture");
+    doc.create_form_field(&NewFormField::text(1, [72.0, 600.0, 272.0, 620.0], "Nom"))
+        .expect("création");
+    let field = doc.read_form_fields().remove(0);
+
+    let mut props = doc.read_field_properties(&field);
+    props.name = "Nom".to_string();
+    props.tooltip = "Votre nom".to_string();
+    props.required = true;
+    props.border_width = 2.5;
+    props.border_style = 1;
+    props.border_color = [10, 20, 30];
+    props.fill = true;
+    props.fill_color = [200, 210, 220];
+    props.text_color = [40, 50, 60];
+    props.font_size = 11.0;
+    props.comb = 8;
+    props.alignment = 2;
+    props.format_js = "AFDate_FormatEx(\"yyyy-mm-dd\");".to_string();
+    props.calc_js = "AFSimple_Calculate(\"SUM\", new Array(\"A\"));".to_string();
+    doc.update_form_field(&field, &props).expect("écriture");
+
+    let field = doc.read_form_fields().remove(0);
+    let read = doc.read_field_properties(&field);
+    assert!(read.required, "obligatoire perdu");
+    assert!((read.border_width - 2.5).abs() < 1e-3, "{:?}", read.border_width);
+    assert_eq!(read.border_style, 1);
+    assert_eq!(read.border_color, [10, 20, 30]);
+    assert!(read.fill);
+    assert_eq!(read.fill_color, [200, 210, 220]);
+    assert_eq!(read.text_color, [40, 50, 60]);
+    assert!((read.font_size - 11.0).abs() < 1e-3);
+    assert_eq!(read.comb, 8);
+    assert_eq!(read.alignment, 2);
+    assert!(read.format_js.contains("AFDate_FormatEx"), "{:?}", read.format_js);
+    assert!(read.calc_js.contains("AFSimple_Calculate"), "{:?}", read.calc_js);
+    assert_eq!(read.tooltip, "Votre nom");
+}

@@ -1262,6 +1262,8 @@ pub struct YouPdfApp {
     form_edit: Option<(usize, String)>,
     /// Brouillon des propriétés du champ sélectionné.
     form_props: Option<(usize, FieldProperties)>,
+    /// Onglet actif de l'inspecteur de champ.
+    form_props_tab: usize,
     /// Champ de formulaire en cours de édition interactive (lecteur).
     form_editing: Option<usize>,
     /// Dernier champ survolé pour surlignage.
@@ -1371,6 +1373,7 @@ impl YouPdfApp {
             content_drag: None,
             form_editing: None,
             form_hover: None,
+            form_props_tab: 0,
             form_highlight: true,
             form_selection: BTreeSet::new(),
             inspector_size: None,
