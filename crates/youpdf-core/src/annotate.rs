@@ -51,6 +51,10 @@ pub enum AnnotationKind {
     Line,
     /// Flèche (ligne avec une pointe).
     Arrow,
+    /// Polygone fermé à plusieurs sommets.
+    Polygon,
+    /// Polyligne ouverte à plusieurs sommets.
+    PolyLine,
     Ink,
     /// Tampon texte prédéfini (Approuvé, Brouillon…).
     Stamp,
@@ -73,6 +77,8 @@ impl AnnotationKind {
             AnnotationKind::Square => b"Square",
             AnnotationKind::Circle => b"Circle",
             AnnotationKind::Line | AnnotationKind::Arrow => b"Line",
+            AnnotationKind::Polygon => b"Polygon",
+            AnnotationKind::PolyLine => b"PolyLine",
             AnnotationKind::Ink => b"Ink",
             AnnotationKind::Stamp => b"Stamp",
             AnnotationKind::Link => b"Link",
@@ -105,11 +111,26 @@ impl AnnotationKind {
             AnnotationKind::Circle => "Cercle",
             AnnotationKind::Line => "Ligne",
             AnnotationKind::Arrow => "Flèche",
+            AnnotationKind::Polygon => "Polygone",
+            AnnotationKind::PolyLine => "Polyligne",
             AnnotationKind::Ink => "Crayon",
             AnnotationKind::Stamp => "Tampon",
             AnnotationKind::Link => "Lien",
             AnnotationKind::FileAttachment => "Pièce jointe",
         }
+    }
+
+    /// Vrai pour les formes géométriques.
+    pub fn is_shape(&self) -> bool {
+        matches!(
+            self,
+            AnnotationKind::Square
+                | AnnotationKind::Circle
+                | AnnotationKind::Line
+                | AnnotationKind::Arrow
+                | AnnotationKind::Polygon
+                | AnnotationKind::PolyLine
+        )
     }
 
     /// Ces types se dessinent en glissant un rectangle.
@@ -218,6 +239,30 @@ pub fn stamp_name(label: &str) -> &'static [u8] {
     }
 }
 
+/// Style du trait d'une annotation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BorderDash {
+    /// Trait continu.
+    #[default]
+    Solid,
+    /// Tirets.
+    Dashed,
+    /// Pointillés.
+    Dotted,
+}
+
+impl BorderDash {
+    /// Motif `/D` du PDF, vide pour un trait continu.
+    pub fn pdf_pattern(self) -> &'static [f32] {
+        match self {
+            Self::Solid => &[],
+            Self::Dashed => &[4.0, 3.0],
+            Self::Dotted => &[1.0, 2.0],
+        }
+    }
+}
+
 /// Style visuel d'une annotation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnnotationStyle {
@@ -229,6 +274,15 @@ pub struct AnnotationStyle {
     pub line_width: f32,
     /// Taille de police pour FreeText et Note.
     pub font_size: f32,
+    /// Couleur de remplissage des formes ; `None` = pas de remplissage.
+    #[serde(default)]
+    pub fill: Option<[u8; 3]>,
+    /// Style du trait : continu, tirets ou pointillés.
+    #[serde(default)]
+    pub dash: BorderDash,
+    /// Bord festonné « nuage » pour les rectangles et polygones.
+    #[serde(default)]
+    pub cloudy: bool,
 }
 
 impl Default for AnnotationStyle {
@@ -238,6 +292,9 @@ impl Default for AnnotationStyle {
             opacity: 0.4,
             line_width: 1.5,
             font_size: 11.0,
+            fill: None,
+            dash: BorderDash::Solid,
+            cloudy: false,
         }
     }
 }
@@ -255,6 +312,9 @@ impl AnnotationStyle {
             opacity: 1.0,
             line_width: 1.0,
             font_size: 10.0,
+            fill: None,
+            dash: BorderDash::Solid,
+            cloudy: false,
         }
     }
 
@@ -265,6 +325,9 @@ impl AnnotationStyle {
             opacity: 1.0,
             line_width: 2.0,
             font_size: 11.0,
+            fill: None,
+            dash: BorderDash::Solid,
+            cloudy: false,
         }
     }
 
@@ -275,6 +338,9 @@ impl AnnotationStyle {
             opacity: 1.0,
             line_width: 2.0,
             font_size: 11.0,
+            fill: None,
+            dash: BorderDash::Solid,
+            cloudy: false,
         }
     }
 
@@ -507,6 +573,19 @@ impl Annotation {
                 return None
             }
 
+            AnnotationKind::Polygon | AnnotationKind::PolyLine => {
+                // Fond transparent pour le polygone/polyligne (on se contente
+                /// du trait via BS). Un polygone rempli n'aurait pas de sens
+                /// en PDF, le même que rect fait sans bloc de remplissage.
+                let lw = self.style.line_width.clamp(0.5, 12.0);
+                let gs = format!("q /{APPEARANCE_GS_NAME} gs ");
+                let (x1, y1, w, h) = self.frame();
+                c.extend_from_slice(
+                    format!("{gs}{stroke} {lw:.2} w 1 J 1 j {} {} {} {} re S Q\n", x1, y1, w - lw, h - lw).as_bytes(),
+                );
+                return Some(c);
+            }
+
             // Une mise en évidence suit les lignes sélectionnées : un bloc par
             // quadrilatère, sinon un rectangle unique avalerait l'interligne.
             AnnotationKind::Highlight
@@ -734,14 +813,18 @@ impl Annotation {
                 }
                 AnnotationKind::Note => AnnotationStyle::note(),
                 AnnotationKind::Ink => AnnotationStyle::pen(),
-                AnnotationKind::Square | AnnotationKind::Circle => {
-                    AnnotationStyle::outline_red()
-                }
+                AnnotationKind::Square
+                | AnnotationKind::Circle
+                | AnnotationKind::Polygon
+                | AnnotationKind::PolyLine => AnnotationStyle::outline_red(),
                 AnnotationKind::Line | AnnotationKind::Arrow => AnnotationStyle {
                     color: [40, 96, 200],
                     opacity: 1.0,
                     line_width: 1.5,
                     font_size: 11.0,
+                    fill: None,
+                    dash: BorderDash::Solid,
+                    cloudy: false,
                 },
                 AnnotationKind::Stamp | AnnotationKind::Link | AnnotationKind::FileAttachment => {
                     AnnotationStyle {
@@ -749,6 +832,9 @@ impl Annotation {
                         opacity: 1.0,
                         line_width: 1.0,
                         font_size: 11.0,
+                        fill: None,
+                        dash: BorderDash::Solid,
+                        cloudy: false,
                     }
                 }
                 _ => AnnotationStyle::default(),
@@ -921,6 +1007,29 @@ impl Annotation {
                     d.set("Contents", Object::string_literal(self.content.as_str()));
                 }
                 // BS : border style.
+                d.set(
+                    "BS",
+                    Object::Dictionary(dictionary! {
+                        "W" => Object::Real(self.style.line_width),
+                        "S" => Object::Name(b"S".to_vec()),
+                    }),
+                );
+            }
+
+            AnnotationKind::Polygon | AnnotationKind::PolyLine => {
+                // Vertices are in /Vertices (already parsed into ink_points).
+                // For now use the existing ink_points if any, else a fallback.
+                let points = if !self.ink_points.is_empty() {
+                    self.ink_points[0].clone()
+                } else {
+                    vec![[self.rect[0], self.rect[1]], [self.rect[2], self.rect[3]]]
+                };
+                let mut flat = Vec::with_capacity(points.len() * 2);
+                for p in &points {
+                    flat.push(Object::Real(p[0]));
+                    flat.push(Object::Real(p[1]));
+                }
+                d.set("QuadPoints", Object::Array(flat));
                 d.set(
                     "BS",
                     Object::Dictionary(dictionary! {
@@ -1657,6 +1766,22 @@ fn parse_annotation(dict: &Dictionary, id: &str, page: usize) -> Option<Annotati
             }
         }
     }
+    // Polygone/polyligne : les sommets sont dans /Vertices.
+    if matches!(kind, AnnotationKind::Polygon | AnnotationKind::PolyLine) {
+        if let Some(v) = dict.get(b"Vertices").ok().and_then(|o| o.as_array().ok()) {
+            let mut pts = Vec::new();
+            let mut iter = v.iter();
+            while let (Some(x), Some(y)) = (iter.next(), iter.next()) {
+                pts.push([
+                    x.as_float().unwrap_or(0.0),
+                    y.as_float().unwrap_or(0.0),
+                ]);
+            }
+            if pts.len() >= 2 {
+                ink_points.push(pts);
+            }
+        }
+    }
 
     let content = dict
         .get(b"Contents")
@@ -1793,6 +1918,9 @@ fn parse_annotation(dict: &Dictionary, id: &str, page: usize) -> Option<Annotati
             opacity,
             line_width,
             font_size,
+            fill: None,
+            dash: BorderDash::Solid,
+            cloudy: false,
         },
         ink_points,
         quads,
@@ -1943,6 +2071,8 @@ fn xfdf_element(kind: AnnotationKind) -> &'static str {
         AnnotationKind::Square => "square",
         AnnotationKind::Circle => "circle",
         AnnotationKind::Line | AnnotationKind::Arrow => "line",
+        AnnotationKind::Polygon => "polygon",
+        AnnotationKind::PolyLine => "polyline",
         AnnotationKind::Ink => "ink",
         AnnotationKind::Stamp => "stamp",
         AnnotationKind::Link => "link",
