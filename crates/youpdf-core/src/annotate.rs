@@ -80,6 +80,18 @@ impl AnnotationKind {
         }
     }
 
+    /// Vrai pour les quatre mises en évidence, qui se posent sur du texte
+    /// sélectionné plutôt que sur un rectangle dessiné.
+    pub fn is_markup(&self) -> bool {
+        matches!(
+            self,
+            AnnotationKind::Highlight
+                | AnnotationKind::Underline
+                | AnnotationKind::StrikeOut
+                | AnnotationKind::Squiggly
+        )
+    }
+
     /// Nom lisible pour l'interface.
     pub fn display_name(&self) -> &'static str {
         match self {
@@ -112,6 +124,27 @@ impl AnnotationKind {
                 | AnnotationKind::Circle
         )
     }
+}
+
+/// Quadrilatère `/QuadPoints` d'un rectangle : coins dans l'ordre
+/// haut-gauche, haut-droit, bas-gauche, bas-droit.
+pub fn quad_from_rect(x1: f32, y1: f32, x2: f32, y2: f32) -> [f32; 8] {
+    [x1, y2, x2, y2, x1, y1, x2, y1]
+}
+
+/// Boîte englobante d'un quadrilatère `/QuadPoints` : `(x1, y1, x2, y2)`.
+fn quad_bounds(quad: [f32; 8]) -> (f32, f32, f32, f32) {
+    let mut x1 = f32::INFINITY;
+    let mut y1 = f32::INFINITY;
+    let mut x2 = f32::NEG_INFINITY;
+    let mut y2 = f32::NEG_INFINITY;
+    for point in quad.chunks_exact(2) {
+        x1 = x1.min(point[0]);
+        y1 = y1.min(point[1]);
+        x2 = x2.max(point[0]);
+        y2 = y2.max(point[1]);
+    }
+    (x1, y1, x2, y2)
 }
 
 /// Noms de tampons standard reconnus par les lecteurs PDF.
@@ -296,6 +329,13 @@ pub struct Annotation {
     /// Points pour le crayon (coordonnées PDF absolues).
     #[serde(default)]
     pub ink_points: Vec<Vec<[f32; 2]>>,
+    /// Quadrilatères `/QuadPoints` (8 nombres chacun), pour les mises en
+    /// évidence posées sur du texte.
+    ///
+    /// Un surlignage de texte suit les lignes sélectionnées ; vide, le
+    /// `rect` sert de quadrilatère unique.
+    #[serde(default)]
+    pub quads: Vec<[f32; 8]>,
     /// Horodatage ISO 8601 (rempli à la création).
     pub created_at: String,
     /// État de revue (`/State`). Voir [`AnnotationState`].
@@ -361,6 +401,37 @@ impl Annotation {
         )
     }
 
+    /// Quadrilatères à écrire et à peindre : ceux de la sélection, ou le
+    /// rectangle comme quadrilatère unique.
+    pub fn quads_or_rect(&self) -> Vec<[f32; 8]> {
+        if self.quads.is_empty() {
+            let [x1, y1, x2, y2] = self.rect;
+            vec![quad_from_rect(x1, y1, x2, y2)]
+        } else {
+            self.quads.clone()
+        }
+    }
+
+    /// Pose les quadrilatères d'une mise en évidence et ajuste `rect` à leur
+    /// union, avec la même marge que le crayon.
+    pub fn set_quads(&mut self, quads: Vec<[f32; 8]>) {
+        let mut x1 = f32::INFINITY;
+        let mut y1 = f32::INFINITY;
+        let mut x2 = f32::NEG_INFINITY;
+        let mut y2 = f32::NEG_INFINITY;
+        for quad in &quads {
+            let (bx1, by1, bx2, by2) = quad_bounds(*quad);
+            x1 = x1.min(bx1);
+            y1 = y1.min(by1);
+            x2 = x2.max(bx2);
+            y2 = y2.max(by2);
+        }
+        if x1.is_finite() {
+            self.rect = [x1 - 2.0, y1 - 2.0, x2 + 2.0, y2 + 2.0];
+        }
+        self.quads = quads;
+    }
+
     /// Contenu de l'apparence (`/AP /N`) dans le repère local de
     /// l'annotation : origine au coin bas-gauche du `Rect`, axe Y vers le
     /// haut, unités PDF. Le lecteur pose cette apparence sur le `Rect`.
@@ -370,7 +441,7 @@ impl Annotation {
     /// pièces jointes. Sans apparence, les autres lecteurs n'afficheraient
     /// rien du tout pour les autres types.
     pub fn appearance_content(&self) -> Option<Vec<u8>> {
-        let (_x1, _y1, w, h) = self.frame();
+        let (x1, y1, w, h) = self.frame();
         if w <= 0.5 || h <= 0.5 {
             return None;
         }
@@ -387,39 +458,62 @@ impl Annotation {
                 return None
             }
 
-            // Le surlignage est une bande translucide ; le zigzag se dessine
-            // plus bas, comme un souligné ondulé.
-            AnnotationKind::Highlight => {
-                c.extend_from_slice(
-                    format!("{gs}{fill} 0 0 {w:.2} {h:.2} re f Q\n").as_bytes(),
-                );
-            }
-            AnnotationKind::Underline => {
-                let y = (lw * 0.6).min(h / 2.0);
-                c.extend_from_slice(
-                    format!("q {stroke} {lw:.2} w 0 {y:.2} m {w:.2} {y:.2} l S Q\n").as_bytes(),
-                );
-            }
-            AnnotationKind::StrikeOut => {
-                let y = h / 2.0;
-                c.extend_from_slice(
-                    format!("q {stroke} {lw:.2} w 0 {y:.2} m {w:.2} {y:.2} l S Q\n").as_bytes(),
-                );
-            }
-            AnnotationKind::Squiggly => {
-                let amp = 2.0_f32.min(h / 3.0);
-                c.extend_from_slice(
-                    format!("q {stroke} {lw:.2} w 1 J 1 j 0 {amp:.2} m").as_bytes(),
-                );
-                let mut x = 0.0_f32;
-                let mut up = true;
-                while x < w {
-                    x = (x + 2.0).min(w);
-                    let y = if up { amp * 2.0 } else { 0.0 };
-                    c.extend_from_slice(format!(" {x:.2} {y:.2} l").as_bytes());
-                    up = !up;
+            // Une mise en évidence suit les lignes sélectionnées : un bloc par
+            // quadrilatère, sinon un rectangle unique avalerait l'interligne.
+            AnnotationKind::Highlight
+            | AnnotationKind::Underline
+            | AnnotationKind::StrikeOut
+            | AnnotationKind::Squiggly => {
+                for quad in self.quads_or_rect() {
+                    let (qx1, qy1, qx2, qy2) = quad_bounds(quad);
+                    let bx = qx1 - x1;
+                    let by = qy1 - y1;
+                    let bw = (qx2 - qx1).max(0.1);
+                    let bh = (qy2 - qy1).max(0.1);
+                    match self.kind {
+                        AnnotationKind::Highlight => c.extend_from_slice(
+                            format!("{gs}{fill} {bx:.2} {by:.2} {bw:.2} {bh:.2} re f\n")
+                                .as_bytes(),
+                        ),
+                        AnnotationKind::Underline => {
+                            let y = by + (lw * 0.6).min(bh / 2.0);
+                            c.extend_from_slice(
+                                format!(
+                                    "q {stroke} {lw:.2} w {bx:.2} {y:.2} m {:.2} {y:.2} l S Q\n",
+                                    bx + bw
+                                )
+                                .as_bytes(),
+                            );
+                        }
+                        AnnotationKind::StrikeOut => {
+                            let y = by + bh / 2.0;
+                            c.extend_from_slice(
+                                format!(
+                                    "q {stroke} {lw:.2} w {bx:.2} {y:.2} m {:.2} {y:.2} l S Q\n",
+                                    bx + bw
+                                )
+                                .as_bytes(),
+                            );
+                        }
+                        // Squiggly : le zigzag se dessine sur le bas du bloc.
+                        _ => {
+                            let amp = 2.0_f32.min(bh / 3.0);
+                            c.extend_from_slice(
+                                format!("q {stroke} {lw:.2} w 1 J 1 j {bx:.2} {:.2} m", by + amp)
+                                    .as_bytes(),
+                            );
+                            let mut x = 0.0_f32;
+                            let mut up = true;
+                            while x < bw {
+                                x = (x + 2.0).min(bw);
+                                let y = by + if up { amp * 2.0 } else { 0.0 };
+                                c.extend_from_slice(format!(" {:.2} {y:.2} l", bx + x).as_bytes());
+                                up = !up;
+                            }
+                            c.extend_from_slice(b" S Q\n");
+                        }
+                    }
                 }
-                c.extend_from_slice(b" S Q\n");
             }
 
             AnnotationKind::FreeText => {
@@ -611,6 +705,7 @@ impl Annotation {
                 _ => AnnotationStyle::default(),
             },
             ink_points: Vec::new(),
+            quads: Vec::new(),
             created_at: chrono::Utc::now().to_rfc3339(),
             state: AnnotationState::None,
             reply_to: None,
@@ -680,23 +775,14 @@ impl Annotation {
             | AnnotationKind::Underline
             | AnnotationKind::StrikeOut
             | AnnotationKind::Squiggly => {
-                // QuadPoints : 8 nombres par quadrilatère.
-                // Pour un rectangle simple, un seul quadrilatère aux coins
-                // dans l'ordre (haut-gauche, haut-droit, bas-gauche, bas-droit).
-                let [x1, y1, x2, y2] = self.rect;
-                d.set(
-                    "QuadPoints",
-                    Object::Array(vec![
-                        Object::Real(x1),
-                        Object::Real(y2),
-                        Object::Real(x2),
-                        Object::Real(y2),
-                        Object::Real(x1),
-                        Object::Real(y1),
-                        Object::Real(x2),
-                        Object::Real(y1),
-                    ]),
-                );
+                // QuadPoints : 8 nombres par quadrilatère. Une mise en
+                // évidence posée sur du texte en porte un par ligne ; sinon
+                // le rectangle fournit l'unique quadrilatère.
+                let mut points: Vec<Object> = Vec::new();
+                for quad in self.quads_or_rect() {
+                    points.extend(quad.iter().map(|v| Object::Real(*v)));
+                }
+                d.set("QuadPoints", Object::Array(points));
                 if !self.content.is_empty() {
                     d.set("Contents", Object::string_literal(self.content.as_str()));
                 }
@@ -1568,6 +1654,21 @@ fn parse_annotation(dict: &Dictionary, id: &str, page: usize) -> Option<Annotati
         }
     }
 
+    let mut quads = Vec::new();
+    if kind.is_markup() {
+        if let Ok(points) = dict.get(b"QuadPoints").and_then(|o| o.as_array()) {
+            let values: Vec<f32> = points
+                .iter()
+                .map(|v| v.as_float().unwrap_or(0.0))
+                .collect();
+            for chunk in values.chunks_exact(8) {
+                let mut quad = [0.0f32; 8];
+                quad.copy_from_slice(chunk);
+                quads.push(quad);
+            }
+        }
+    }
+
     let state = dict
         .get(b"State")
         .ok()
@@ -1589,6 +1690,7 @@ fn parse_annotation(dict: &Dictionary, id: &str, page: usize) -> Option<Annotati
             font_size,
         },
         ink_points,
+        quads,
         created_at,
         state,
         // `/IRT` est une référence indirecte : elle est résolue par
