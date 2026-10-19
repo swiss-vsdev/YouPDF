@@ -105,6 +105,30 @@ impl Default for CompressionOptions {
     }
 }
 
+/// Optimisations structurelles facultatives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompressionExtras {
+    /// Retirer les métadonnées (Info, XMP).
+    pub strip_metadata: bool,
+    /// Retirer les vignettes `/Thumb` des pages.
+    pub strip_thumbnails: bool,
+    /// Retirer le plan (`/Outlines`).
+    pub strip_bookmarks: bool,
+    /// Retirer l'arbre de structure (`/StructTreeRoot`, `/MarkInfo`).
+    pub strip_structure: bool,
+}
+
+impl Default for CompressionExtras {
+    fn default() -> Self {
+        Self {
+            strip_metadata: true,
+            strip_thumbnails: true,
+            strip_bookmarks: false,
+            strip_structure: false,
+        }
+    }
+}
+
 /// Bilan d'une compression : tailles avant et après, en octets, plus le nombre
 /// d'images rééchantillonnées.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,26 +187,77 @@ impl Document {
         path: impl AsRef<Path>,
         options: &CompressionOptions,
     ) -> Result<CompressionReport> {
+        self.compress_with_extras(path, options, &CompressionExtras::default())
+    }
+
+    /// Compresse avec les optimisations structurelles choisies.
+    pub fn compress_with_extras(
+        &mut self,
+        path: impl AsRef<Path>,
+        options: &CompressionOptions,
+        extras: &CompressionExtras,
+    ) -> Result<CompressionReport> {
         let path = path.as_ref();
         let before_bytes = self.to_bytes()?.len();
-
-        let images_resampled = compress_images(self.inner_mut(), options)?;
-
-        {
-            let inner = self.inner_mut();
-            inner.prune_objects();
-            inner.renumber_objects();
-            inner.compress();
-        }
-
+        let images_resampled = self.apply_compression(options, extras)?;
         self.save(path)?;
-
         let after_bytes = std::fs::metadata(path)?.len() as usize;
         Ok(CompressionReport {
             before_bytes,
             after_bytes,
             images_resampled,
         })
+    }
+
+    /// Taille estimée après compression, sans rien écrire.
+    pub fn estimate_compressed(
+        &self,
+        options: &CompressionOptions,
+        extras: &CompressionExtras,
+    ) -> Result<usize> {
+        let mut copy = Document::from_bytes(&self.to_bytes()?)?;
+        copy.apply_compression(options, extras)?;
+        Ok(copy.to_bytes()?.len())
+    }
+
+    /// Applique la compression en mémoire et renvoie le nombre d'images
+    /// rééchantillonnées.
+    fn apply_compression(
+        &mut self,
+        options: &CompressionOptions,
+        extras: &CompressionExtras,
+    ) -> Result<usize> {
+        let images_resampled = compress_images(self.inner_mut(), options)?;
+        if extras.strip_metadata {
+            if let Ok(catalog) = self.inner_mut().catalog_mut() {
+                catalog.remove(b"Metadata");
+            }
+            self.inner_mut().trailer.remove(b"Info");
+        }
+        if extras.strip_bookmarks || extras.strip_structure {
+            if let Ok(catalog) = self.inner_mut().catalog_mut() {
+                if extras.strip_bookmarks {
+                    catalog.remove(b"Outlines");
+                }
+                if extras.strip_structure {
+                    catalog.remove(b"StructTreeRoot");
+                    catalog.remove(b"MarkInfo");
+                }
+            }
+        }
+        if extras.strip_thumbnails {
+            let pages: Vec<lopdf::ObjectId> = self.inner().get_pages().values().copied().collect();
+            for page in pages {
+                if let Ok(dict) = self.inner_mut().get_dictionary_mut(page) {
+                    dict.remove(b"Thumb");
+                }
+            }
+        }
+        let inner = self.inner_mut();
+        inner.prune_objects();
+        inner.renumber_objects();
+        inner.compress();
+        Ok(images_resampled)
     }
 }
 

@@ -202,3 +202,74 @@ fn compresser_avec_dpi_zero_ne_resample_rien() {
     assert_eq!(relu.page_count(), 1, "le nombre de pages doit être conservé");
     let _ = std::fs::remove_file(&path);
 }
+
+/// Les optimisations structurelles retirent les pièces demandées.
+#[test]
+fn extras_retirent_plan_et_vignettes() {
+    use lopdf::{dictionary, Document as LopdfDoc, Object, Stream};
+    use youpdf_core::CompressionExtras;
+
+    let mut raw = LopdfDoc::load_mem(&page_repetitive()).expect("chargement bas niveau");
+    let catalog_id = raw.trailer.get(b"Root").and_then(Object::as_reference).expect("Root");
+    let page_id = raw.get_pages().values().copied().next().expect("page");
+    let outline = raw.add_object(dictionary! {
+        "Type" => Object::Name(b"Outlines".to_vec()),
+        "Count" => 0,
+    });
+    let metadata = raw.add_object(Stream::new(
+        dictionary! { "Type" => Object::Name(b"Metadata".to_vec()) },
+        b"<x/>".to_vec(),
+    ));
+    let thumb = raw.add_object(Stream::new(dictionary! {}, vec![0u8; 4]));
+    if let Ok(dict) = raw.get_dictionary_mut(catalog_id) {
+        dict.set("Outlines", Object::Reference(outline));
+        dict.set("Metadata", Object::Reference(metadata));
+    }
+    if let Ok(dict) = raw.get_dictionary_mut(page_id) {
+        dict.set("Thumb", Object::Reference(thumb));
+    }
+    let mut bytes = Vec::new();
+    raw.save_to(&mut bytes).expect("écriture");
+
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+    let path = chemin("extras");
+    let options = CompressionLevel::Ebook.options();
+    let extras = CompressionExtras {
+        strip_metadata: true,
+        strip_thumbnails: true,
+        strip_bookmarks: true,
+        strip_structure: false,
+    };
+    doc.compress_with_extras(&path, &options, &extras).expect("compression");
+
+    let relu = Document::open(&path).expect("relecture");
+    let raw = LopdfDoc::load_mem(&relu.to_bytes().expect("sérialisation")).expect("relecture brute");
+    let catalog = raw.catalog().expect("catalogue");
+    assert!(!catalog.has(b"Outlines"), "le plan devait disparaître");
+    assert!(!catalog.has(b"Metadata"), "les métadonnées devaient disparaître");
+    let page = raw.get_pages().values().copied().next().expect("page");
+    assert!(
+        !raw.get_dictionary(page).expect("page").has(b"Thumb"),
+        "la vignette devait disparaître"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// L'estimation ne modifie pas le document et renvoie une taille plausible.
+#[test]
+fn estimation_ne_modifie_rien() {
+    use youpdf_core::CompressionExtras;
+
+    let mut doc = Document::from_bytes(&page_repetitive()).expect("ouverture");
+    let before = doc.to_bytes().expect("sérialisation").len();
+    let options = CompressionLevel::Screen.options();
+    let estimate = doc
+        .estimate_compressed(&options, &CompressionExtras::default())
+        .expect("estimation");
+    assert!(estimate > 0);
+    assert_eq!(
+        doc.to_bytes().expect("sérialisation").len(),
+        before,
+        "le document d'origine doit rester intact"
+    );
+}

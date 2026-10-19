@@ -68,8 +68,7 @@ Unchecked below = still open. The plan document is the authoritative task list.
 *   **YouPDF:** Field creation (text, checkbox, radio, dropdown, list, button, date, barcode, signature), red alignment guides with edge/centre snapping, rubber-band multi-select in Prepare form, align/distribute/match toolbar, a six-tab properties inspector (General, Appearance, Options, Actions, Format, Calculate), form data import/export (FDF/XFDF/CSV/JSON), Reset Form, and interactive filling in reader mode.
 *   **Action:** Add push-button action dispatch (Reset/Submit/JavaScript), date picker grid, and Cmd/Ctrl-click multi-selection for list boxes.
 *   **Compression:** UPDF has quality grades (Screen 72dpi, Ebook 150dpi, Print 300dpi).
-*   **YouPDF:** Minimalist deflating.
-*   **Action:** Implement image resampling (Lanczos) for the three grades.
+*   **YouPDF:** Screen/Ebook/Print presets (72/150/300 dpi, JPEG 55/75/88) resample images and keep the smaller stream, optional removal of metadata/XMP, page thumbnails, bookmarks and the tag structure tree, and an in-memory size estimate before writing.
 *   **Protection:** UPDF supports 128/256 AES, owner/user passwords.
 *   **YouPDF:** AES-256/R6 and RC4-128 writers, owner/user passwords, permission toggles, password prompt on open, encrypted-copy export, and a *Remove protection from a file…* entry point.
 
