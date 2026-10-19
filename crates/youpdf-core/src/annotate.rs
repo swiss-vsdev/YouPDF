@@ -230,16 +230,26 @@ pub const STAMP_NAMES: &[&str] = &[
     "Final",
     "Expiré",
     "Pour commentaire",
+    "Approuvé",       // alias English
+    "Non approuvé",   // Not Approved
+    "Signer ici",     // Sign Here
+    "Initial ici",    // Initial Here
+    "Témoin",         // Witness
+    "Personnalisé",   // Custom stamp
 ];
 
 /// Associe un libellé de tampon au nom standard PDF (`/Name`).
 pub fn stamp_name(label: &str) -> &'static [u8] {
     match label.trim().to_ascii_lowercase().as_str() {
         "approuvé" | "approved" => b"Approved",
+        "non approuvé" | "not approved" => b"NotApproved",
         "confidentiel" | "confidential" => b"Confidential",
         "final" => b"Final",
         "expiré" | "expired" => b"Expired",
         "pour commentaire" | "draft" | "brouillon" => b"Draft",
+        "signer ici" | "sign here" => b"SignHere",
+        "initial ici" | "initial here" => b"InitialHere",
+        "témoin" | "witness" => b"Witness",
         _ => b"Draft",
     }
 }
