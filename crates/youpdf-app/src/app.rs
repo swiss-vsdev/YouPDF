@@ -37,7 +37,7 @@ use youpdf_core::{
     NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem, OutlineStyle,
     ImageCrop, OutlineTarget, PageRange, PageBitmap, PatchFont, PdfiumRenderer, RedactionRegion,
     RenderOptions, Renderer, SearchIndex, SearchOptions, SearchResult, TextFormat, TextFragment,
-    TextStyle, Watermark, STAMP_NAMES,
+    TextStyle, Watermark, STAMP_NAMES, smooth_polyline,
 };
 
 // --------------------------------------------------------------------------
@@ -771,6 +771,15 @@ enum DraftKind {
     Stamp,
 }
 
+/// Mode de la gomme du crayon.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EraseMode {
+    /// Un clic sur un trait le supprime en entier.
+    Stroke,
+    /// Un glissé découpe les sections de trait qu'il touche.
+    Segment,
+}
+
 /// Saisie en cours pour une annotation textuelle.
 struct TextDraft {
     kind: DraftKind,
@@ -1158,6 +1167,8 @@ pub struct YouPdfApp {
     text_sel: Option<TextSel>,
     /// Tracé de crayon en cours (coordonnées PDF).
     ink_current: Vec<[f32; 2]>,
+    /// Mode de la gomme : trait entier ou segment.
+    eraser_mode: EraseMode,
     /// Coin de départ d'un glissé en cours (coordonnées PDF).
     drag_from: Option<[f32; 2]>,
     /// Position courante du glissé (coordonnées PDF), pour l'aperçu.
@@ -1419,6 +1430,7 @@ impl YouPdfApp {
             has_annot_selection: false,
             text_sel: None,
             ink_current: Vec::new(),
+            eraser_mode: EraseMode::Stroke,
             drag_from: None,
             drag_to: None,
             stamp_choice: 0,
@@ -3704,6 +3716,55 @@ impl YouPdfApp {
             .map(|(idx, _)| idx)
     }
 
+    /// Indice du tracé de crayon réellement touché à `point`, en ignorant les
+    /// boîtes englobantes vides.
+    fn ink_hit_test(&self, page: usize, point: [f32; 2]) -> Option<usize> {
+        let tab = self.tabs.get(self.active)?;
+        tab.annots
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, a)| {
+                a.page == page
+                    && a.kind == AnnotationKind::Ink
+                    && a.reply_to.is_none()
+                    && a.ink_hit(point, 8.0)
+            })
+            .map(|(idx, _)| idx)
+    }
+
+    /// Gomme mode segment : coupe les tracés de `page` qui croisent le
+    /// segment `[from, to]`. Les tracés entièrement balayés disparaissent.
+    fn erase_ink_segment(&mut self, page: usize, from: [f32; 2], to: [f32; 2], ctx: &egui::Context) {
+        /// Rayon du pinceau de la gomme, en points PDF.
+        const RADIUS: f32 = 6.0;
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let before = tab.annots.clone();
+        let mut changed = false;
+        let mut kept: Vec<Annotation> = Vec::with_capacity(tab.annots.len());
+        for mut annot in std::mem::take(&mut tab.annots) {
+            if annot.page == page && annot.kind == AnnotationKind::Ink {
+                if annot.erase_ink_segment(from, to, RADIUS) > 0 {
+                    changed = true;
+                    if annot.ink_points.is_empty() {
+                        continue;
+                    }
+                    annot.recompute_ink_bbox();
+                }
+            }
+            kept.push(annot);
+        }
+        tab.annots = kept;
+        if changed {
+            tab.undo.push(before);
+            tab.redo.clear();
+            tab.dirty = true;
+            self.toast(ctx, "Ink erased");
+        }
+    }
+
     /// Fenêtre de saisie du brouillon (texte, note, lien, signature).
     /// Extrait le texte des pages visibles, une fois par page.
     fn ensure_fragments(&mut self) {
@@ -3969,7 +4030,8 @@ impl YouPdfApp {
         let tool = self.annot_tool.unwrap_or(0);
         let wants_text = matches!(self.draft_kind(), DraftKind::FreeText | DraftKind::Signature)
             && matches!(tool, 2 | 9);
-        let wants_opacity = tool == 1;
+        // Le surligneur et le crayon se dessinent en transparence.
+        let wants_opacity = tool == 1 || tool == 4;
         Area::new(Id::new("presets"))
             .anchor(Align2::CENTER_TOP, vec2(canvas_left / 2.0, top + 40.0))
             .order(Order::Foreground)
@@ -4035,9 +4097,22 @@ impl YouPdfApp {
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new("Width").size(11.0).color(pal().muted));
                                 ui.add(
-                                    egui::Slider::new(&mut self.annot_width, 0.5..=8.0)
+                                    egui::Slider::new(&mut self.annot_width, 0.5..=12.0)
                                         .fixed_decimals(1),
                                 );
+                            });
+                        }
+                        if tool == 10 {
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("Eraser").size(11.0).color(pal().muted));
+                                let stroke = self.eraser_mode == EraseMode::Stroke;
+                                if ui.selectable_label(stroke, "Stroke").clicked() {
+                                    self.eraser_mode = EraseMode::Stroke;
+                                }
+                                if ui.selectable_label(!stroke, "Segment").clicked() {
+                                    self.eraser_mode = EraseMode::Segment;
+                                }
                             });
                         }
                         if wants_opacity {
@@ -9671,6 +9746,7 @@ impl YouPdfApp {
             Sense::click_and_drag()
         };
         let annot_width = self.annot_width;
+        let eraser_mode = self.eraser_mode;
         let ink_current = &mut self.ink_current;
         let drag_from = &mut self.drag_from;
         let drag_to = &mut self.drag_to;
@@ -9679,6 +9755,7 @@ impl YouPdfApp {
         let mut pending_ink: Option<(usize, Vec<[f32; 2]>)> = None;
         let mut pending_click: Option<(usize, [f32; 2])> = None;
         let mut pending_hit: Option<(usize, [f32; 2])> = None;
+        let mut pending_erase_segment: Option<(usize, [f32; 2], [f32; 2])> = None;
         let mut pending_edit: Option<(usize, [f32; 2])> = None;
         let mut pending_image: Option<(usize, [f32; 2])> = None;
         let mut pending_redact: Option<(usize, [f32; 4])> = None;
@@ -10451,14 +10528,26 @@ impl YouPdfApp {
                                 }
                             }
                             ToolAction::Ink => {
+                                if resp.drag_started() {
+                                    ink_current.clear();
+                                }
                                 if resp.dragged() {
                                     if let Some(p) = resp.interact_pointer_pos() {
-                                        ink_current.push(to_pdf(p));
+                                        let point = to_pdf(p);
+                                        // Deux points plus proches qu'un point
+                                        // PDF ne sont que du tremblement.
+                                        let far_enough = ink_current.last().map_or(true, |last| {
+                                            (point[0] - last[0]).hypot(point[1] - last[1]) >= 1.0
+                                        });
+                                        if far_enough {
+                                            ink_current.push(point);
+                                        }
                                     }
                                 }
                                 if resp.drag_stopped() {
-                                    pending_ink =
-                                        Some((page as usize, std::mem::take(ink_current)));
+                                    let smooth = smooth_polyline(ink_current, 4);
+                                    ink_current.clear();
+                                    pending_ink = Some((page as usize, smooth));
                                 }
                                 if ink_current.len() > 1 {
                                     let pts: Vec<egui::Pos2> =
@@ -10588,7 +10677,40 @@ impl YouPdfApp {
                                     );
                                 }
                             }
-                            ToolAction::Erase | ToolAction::Select => {
+                            ToolAction::Erase => {
+                                if eraser_mode == EraseMode::Segment {
+                                    if resp.drag_started() {
+                                        if let Some(p) = resp.interact_pointer_pos() {
+                                            *drag_from = Some(to_pdf(p));
+                                            *drag_to = Some(to_pdf(p));
+                                        }
+                                    }
+                                    if resp.dragged() {
+                                        if let Some(p) = resp.interact_pointer_pos() {
+                                            *drag_to = Some(to_pdf(p));
+                                        }
+                                    }
+                                    if resp.drag_stopped() {
+                                        if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
+                                            pending_erase_segment = Some((page as usize, a, b));
+                                        }
+                                        *drag_from = None;
+                                        *drag_to = None;
+                                    }
+                                    // Aperçu du balayage de la gomme.
+                                    if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
+                                        ui.painter().line_segment(
+                                            [to_screen(a), to_screen(b)],
+                                            Stroke::new(6.0_f32, pal().accent.gamma_multiply(0.5)),
+                                        );
+                                    }
+                                } else if resp.clicked() {
+                                    if let Some(p) = resp.interact_pointer_pos() {
+                                        pending_hit = Some((page as usize, to_pdf(p)));
+                                    }
+                                }
+                            }
+                            ToolAction::Select => {
                                 if resp.clicked() {
                                     if let Some(p) = resp.interact_pointer_pos() {
                                         pending_hit = Some((page as usize, to_pdf(p)));
@@ -10652,7 +10774,6 @@ impl YouPdfApp {
             self.add_markup_annot(page, kind, quads);
         }
         if let Some((page, points)) = pending_ink {
-            tracing::info!("ink annot page {page} points {}", points.len());
             self.add_ink_annot(page, points);
         }
         if let Some((page, point)) = pending_edit {
@@ -10716,11 +10837,28 @@ impl YouPdfApp {
                 None => {}
             }
         }
+        if let Some((page, from, to)) = pending_erase_segment {
+            self.erase_ink_segment(page, from, to, &ctx);
+        }
         if let Some((page, point)) = pending_hit {
             match action {
                 ToolAction::Erase => {
-                    if let Some(idx) = self.hit_test(page, point) {
+                    // La gomme vise le tracé avant la boîte englobante :
+                    // cliquer dans le vide à l'intérieur d'un tracé ne doit
+                    // pas l'effacer.
+                    if let Some(idx) = self.ink_hit_test(page, point) {
                         self.remove_annot(idx);
+                    } else if let Some(idx) = self.hit_test(page, point) {
+                        // Un tracé n'est effacé qu'en le touchant : sa boîte
+                        // englobante ne suffit pas.
+                        let ink = self
+                            .tabs
+                            .get(self.active)
+                            .and_then(|tab| tab.annots.get(idx))
+                            .map_or(false, |annot| annot.kind == AnnotationKind::Ink);
+                        if !ink {
+                            self.remove_annot(idx);
+                        }
                     }
                 }
                 ToolAction::Select => {

@@ -147,6 +147,55 @@ fn quad_bounds(quad: [f32; 8]) -> (f32, f32, f32, f32) {
     (x1, y1, x2, y2)
 }
 
+/// Distance d'un point au segment `[a, b]` ; zéro s'il est dessus.
+fn point_segment_distance(point: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    let ab = [b[0] - a[0], b[1] - a[1]];
+    let ap = [point[0] - a[0], point[1] - a[1]];
+    let len2 = ab[0] * ab[0] + ab[1] * ab[1];
+    let t = if len2 <= f32::EPSILON {
+        0.0
+    } else {
+        ((ap[0] * ab[0] + ap[1] * ab[1]) / len2).clamp(0.0, 1.0)
+    };
+    let dx = point[0] - (a[0] + ab[0] * t);
+    let dy = point[1] - (a[1] + ab[1] * t);
+    (dx * dx + dy * dy).sqrt()
+}
+
+/// Rééchantillonne une polyligne par des splines Catmull-Rom.
+///
+/// Chaque segment est remplacé par `samples` points. La courbe passe par
+/// tous les points d'origine : elle arrondit les angles sans déplacer le
+/// tracé, ce qui supprime le tremblement de la souris.
+pub fn smooth_polyline(points: &[[f32; 2]], samples: usize) -> Vec<[f32; 2]> {
+    if points.len() < 3 || samples < 2 {
+        return points.to_vec();
+    }
+    let last = points.len() - 1;
+    let mut out = Vec::with_capacity(points.len() * samples);
+    for i in 0..last {
+        let p0 = points[i.saturating_sub(1)];
+        let p1 = points[i];
+        let p2 = points[i + 1];
+        let p3 = points[(i + 2).min(last)];
+        for step in 0..samples {
+            let t = step as f32 / samples as f32;
+            let (t2, t3) = (t * t, t * t * t);
+            let mut point = [0.0f32; 2];
+            for (axis, slot) in point.iter_mut().enumerate() {
+                *slot = 0.5
+                    * (2.0 * p1[axis]
+                        + (-p0[axis] + p2[axis]) * t
+                        + (2.0 * p0[axis] - 5.0 * p1[axis] + 4.0 * p2[axis] - p3[axis]) * t2
+                        + (-p0[axis] + 3.0 * p1[axis] - 3.0 * p2[axis] + p3[axis]) * t3);
+            }
+            out.push(point);
+        }
+    }
+    out.push(points[last]);
+    out
+}
+
 /// Noms de tampons standard reconnus par les lecteurs PDF.
 pub const STAMP_NAMES: &[&str] = &[
     "Approuvé",
@@ -717,6 +766,62 @@ impl Annotation {
         if points.len() >= 2 {
             self.ink_points.push(points);
         }
+    }
+
+    /// Vrai si un des tracés passe à `radius` du point : sert à la gomme
+    /// mode trait, qui doit viser le tracé et non sa boîte englobante.
+    pub fn ink_hit(&self, point: [f32; 2], radius: f32) -> bool {
+        self.ink_points.iter().any(|stroke| {
+            stroke
+                .windows(2)
+                .any(|pair| point_segment_distance(point, pair[0], pair[1]) <= radius)
+        })
+    }
+
+    /// Coupe les tracés qui passent à `radius` du segment `[from, to]` :
+    /// gomme mode segment. Un tracé touché au milieu devient deux morceaux.
+    ///
+    /// Renvoie le nombre de points retirés. Zéro veut dire que rien n'a
+    /// bougé. Les morceaux d'un seul point ne sont pas conservés.
+    pub fn erase_ink_segment(&mut self, from: [f32; 2], to: [f32; 2], radius: f32) -> usize {
+        let mut removed = 0usize;
+        let mut strokes: Vec<Vec<[f32; 2]>> = Vec::new();
+        for stroke in &self.ink_points {
+            let mut piece: Vec<[f32; 2]> = Vec::new();
+            for point in stroke {
+                if point_segment_distance(*point, from, to) <= radius {
+                    removed += 1;
+                    if piece.len() >= 2 {
+                        strokes.push(std::mem::take(&mut piece));
+                    } else {
+                        piece.clear();
+                    }
+                } else {
+                    piece.push(*point);
+                }
+            }
+            if piece.len() >= 2 {
+                strokes.push(piece);
+            }
+        }
+        if removed > 0 {
+            self.ink_points = strokes;
+        }
+        removed
+    }
+
+    /// Lisse chaque tracé par des splines Catmull-Rom et recalcule la boîte
+    /// englobante. Utilisé à la fin d'un tracé au crayon.
+    pub fn smooth_ink(&mut self, samples_per_segment: usize) {
+        if self.ink_points.is_empty() {
+            return;
+        }
+        self.ink_points = self
+            .ink_points
+            .iter()
+            .map(|stroke| smooth_polyline(stroke, samples_per_segment))
+            .collect();
+        self.recompute_ink_bbox();
     }
 
     /// Met à jour la boîte englobante pour le crayon.
