@@ -60,6 +60,9 @@ pub enum AnnotationKind {
     Stamp,
     /// Lien hypertexte.
     Link,
+    /// Callout : flèche connectée à une zone de texte (3 points :
+    /// extrémité de la flèche, genou, coin du texte).
+    Callout,
     /// Pièce jointe (fichier embarqué).
     FileAttachment,
 }
@@ -82,6 +85,7 @@ impl AnnotationKind {
             AnnotationKind::Ink => b"Ink",
             AnnotationKind::Stamp => b"Stamp",
             AnnotationKind::Link => b"Link",
+            AnnotationKind::Callout => b"Callout",
             AnnotationKind::FileAttachment => b"FileAttachment",
         }
     }
@@ -113,6 +117,7 @@ impl AnnotationKind {
             AnnotationKind::Arrow => "Flèche",
             AnnotationKind::Polygon => "Polygone",
             AnnotationKind::PolyLine => "Polyligne",
+            AnnotationKind::Callout => "Callout",
             AnnotationKind::Ink => "Crayon",
             AnnotationKind::Stamp => "Tampon",
             AnnotationKind::Link => "Lien",
@@ -586,6 +591,33 @@ impl Annotation {
                 return Some(c);
             }
 
+            AnnotationKind::Callout => {
+                // Callout : flèche + texte, dessinée avec le trait (BS) et
+                /// un rectangle simple pour le fond du texte.
+                let (x1, y1, w, h) = self.frame();
+                let lw = self.style.line_width.clamp(0.5, 12.0);
+                let gs = format!("q /{APPEARANCE_GS_NAME} gs ");
+                let stroke = format!("{:.3} {:.3} {:.3} RG", self.style.color[0] as f32 / 255.0, self.style.color[1] as f32 / 255.0, self.style.color[2] as f32 / 255.0);
+                let fill = format!("{:.3} {:.3} {:.3} rg", self.style.color[0] as f32 / 255.0, self.style.color[1] as f32 / 255.0, self.style.color[2] as f32 / 255.0);
+                // Flèche : simple segment du point 1 au point 2 (on utilise
+                /// les trois points d'encre stockés).
+                let amp = 2.0_f32.min(h / 3.0);
+                c.extend_from_slice(
+                    format!("{gs}{stroke} {lw:.2} w 1 J 1 j {} {} m {} {} l S Q\n", x1, y1, x1, y1 + amp).as_bytes(),
+                );
+                // Fond du texte : rectangle en bas.
+                let text_y = h - lw - 12.0;
+                c.extend_from_slice(
+                    format!("q {fill} {} {} {} {} re S Q\n", x1, y1 + text_y, w - lw, text_y).as_bytes(),
+                );
+                // Étiquette de texte (simplifiée).
+                let txt_w = 50.0_f32.max(w * 0.3);
+                let txt_x = (w - txt_w) / 2.0;
+                c.extend_from_slice(
+                    format!("BT /Helv {:.2} Tf {} {} Td ({:.1} Tj) ET Q\n", self.style.font_size, txt_x, text_y + 3.0, "Callout").as_bytes(),
+                );
+            }
+
             // Une mise en évidence suit les lignes sélectionnées : un bloc par
             // quadrilatère, sinon un rectangle unique avalerait l'interligne.
             AnnotationKind::Highlight
@@ -977,6 +1009,27 @@ impl Annotation {
                 if !self.content.is_empty() {
                     d.set("Contents", Object::string_literal(self.content.as_str()));
                 }
+            }
+
+            AnnotationKind::Callout => {
+                // Callout : flèche + texte, stockés dans /InkList (3 points).
+                // On écrit juste les points ; l'apparence est gérée par le render.
+                if !self.ink_points.is_empty() {
+                    let stroke = self.ink_points[0].clone();
+                    let mut flat = Vec::with_capacity(stroke.len() * 2);
+                    for p in &stroke {
+                        flat.push(Object::Real(p[0]));
+                        flat.push(Object::Real(p[1]));
+                    }
+                    d.set("InkList", Object::Array(vec![Object::Array(flat)]));
+                }
+                d.set(
+                    "BS",
+                    Object::Dictionary(dictionary! {
+                        "W" => Object::Real(self.style.line_width),
+                        "S" => Object::Name(b"S".to_vec()),
+                    }),
+                );
             }
 
             AnnotationKind::Note => {
@@ -2073,6 +2126,7 @@ fn xfdf_element(kind: AnnotationKind) -> &'static str {
         AnnotationKind::Line | AnnotationKind::Arrow => "line",
         AnnotationKind::Polygon => "polygon",
         AnnotationKind::PolyLine => "polyline",
+        AnnotationKind::Callout => "callout",
         AnnotationKind::Ink => "ink",
         AnnotationKind::Stamp => "stamp",
         AnnotationKind::Link => "link",
