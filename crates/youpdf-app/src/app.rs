@@ -627,8 +627,8 @@ fn rect_distance(rect: [f32; 4], point: [f32; 2]) -> f32 {
 ///
 /// Répond `false` si le moteur n'a rien lu : l'appelant ne doit alors pas
 /// proposer de sélection sur cette page.
-fn extract_page_fragments(tab: &mut Tab, page: u32) -> bool {
-    match tab.doc.extract_text_fragments(page) {
+fn extract_page_fragments(renderer: &dyn Renderer, tab: &mut Tab, page: u32) -> bool {
+    match renderer.page_fragments(&tab.doc, page) {
         Ok(mut frags) => {
             for frag in &mut frags {
                 frag.rect = rect_to_display(&tab.doc, page as usize, frag.rect);
@@ -3684,20 +3684,7 @@ impl YouPdfApp {
             return;
         };
         for page in missing {
-            match tab.doc.extract_text_fragments(page) {
-                Ok(mut frags) => {
-                    // Les fragments sortent du moteur en repère page ; tout le
-                    // canevas raisonne en repère affiché.
-                    for frag in &mut frags {
-                        frag.rect = rect_to_display(&tab.doc, page as usize, frag.rect);
-                    }
-                    tab.fragments.insert(page, frags);
-                }
-                Err(err) => {
-                    tracing::warn!(%err, page, "extraction du texte de la page");
-                    tab.fragments.insert(page, Vec::new());
-                }
-            }
+            extract_page_fragments(&*self.renderer, tab, page);
         }
     }
 
@@ -3721,7 +3708,7 @@ impl YouPdfApp {
             let Some(tab) = self.tabs.get_mut(self.active) else {
                 return;
             };
-            if !extract_page_fragments(tab, page) {
+            if !extract_page_fragments(&*self.renderer, tab, page) {
                 return;
             }
         }
@@ -4261,7 +4248,7 @@ impl YouPdfApp {
         let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
-        let Ok(fragments) = tab.doc.extract_text_fragments(page as u32) else {
+        let Ok(fragments) = self.renderer.page_fragments(&tab.doc, page as u32) else {
             return;
         };
         for fragment in fragments {
@@ -4288,7 +4275,7 @@ impl YouPdfApp {
                 return 0;
             };
             for page in pages {
-                let Ok(fragments) = tab.doc.extract_text_fragments(page as u32) else {
+                let Ok(fragments) = self.renderer.page_fragments(&tab.doc, page as u32) else {
                     continue;
                 };
                 for fragment in fragments {
@@ -4348,7 +4335,7 @@ impl YouPdfApp {
                 return;
             };
             for page in pages {
-                let Ok(fragments) = tab.doc.extract_text_fragments(page as u32) else {
+                let Ok(fragments) = self.renderer.page_fragments(&tab.doc, page as u32) else {
                     continue;
                 };
                 for fragment in fragments {
@@ -10252,7 +10239,7 @@ impl YouPdfApp {
                     if select_text_tool {
                         if resp.drag_started() {
                             if !tab.fragments.contains_key(&page) {
-                                extract_page_fragments(tab, page);
+                                extract_page_fragments(renderer, tab, page);
                             }
                             if let Some(point) = resp.interact_pointer_pos() {
                                 let point = to_pdf(point);

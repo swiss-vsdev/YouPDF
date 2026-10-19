@@ -17,6 +17,7 @@ use pdfium_render::prelude::*;
 use youpdf_shared::{Error, Result};
 
 use crate::document::Document;
+use crate::edit::TextFragment;
 
 /// Options de rendu d'une page.
 #[derive(Debug, Clone)]
@@ -125,6 +126,16 @@ pub trait Renderer {
     /// document avec du vide **en annonçant un succès**.
     fn renders_real_content(&self) -> bool {
         true
+    }
+
+    /// Extrait le texte d'une page (1-indexée), un fragment par segment.
+    ///
+    /// L'implémentation pdfium décode le texte réel, y compris les polices
+    /// CID dont le flux ne donne que des codes : c'est la seule source
+    /// correcte pour ces documents. La valeur par défaut retombe sur le
+    /// décodeur interne de [`Document`], seule option de [`NullRenderer`].
+    fn page_fragments(&self, doc: &Document, page_number: u32) -> Result<Vec<TextFragment>> {
+        doc.extract_text_fragments(page_number)
     }
 }
 
@@ -253,6 +264,69 @@ impl PdfiumRenderer {
         }
         Err(Error::Config(msg))
     }
+
+    /// Fragments de texte extraits par pdfium.
+    ///
+    /// pdfium résout les polices CID via leur table Unicode : c'est la seule
+    /// source correcte pour les documents qui écrivent le texte en chaînes
+    /// hexadécimales, illisibles pour un simple lecteur de flux. Les
+    /// rectangles sont en repère page (origine en bas à gauche), comme
+    /// [`TextFragment::rect`].
+    fn fragments_from_pdfium(
+        &self,
+        doc: &Document,
+        page_number: u32,
+    ) -> Result<Vec<TextFragment>> {
+        let bytes = doc.snapshot()?;
+        let pdfium = self.pdfium.borrow();
+        let pdf = pdfium
+            .load_pdf_from_byte_slice(&bytes, None)
+            .map_err(|e| Error::Pdf(format!("chargement pdfium : {e}")))?;
+
+        let pages = pdf.pages();
+        let index = u16::try_from(page_number.saturating_sub(1)).map_err(|_| {
+            Error::InvalidInput(format!("numéro de page hors limites : {page_number}"))
+        })?;
+        let page = pages
+            .get(index)
+            .map_err(|e| Error::Pdf(format!("page {page_number} introuvable : {e}")))?;
+        let text = page
+            .text()
+            .map_err(|e| Error::Pdf(format!("texte de la page {page_number} : {e}")))?;
+
+        let mut fragments = Vec::new();
+        for segment in text.segments().iter() {
+            // pdfium peut fusionner deux lignes visuelles dans un même
+            // segment : on garde le saut de ligne, normalisé.
+            let content = segment.text().replace("\r\n", "\n").replace('\r', "\n");
+            if content.trim().is_empty() {
+                continue;
+            }
+            let bounds = segment.bounds();
+            // Taille de police : celle du premier caractère du segment. Le
+            // rectangle sert de repli quand pdfium ne la donne pas.
+            let font_size = segment
+                .chars()
+                .ok()
+                .and_then(|chars| chars.iter().next().map(|c| c.scaled_font_size().value))
+                .filter(|size| *size > 0.0)
+                .unwrap_or_else(|| bounds.height().value);
+            fragments.push(TextFragment {
+                page: page_number as usize,
+                text: content,
+                rect: [
+                    bounds.left().value,
+                    bounds.bottom().value,
+                    bounds.right().value,
+                    bounds.top().value,
+                ],
+                font: None,
+                font_size: font_size.max(1.0),
+                color: [0, 0, 0],
+            });
+        }
+        Ok(fragments)
+    }
 }
 
 impl Renderer for PdfiumRenderer {
@@ -301,6 +375,16 @@ impl Renderer for PdfiumRenderer {
             height,
             pixels,
         })
+    }
+
+    fn page_fragments(&self, doc: &Document, page_number: u32) -> Result<Vec<TextFragment>> {
+        // pdfium a la priorité : il décode les polices CID. S'il ne trouve
+        // rien (page vierge, flux qu'il ignore) ou échoue, le décodeur
+        // interne sert de filet plutôt que de renvoyer une page vide.
+        match self.fragments_from_pdfium(doc, page_number) {
+            Ok(fragments) if !fragments.is_empty() => Ok(fragments),
+            _ => doc.extract_text_fragments(page_number),
+        }
     }
 }
 
