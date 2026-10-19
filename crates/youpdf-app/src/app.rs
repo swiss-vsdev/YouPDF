@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use egui::{
     pos2, vec2, Align, Align2, Area, Button, CentralPanel, Color32, FontId, Frame, Id, Layout,
     Margin, Order, Painter, Rect, RichText, Rounding, ScrollArea, Sense, Shape, SidePanel, Stroke,
-    TextEdit, TextureHandle, TextureOptions, TopBottomPanel, ViewportCommand,
+    TextEdit, TextureHandle, TextureOptions, TopBottomPanel, ViewportCommand, CursorIcon,
 };
 use egui_phosphor::regular as ph;
 use youpdf_shared::{pal, set_palette, Theme};
@@ -939,6 +939,36 @@ impl Tab {
 // Application
 // --------------------------------------------------------------------------
 
+/// Kind de contenu : texte ou image. Détermine l'outil qui s'applique.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ContentKind {
+    Text,
+    Image,
+}
+
+/// Element de contenu (texte ou image) sélectionné en mode Édition : le
+/// cadre, les poignées de redimensionnement et de rotation.
+#[derive(Clone, Debug, PartialEq)]
+struct ContentElement {
+    kind: ContentKind,
+    bounds_screen: Rect, // boîte en repère affiché (canvas)
+    rect_page: [f32; 4], // boîte en repère page
+    // Pour image seulement : matrice qui dessine l'image
+    matrix: [f32; 6],
+}
+
+/// Opérations en cours sur un élément de contenu (déplacement, redimensionnement,
+/// rotation). Le document n'est écrit qu'au relâchement du glissé.
+#[derive(Clone, Debug)]
+enum ContentDrag {
+    Move { start: [f32; 2], offset: [f32; 2] },
+    Scale { start: [f32; 2], original_matrix: [f32; 6] },
+    Rotate { start_angle: f32, original_matrix: [f32; 6] },
+}
+
+/// Le curseur couramment utilisé par l'éditeur de texte.
+const TEXT_CURSOR: CursorIcon = CursorIcon::Text;
+
 pub struct YouPdfApp {
     renderer: Box<dyn Renderer>,
     renderer_label: &'static str,
@@ -958,6 +988,12 @@ pub struct YouPdfApp {
     selected_image: Option<SelectedImage>,
     /// Rognage en cours sur l'image sélectionnée.
     image_crop: Option<ImageCrop>,
+    /// Élément de contenu sélectionné en mode Édition (bloc de texte ou
+    /// image) : cadre, poignées de redimensionnement et de rotation.
+    content_selection: Option<ContentElement>,
+    /// Geste en cours sur un élément de contenu (déplacement, redimensionnement,
+    /// rotation). Le document n'est écrit qu'au relâchement du glissé.
+    content_drag: Option<ContentDrag>,
     /// Opacité affichée par le curseur de l'inspecteur d'image.
     image_alpha: f32,
     /// Liste déroulante `Outils` ouverte.
@@ -1262,6 +1298,8 @@ impl YouPdfApp {
             panel: None,
             mode: None,
             inspector_target: None,
+            content_selection: None,
+            content_drag: None,
             inspector_size: None,
             inspector_text_ui: TextStyleUi::default(),
             selected_image: None,
@@ -1759,6 +1797,8 @@ impl YouPdfApp {
         self.inspector_text_ui = TextStyleUi::default();
         self.selected_image = None;
         self.image_crop = None;
+        self.content_selection = None;
+        self.content_drag = None;
         self.image_alpha = 1.0;
         self.organize_selected.clear();
         // Les clés de chemin des signets sont les mêmes d'un document à
@@ -10051,6 +10091,42 @@ impl YouPdfApp {
                     }
 
                     // Image sélectionnée : cadre, poignées de rognage, et
+
+                    // Survol : en mode Édition, la boîte de l'élément sélectionné
+                    // apparaît en bleu gras (1 pt, traits en pointillés) lorsque
+                    // le pointeur la survole.
+                    let mode_is_edit = matches!(mode, Some(1));
+                    let pt = ctx.pointer_interact_pos().unwrap_or(pos2(0.0, 0.0));
+                    let is_over = mode_is_edit
+                        && selected_image.is_some()
+                        || selected_image.as_ref().map_or(false, |img| {
+                            let [x1, y1, x2, y2] = img.rect;
+                            let px = page_rect.min.x + x1 * scale;
+                            let py = page_rect.max.y - y2 * scale;
+                            let px2 = page_rect.min.x + x2 * scale;
+                            let py2 = page_rect.max.y - y1 * scale;
+                            let mx = pt.x - page_rect.min.x;
+                            let my = page_rect.max.y - pt.y;
+                            px <= mx && mx <= px2 && py <= my && my <= py2
+                        });
+                    if is_over && mode_is_edit {
+                        let [x1, y1, x2, y2] = selected_image.as_ref().unwrap().rect;
+                        let box_screen = Rect::from_two_pos(
+                            pos2(
+                                page_rect.min.x + x1 * scale,
+                                page_rect.max.y - y2 * scale,
+                            ),
+                            pos2(
+                                page_rect.min.x + x2 * scale,
+                                page_rect.max.y - y1 * scale,
+                            ),
+                        );
+                        ui.painter().rect_stroke(
+                            box_screen,
+                            Rounding::ZERO,
+                            Stroke::new(1.0_f32, pal().accent),
+                        );
+                    }
                     // inspecteur posé au-dessus.
                     if let Some(image) = &selected_image {
                         if image.page == page as usize {
