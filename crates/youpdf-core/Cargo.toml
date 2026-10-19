@@ -21,7 +21,7 @@ egui = { workspace = true }
 # Compression JPEG des pages caviardées (rasterisées) et décodage des
 # images insérées dans une page. `image` est déjà tiré par `pdfium-render`
 # et `eframe` : aucune dépendance nouvelle.
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff"] }
 
 # Compression zlib des images embarquées (`/FlateDecode`). Déjà tiré par
 # `lopdf` ; on le déclare pour l'utiliser directement.

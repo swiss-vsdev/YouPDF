@@ -126,6 +126,8 @@ enum ExportMode {
     Text,
     /// Une image par page, dans un dossier.
     Image,
+    /// Toutes les pages empilées dans une seule image verticale.
+    LongImage,
     /// Les images embarquées du document, extraites telles quelles.
     Embedded,
     /// Document bureautique (Word, Excel, PowerPoint).
@@ -2172,6 +2174,7 @@ impl YouPdfApp {
             for (format, label) in [
                 (ImageFormat::Png, "PNG (one file per page)"),
                 (ImageFormat::Jpeg, "JPEG (one file per page)"),
+                (ImageFormat::Tiff, "TIFF (one file per page)"),
             ] {
                 if ui
                     .selectable_label(
@@ -2185,7 +2188,16 @@ impl YouPdfApp {
                     app.export_image_format = format;
                 }
             }
-            if app.export_mode == ExportMode::Image {
+            if ui
+                .selectable_label(
+                    app.export_mode == ExportMode::LongImage,
+                    "Long image (all pages stacked, PNG)",
+                )
+                .clicked()
+            {
+                app.export_mode = ExportMode::LongImage;
+            }
+            if matches!(app.export_mode, ExportMode::Image | ExportMode::LongImage) {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Resolution").size(12.0).color(pal().muted));
                     ui.add(
@@ -2236,6 +2248,10 @@ impl YouPdfApp {
                         "Each page is rendered at the chosen resolution and written into a \
                          folder as page-0001, page-0002…"
                     }
+                    ExportMode::LongImage => {
+                        "Every page is rendered at the chosen resolution and stacked into \
+                         one tall PNG, handy for scrolling on a phone."
+                    }
                     ExportMode::Office => {
                         "The text layer is rebuilt as an Office document: one paragraph or \
                          row per line, one slide per page. Images, tables and the layout are \
@@ -2269,6 +2285,26 @@ impl YouPdfApp {
     /// Écrit la couche texte du document dans le format choisi, les pages en
     /// images, ou un document bureautique.
     fn export_active(&mut self, ctx: &egui::Context) {
+        if self.export_mode == ExportMode::LongImage {
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("PNG", &["png"])
+                .set_file_name("long-page.png")
+                .save_file()
+            else {
+                return;
+            };
+            let dpi = self.export_dpi;
+            let result = self
+                .tabs
+                .get(self.active)
+                .map(|tab| tab.doc.export_long_image(&path, dpi));
+            match result {
+                Some(Ok(())) => self.toast(ctx, format!("Saved {}", path.display())),
+                Some(Err(err)) => self.toast(ctx, format!("Export failed: {err}")),
+                None => {}
+            }
+            return;
+        }
         if self.export_mode == ExportMode::Embedded {
             let Some(directory) = rfd::FileDialog::new().pick_folder() else {
                 return;
@@ -6973,7 +7009,9 @@ impl YouPdfApp {
                                 ui.label(RichText::new("Save as").size(10.0).color(pal().muted));
                             });
                             for level in [
+                                Conformance::PdfA1b,
                                 Conformance::PdfA2b,
+                                Conformance::PdfX1a,
                                 Conformance::PdfX4,
                                 Conformance::PdfE1,
                             ] {

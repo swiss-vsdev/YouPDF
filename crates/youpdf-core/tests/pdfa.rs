@@ -9,8 +9,10 @@
 use lopdf::Object;
 use youpdf_core::{blank_document, Conformance, Document};
 
-const LEVELS: [Conformance; 3] = [
+const LEVELS: [Conformance; 5] = [
+    Conformance::PdfA1b,
     Conformance::PdfA2b,
+    Conformance::PdfX1a,
     Conformance::PdfX4,
     Conformance::PdfE1,
 ];
@@ -69,7 +71,7 @@ fn apply_conformance_pose_les_marqueurs_de_chaque_niveau() {
             other => panic!("{level:?} : intent inattendu : {other:?}"),
         };
         let expected_subtype: &[u8] = match level {
-            Conformance::PdfX4 => b"GTS_PDFX",
+            Conformance::PdfX1a | Conformance::PdfX4 => b"GTS_PDFX",
             _ => b"GTS_PDFA1",
         };
         assert_eq!(
@@ -122,11 +124,20 @@ fn xmp_decompresse_et_nomme_le_niveau() {
 
         // Marqueur normatif par niveau.
         match level {
+            Conformance::PdfA1b => {
+                assert!(text.contains("<pdfaid:part>1</pdfaid:part>"), "pdfaid:part");
+            }
             Conformance::PdfA2b => {
                 assert!(text.contains("<pdfaid:part>2</pdfaid:part>"), "pdfaid:part");
                 assert!(
                     text.contains("<pdfaid:conformance>B</pdfaid:conformance>"),
                     "pdfaid:conformance"
+                );
+            }
+            Conformance::PdfX1a => {
+                assert!(
+                    text.contains("<pdfx:GTS_PDFXVersion>PDF/X-1a:2001</pdfx:GTS_PDFXVersion>"),
+                    "GTS_PDFXVersion"
                 );
             }
             Conformance::PdfX4 => {
