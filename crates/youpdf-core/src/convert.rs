@@ -71,6 +71,8 @@ pub enum ImageFormat {
     Png,
     /// JPEG, avec perte, adapté aux documents photographiques.
     Jpeg,
+    /// TIFF, sans perte, pour l'archivage et l'impression.
+    Tiff,
 }
 
 impl ImageFormat {
@@ -79,6 +81,7 @@ impl ImageFormat {
         match self {
             ImageFormat::Png => "Image PNG (.png)",
             ImageFormat::Jpeg => "Image JPEG (.jpg)",
+            ImageFormat::Tiff => "Image TIFF (.tiff)",
         }
     }
 
@@ -87,6 +90,7 @@ impl ImageFormat {
         match self {
             ImageFormat::Png => "png",
             ImageFormat::Jpeg => "jpg",
+            ImageFormat::Tiff => "tiff",
         }
     }
 }
@@ -243,6 +247,18 @@ impl Document {
                         Error::Pdf(format!("écriture PNG {} : {e}", path.display()))
                     })?;
                 }
+                ImageFormat::Tiff => {
+                    let image =
+                        image::RgbaImage::from_raw(bitmap.width, bitmap.height, bitmap.pixels)
+                            .ok_or_else(|| {
+                                Error::Pdf(format!(
+                                    "tampon RGBA invalide pour la page {number}"
+                                ))
+                            })?;
+                    image.save(&path).map_err(|e| {
+                        Error::Pdf(format!("écriture TIFF {} : {e}", path.display()))
+                    })?;
+                }
                 ImageFormat::Jpeg => {
                     // JPEG ne transporte pas de canal alpha : on l'abandonne.
                     let mut rgb = Vec::with_capacity(bitmap.width as usize * bitmap.height as usize * 3);
@@ -309,3 +325,45 @@ fn escape_rtf(text: &str) -> String {
     out
 }
 
+
+impl Document {
+    /// Empile toutes les pages dans une seule image verticale.
+    ///
+    /// Utile pour lire un document sur téléphone : une seule bande, sans
+    /// pagination. Le rendu passe par pdfium à la résolution demandée.
+    pub fn export_long_image(&self, path: &Path, dpi: f32) -> Result<()> {
+        let renderer = PdfiumRenderer::load()?;
+        let options = RenderOptions {
+            scale: dpi.clamp(36.0, 600.0) / 72.0,
+            ..Default::default()
+        };
+        let total = self.page_count() as u32;
+        let mut pages = Vec::with_capacity(total as usize);
+        for number in 1..=total {
+            pages.push(renderer.render_page(self, number, &options)?);
+        }
+        const GAP: u32 = 16;
+        let width = pages.iter().map(|page| page.width).max().unwrap_or(1);
+        let height_u64 = pages.iter().map(|page| page.height as u64).sum::<u64>()
+            + GAP as u64 * pages.len().saturating_sub(1) as u64;
+        if height_u64 > 65_000 {
+            return Err(Error::InvalidInput(
+                "image trop haute : réduisez la résolution ou la sélection de pages".into(),
+            ));
+        }
+        let mut canvas = image::RgbaImage::from_pixel(width, height_u64 as u32, image::Rgba([255, 255, 255, 255]));
+        let mut top = 0u32;
+        for page in &pages {
+            for row in 0..page.height {
+                for column in 0..page.width {
+                    let index = ((row * page.width + column) * 4) as usize;
+                    let pixel = &page.pixels[index..index + 4];
+                    canvas.put_pixel(column, top + row, image::Rgba([pixel[0], pixel[1], pixel[2], pixel[3]]));
+                }
+            }
+            top += page.height + GAP;
+        }
+        canvas.save(path).map_err(|e| Error::Pdf(format!("écriture {} : {e}", path.display())))?;
+        Ok(())
+    }
+}

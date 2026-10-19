@@ -83,5 +83,5 @@ Unchecked below = still open. The plan document is the authoritative task list.
 *   **Page operations:** crop with unit selector (pt/mm/cm/in), page range, CropBox/ArtBox/BleedBox/TrimBox targets, text-bounds auto-crop, reset; tile split (rows × columns) creating one page per tile; watermark anchoring (9 positions), offsets, tile gap and behind-content layering; header/footer `{page}`, `{pages}`, `{label}` macros.
 *   **Slideshow:** Needs implementing (F5 triggered).
 *   **Measure Tools:** Needs `Perimeter`/`Area` markup rendering.
-*   **Export Formats:** DOCX/XLSX/PPTX writers implemented (text layer, one paragraph/row/slide per PDF line). Word also offers an *exact layout* mode that positions every text run with `w:framePr`, and Excel's exact mode detects table columns by run alignment.
+*   **Export Formats:** PNG/JPEG/TIFF page export at a chosen DPI, one tall PNG stitched from every page, plain text/Markdown/HTML/CSV/XML/RTF, and declared PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4 and PDF/E-1 conformance. DOCX/XLSX/PPTX writers implemented (text layer, one paragraph/row/slide per PDF line). Word also offers an *exact layout* mode that positions every text run with `w:framePr`, and Excel's exact mode detects table columns by run alignment.
 *   **Localization:** Needs complete i18n framework (replace all literals).

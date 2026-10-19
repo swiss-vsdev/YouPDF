@@ -26,8 +26,12 @@ const SRGB_PROFILE: &str = "sRGB IEC61966-2.1";
 /// Niveau de conformité déclaré.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Conformance {
+    /// PDF/A-1b : archivage, PDF 1.4.
+    PdfA1b,
     /// PDF/A-2b : archivage.
     PdfA2b,
+    /// PDF/X-1a : échange d'impression, PDF 1.3.
+    PdfX1a,
     /// PDF/X-4 : échange d'impression.
     PdfX4,
     /// PDF/E-1 : ingénierie.
@@ -38,7 +42,9 @@ impl Conformance {
     /// Nom affiché.
     pub fn display_name(self) -> &'static str {
         match self {
+            Conformance::PdfA1b => "PDF/A-1b",
             Conformance::PdfA2b => "PDF/A-2b",
+            Conformance::PdfX1a => "PDF/X-1a",
             Conformance::PdfX4 => "PDF/X-4",
             Conformance::PdfE1 => "PDF/E-1",
         }
@@ -47,7 +53,9 @@ impl Conformance {
     /// Identifiant de la partie de la norme, pour `/OutputIntents`.
     pub fn identifier(self) -> &'static str {
         match self {
+            Conformance::PdfA1b => "PDF/A-1b",
             Conformance::PdfA2b => "PDF/A-2b",
+            Conformance::PdfX1a => "PDF/X-1a",
             Conformance::PdfX4 => "PDF/X-4",
             Conformance::PdfE1 => "PDF/E-1",
         }
@@ -57,8 +65,8 @@ impl Conformance {
     fn output_intent_subtype(self) -> &'static [u8] {
         match self {
             // PDF/A-2 et PDF/E-1 déclarent un intent de sortie PDF/A.
-            Conformance::PdfA2b | Conformance::PdfE1 => b"GTS_PDFA1",
-            Conformance::PdfX4 => b"GTS_PDFX",
+            Conformance::PdfA1b | Conformance::PdfA2b | Conformance::PdfE1 => b"GTS_PDFA1",
+            Conformance::PdfX1a | Conformance::PdfX4 => b"GTS_PDFX",
         }
     }
 }
@@ -88,10 +96,15 @@ fn document_id(page_count: usize) -> Vec<u8> {
 /// test) retrouve la déclaration sans décoder les namespaces.
 fn xmp_packet(level: Conformance) -> String {
     let specific = match level {
+        Conformance::PdfA1b => concat!(
+            "      <pdfaid:part>1</pdfaid:part>\n",
+            "      <pdfaid:conformance>B</pdfaid:conformance>\n",
+        ),
         Conformance::PdfA2b => concat!(
             "      <pdfaid:part>2</pdfaid:part>\n",
             "      <pdfaid:conformance>B</pdfaid:conformance>\n",
         ),
+        Conformance::PdfX1a => "      <pdfx:GTS_PDFXVersion>PDF/X-1a:2001</pdfx:GTS_PDFXVersion>\n",
         Conformance::PdfX4 => "      <pdfx:GTS_PDFXVersion>PDF/X-4</pdfx:GTS_PDFXVersion>\n",
         Conformance::PdfE1 => "      <pdfe:ISO_PDFEVersion>PDF/E-1</pdfe:ISO_PDFEVersion>\n",
     };
@@ -196,6 +209,15 @@ impl Document {
     /// **Déclaration seulement** : la fonction ne valide pas le document et
     /// ne garantit aucune conformité effective. Voir la note de module.
     pub fn apply_conformance(&mut self, level: Conformance) -> Result<()> {
+        // PDF/A-1 n'existe qu'en PDF 1.4 ; PDF/X-1a impose PDF 1.3.
+        let version = match level {
+            Conformance::PdfA1b => Some("1.4"),
+            Conformance::PdfX1a => Some("1.3"),
+            _ => None,
+        };
+        if let Some(version) = version {
+            self.inner_mut().version = version.to_string();
+        }
         let page_count = self.page_count();
         let xmp = xmp_packet(level);
 
