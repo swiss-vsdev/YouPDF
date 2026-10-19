@@ -169,6 +169,57 @@ fn alignment_shifts_the_start_point() {
     );
 }
 
+/// Justifié : les mots d'une ligne sont répartis sur la largeur de la boîte,
+/// chacun posé par son propre `Tm`.
+#[test]
+fn justification_spreads_the_words() {
+    let (mut doc, fragment) = document_with_fragment();
+    let mut style = TextStyle::from_fragment(&fragment);
+    style.align = TextAlign::Justify;
+    // Le texte doit être plus étroit que la boîte pour qu'il y ait à répartir.
+    style.size = 6.0;
+
+    doc.replace_text_fragment_styled(&fragment, "Hello there world", None, &style)
+        .expect("patch");
+
+    let text = String::from_utf8_lossy(&doc.to_bytes().expect("écriture")).into_owned();
+    assert_eq!(
+        text.matches(") Tj\n").count(),
+        3,
+        "un mot par opérateur attendu"
+    );
+    let starts: Vec<f32> = text
+        .match_indices(" Tm\n")
+        .filter_map(|(position, _)| {
+            let line_start = text[..position].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            text[line_start..position]
+                .split_whitespace()
+                .nth(4)
+                .and_then(|value| value.parse().ok())
+        })
+        .collect();
+    assert_eq!(starts.len(), 3, "trois mots positionnés");
+    assert!(
+        starts.windows(2).all(|pair| pair[0] < pair[1]),
+        "les mots ne progressent pas : {starts:?}"
+    );
+}
+
+/// Une ligne d'un seul mot ne se justifie pas : elle reste à gauche.
+#[test]
+fn justification_leaves_a_single_word_alone() {
+    let (mut doc, fragment) = document_with_fragment();
+    let mut style = TextStyle::from_fragment(&fragment);
+    style.align = TextAlign::Justify;
+    style.size = 6.0;
+
+    doc.replace_text_fragment_styled(&fragment, "Unique", None, &style)
+        .expect("patch");
+
+    let text = String::from_utf8_lossy(&doc.to_bytes().expect("écriture")).into_owned();
+    assert!(text.contains(" Td\n"), "le mot unique devrait rester à gauche");
+}
+
 /// Le premier `Td` du patch : point de départ du texte.
 fn tdf_x(content: &str) -> f32 {
     let marker = " Td\n";

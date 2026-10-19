@@ -332,6 +332,7 @@ pub fn text_style_row(
                 TextAlign::Left => "L",
                 TextAlign::Center => "C",
                 TextAlign::Right => "R",
+                TextAlign::Justify => "J",
             };
             if ui
                 .selectable_label(style.align == align, RichText::new(label).size(11.0))

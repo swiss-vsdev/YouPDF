@@ -124,11 +124,19 @@ pub enum TextAlign {
     Center,
     /// Collé au bord droit de la boîte.
     Right,
+    /// Étiré sur toute la largeur de la boîte : les mots sont répartis, pas
+    /// les lettres. Une ligne d'un seul mot reste à gauche.
+    Justify,
 }
 
 impl TextAlign {
-    /// Les trois alignements, dans l'ordre de l'interface.
-    pub const ALL: [TextAlign; 3] = [TextAlign::Left, TextAlign::Center, TextAlign::Right];
+    /// Les quatre alignements, dans l'ordre de l'interface.
+    pub const ALL: [TextAlign; 4] = [
+        TextAlign::Left,
+        TextAlign::Center,
+        TextAlign::Right,
+        TextAlign::Justify,
+    ];
 
     /// Libellé affiché dans l'interface.
     pub fn display_name(self) -> &'static str {
@@ -136,6 +144,7 @@ impl TextAlign {
             TextAlign::Left => "Left",
             TextAlign::Center => "Center",
             TextAlign::Right => "Right",
+            TextAlign::Justify => "Justify",
         }
     }
 }
@@ -778,7 +787,7 @@ impl Document {
         for (line_index, line) in lines.iter().enumerate() {
             let width = estimate_text_width(line, style);
             let dx = match style.align {
-                TextAlign::Left => 0.0,
+                TextAlign::Left | TextAlign::Justify => 0.0,
                 TextAlign::Center => ((w - width) / 2.0).max(0.0),
                 TextAlign::Right => (w - width).max(0.0),
             };
@@ -791,16 +800,51 @@ impl Document {
             } else {
                 format!("{:.2} Tc\n", style.char_spacing)
             };
+            // Justification : les mots sont répartis sur la largeur de la
+            // boîte. Une ligne d'un seul mot, ou plus large que la boîte,
+            // reste à gauche.
+            let words: Vec<&str> = line.split(' ').filter(|word| !word.is_empty()).collect();
+            let justify =
+                style.align == TextAlign::Justify && words.len() > 1 && width < w;
             content.extend_from_slice(
                 format!(
-                    "BT\n{:.3} {:.3} {:.3} rg\n/{} {:.2} Tf\n{spacing}{:.2} {:.2} Td\n",
-                    ink[0], ink[1], ink[2], font_name, size, x, baseline
+                    "BT\n{:.3} {:.3} {:.3} rg\n/{} {:.2} Tf\n{spacing}",
+                    ink[0], ink[1], ink[2], font_name, size
                 )
                 .as_bytes(),
             );
-            content.push(b'(');
-            content.extend_from_slice(&encode_pdf_literal(line));
-            content.extend_from_slice(b") Tj\nET\n");
+            // Largeur réellement couverte : toute la boîte quand la ligne est
+            // justifiée, la largeur estimée sinon.
+            let rule_width = if justify {
+                let natural: f32 = words
+                    .iter()
+                    .map(|word| estimate_text_width(word, style))
+                    .sum();
+                let gap = ((w - natural) / (words.len() - 1) as f32).max(0.0);
+                let mut cursor = x;
+                for (index, word) in words.iter().enumerate() {
+                    if index > 0 {
+                        cursor += gap;
+                    }
+                    content.extend_from_slice(
+                        format!("1 0 0 1 {cursor:.2} {baseline:.2} Tm\n").as_bytes(),
+                    );
+                    content.push(b'(');
+                    content.extend_from_slice(&encode_pdf_literal(word));
+                    content.extend_from_slice(b") Tj\n");
+                    cursor += estimate_text_width(word, style);
+                }
+                w
+            } else {
+                content.extend_from_slice(
+                    format!("{x:.2} {baseline:.2} Td\n").as_bytes(),
+                );
+                content.push(b'(');
+                content.extend_from_slice(&encode_pdf_literal(line));
+                content.extend_from_slice(b") Tj\n");
+                width
+            };
+            content.extend_from_slice(b"ET\n");
 
             // Souligné et barré se dessinent : le format texte de PDF n'a pas
             // de trait sous le glyphe. Une ligne vide n'a rien à souligner :
@@ -812,7 +856,7 @@ impl Document {
                 content.extend_from_slice(
                     format!(
                         "q\n{:.3} {:.3} {:.3} rg\n{:.2} {:.2} {:.2} {:.2} re\nf\nQ\n",
-                        ink[0], ink[1], ink[2], x, y, width.max(1.0), rule
+                        ink[0], ink[1], ink[2], x, y, rule_width.max(1.0), rule
                     )
                     .as_bytes(),
                 );
@@ -822,7 +866,7 @@ impl Document {
                 content.extend_from_slice(
                     format!(
                         "q\n{:.3} {:.3} {:.3} rg\n{:.2} {:.2} {:.2} {:.2} re\nf\nQ\n",
-                        ink[0], ink[1], ink[2], x, y, width.max(1.0), rule
+                        ink[0], ink[1], ink[2], x, y, rule_width.max(1.0), rule
                     )
                     .as_bytes(),
                 );
