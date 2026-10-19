@@ -807,10 +807,6 @@ enum ToolAction {
     Click(AnnotationKind),
     Erase,
     Select,
-    Highlight,
-    Underline,
-    StrikeOut,
-    Squiggly,
     /// Glissé d'une zone à caviarder.
     RedactRect,
     /// Clic sur un bloc de texte à réécrire (mode Édition).
@@ -3502,10 +3498,6 @@ impl YouPdfApp {
             Some(8) => ToolAction::Click(AnnotationKind::Stamp),
             Some(9) => ToolAction::Click(AnnotationKind::FreeText),
             Some(10) => ToolAction::Erase,
-            Some(11) => ToolAction::Highlight,
-            Some(12) => ToolAction::Underline,
-            Some(13) => ToolAction::StrikeOut,
-            Some(14) => ToolAction::Squiggly,
             _ => ToolAction::None,
         }
     }
@@ -3775,6 +3767,13 @@ impl YouPdfApp {
         });
         match found {
             Some(fragment) => {
+                // Un bloc vide ou retourné ne peut pas être réécrit.
+                let [x1, y1, x2, y2] = fragment.rect;
+                if x1 >= x2 || y1 >= y2 || fragment.text.is_empty() {
+                    self.toast(ctx, "Invalid text block");
+                    self.edit_text = None;
+                    return;
+                }
                 self.edit_text = Some(EditTextDraft {
                     // Réécriture sur place : on part du texte existant, le
                     // curseur à la fin, comme dans un traitement de texte.
@@ -10099,42 +10098,6 @@ impl YouPdfApp {
                     }
 
                     // Image sélectionnée : cadre, poignées de rognage, et
-
-                    // Survol : en mode Édition, la boîte de l'élément sélectionné
-                    // apparaît en bleu gras (1 pt, traits en pointillés) lorsque
-                    // le pointeur la survole.
-                    let mode_is_edit = matches!(mode, Some(1));
-                    let pt = ctx.pointer_interact_pos().unwrap_or(pos2(0.0, 0.0));
-                    let is_over = mode_is_edit
-                        && selected_image.is_some()
-                        || selected_image.as_ref().map_or(false, |img| {
-                            let [x1, y1, x2, y2] = img.rect;
-                            let px = page_rect.min.x + x1 * scale;
-                            let py = page_rect.max.y - y2 * scale;
-                            let px2 = page_rect.min.x + x2 * scale;
-                            let py2 = page_rect.max.y - y1 * scale;
-                            let mx = pt.x - page_rect.min.x;
-                            let my = page_rect.max.y - pt.y;
-                            px <= mx && mx <= px2 && py <= my && my <= py2
-                        });
-                    if is_over && mode_is_edit {
-                        let [x1, y1, x2, y2] = selected_image.as_ref().unwrap().rect;
-                        let box_screen = Rect::from_two_pos(
-                            pos2(
-                                page_rect.min.x + x1 * scale,
-                                page_rect.max.y - y2 * scale,
-                            ),
-                            pos2(
-                                page_rect.min.x + x2 * scale,
-                                page_rect.max.y - y1 * scale,
-                            ),
-                        );
-                        ui.painter().rect_stroke(
-                            box_screen,
-                            Rounding::ZERO,
-                            Stroke::new(1.0_f32, pal().accent),
-                        );
-                    }
                     // inspecteur posé au-dessus.
                     if let Some(image) = &selected_image {
                         if image.page == page as usize {
@@ -10424,7 +10387,6 @@ impl YouPdfApp {
                                     );
                                 }
                             }
-                            _ => {}
                             ToolAction::Ink => {
                                 if resp.dragged() {
                                     if let Some(p) = resp.interact_pointer_pos() {
