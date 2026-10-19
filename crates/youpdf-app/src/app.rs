@@ -324,6 +324,7 @@ const COMMENT_TOOLS: &[ModeTool] = &[
     ModeTool("Stamp", icon_stamp, true, false),
     ModeTool("Signature", icon_signature, true, false),
     ModeTool("Eraser", icon_eraser, false, false),
+    ModeTool("Callout", icon_cursor, true, false),
 ];
 
 const EDIT_TOOLS: &[ModeTool] = &[
@@ -863,6 +864,8 @@ enum ToolAction {
     FormField(FormKind),
     /// Glissé d'une mesure (distance, périmètre, aire).
     Measure,
+    /// Clic pour poser un callout (3 clics : départ, genou, coin texte).
+    Callout,
 }
 
 /// Couleurs de préréglage proposées dans la popup.
@@ -3551,6 +3554,7 @@ impl YouPdfApp {
             Some(8) => ToolAction::Click(AnnotationKind::Stamp),
             Some(9) => ToolAction::Click(AnnotationKind::FreeText),
             Some(10) => ToolAction::Erase,
+            Some(11) => ToolAction::Callout,
             _ => ToolAction::None,
         }
     }
@@ -9761,6 +9765,7 @@ impl YouPdfApp {
         let mut pending_click: Option<(usize, [f32; 2])> = None;
         let mut pending_hit: Option<(usize, [f32; 2])> = None;
         let mut pending_erase_segment: Option<(usize, [f32; 2], [f32; 2])> = None;
+        let mut pending_callout: Option<(usize, [f32; 2], [f32; 2], [f32; 2])> = None;
         let mut pending_edit: Option<(usize, [f32; 2])> = None;
         let mut pending_image: Option<(usize, [f32; 2])> = None;
         let mut pending_redact: Option<(usize, [f32; 4])> = None;
@@ -10532,6 +10537,11 @@ impl YouPdfApp {
                                     );
                                 }
                             }
+                            ToolAction::Callout => {
+                                // Mode callout : rien à faire ici, le traitement
+                                // se fait via pending_callout dans le gestionnaire
+                                // d'événements plus bas.
+                            }
                             ToolAction::Ink => {
                                 if resp.drag_started() {
                                     ink_current.clear();
@@ -10845,6 +10855,23 @@ impl YouPdfApp {
         if let Some((page, from, to)) = pending_erase_segment {
             self.erase_ink_segment(page, from, to, &ctx);
         }
+        if let Some((page, p1, p2, p3)) = pending_callout {
+            // Création de l'annotation Callout à partir des 3 points collectés.
+            let mut annot = Annotation::new(page, AnnotationKind::Callout, [
+                p1[0].min(p2[0]).min(p3[0]),
+                p1[1].min(p2[1]).min(p3[1]),
+                (p1[0].max(p2[0]).max(p3[0]) - p1[0].min(p2[0]).min(p3[0])).max(20.0),
+                (p1[1].max(p2[1]).max(p3[1]) - p1[1].min(p2[1]).min(p3[1])).max(20.0),
+            ]);
+            annot.style = self.annot_style(AnnotationKind::Callout);
+            annot.content = format!(
+                "Callout: arrow from ({:.1}, {:.1}) to knee ({:.1}, {:.1}), text at ({:.1}, {:.1})",
+                p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]
+            );
+            annot.ink_points = vec![vec![p1, p2, p3]];
+            annot.recompute_ink_bbox();
+            self.push_annot(annot);
+        }
         if let Some((page, point)) = pending_hit {
             match action {
                 ToolAction::Erase => {
@@ -10880,6 +10907,37 @@ impl YouPdfApp {
                         } else {
                             self.selected_image = None;
                         }
+                    }
+                }
+                ToolAction::Callout => {
+                    // Mode callout : 3 clics pour poser la flèche + texte.
+                    if pending_callout.is_none() {
+                        // Premier clic : mémoriser le point de départ.
+                        pending_callout = Some((page, point, [0.0, 0.0], [0.0, 0.0]));
+                    } else if pending_callout.as_ref().unwrap().1 == [0.0, 0.0] {
+                        // Deuxième clic : mémoriser le genou.
+                        let mut cp = pending_callout.take().unwrap();
+                        cp.1 = point;
+                        pending_callout = Some(cp);
+                    } else if pending_callout.as_ref().unwrap().2 == [0.0, 0.0] {
+                        // Troisième clic : mémoriser le coin du texte, créer l'annotation.
+                        let mut cp = pending_callout.take().unwrap();
+                        cp.2 = point;
+                        // Création de l'annotation Callout.
+                        let mut annot = Annotation::new(cp.0, AnnotationKind::Callout, [
+                            cp.1[0].min(cp.2[0]).max(cp.1[0]).min(cp.2[0]),
+                            cp.1[1].min(cp.2[1]).max(cp.1[1]).min(cp.2[1]),
+                            (cp.1[0].max(cp.2[0]) - cp.1[0].min(cp.2[0])).max(20.0),
+                            (cp.1[1].max(cp.2[1]) - cp.1[1].min(cp.2[1])).max(20.0),
+                        ]);
+                        annot.style = self.annot_style(AnnotationKind::Callout);
+                        annot.content = format!(
+                            "Callout: arrow from ({:.1}, {:.1}) to knee ({:.1}, {:.1}), text at ({:.1}, {:.1})",
+                            cp.1[0], cp.1[1], cp.2[0], cp.2[1], cp.2[0], cp.2[1]
+                        );
+                        annot.ink_points = vec![vec![cp.1, cp.2, cp.2]];
+                        annot.recompute_ink_bbox();
+                        self.push_annot(annot);
                     }
                 }
                 _ => {}
@@ -13067,6 +13125,7 @@ fn annot_label(kind: AnnotationKind) -> &'static str {
         AnnotationKind::Ink => "Ink",
         AnnotationKind::Stamp => "Stamp",
         AnnotationKind::Link => "Link",
+        AnnotationKind::Callout => "Callout",
         AnnotationKind::FileAttachment => "Attachment",
     }
 }
