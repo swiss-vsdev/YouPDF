@@ -244,19 +244,41 @@ impl Document {
         let img_stream = Stream::new(img_dict, pixels_rgb[..expected].to_vec());
         let img_id = self.inner_mut().add_object(img_stream);
 
-        // 2. Enregistrer dans /Resources/XObject sous /SigIm0.
-        self.link_xobject_to_page(page_id, "SigIm0", img_id)?;
+        // 2. Enregistrer dans /Resources/XObject sous un nom libre. Un nom fixe
+        //    ferait que deux images posées sur la même page partageraient la
+        //    ressource : la seconde écraserait la première, et l'inspecteur
+        //    d'image ne saurait plus laquelle il édite.
+        let name = self.free_xobject_name(page_id, "SigIm")?;
+        self.link_xobject_to_page(page_id, &name, img_id)?;
 
         // 3. Flux de dessin.
         let [x1, y1, x2, y2] = rect;
         let w = x2 - x1;
         let h = y2 - y1;
-        let content = format!("q\n{w:.2} 0 0 {h:.2} {x1:.2} {y1:.2} cm\n/SigIm0 Do\nQ\n");
+        let content = format!("q\n{w:.2} 0 0 {h:.2} {x1:.2} {y1:.2} cm\n/{name} Do\nQ\n");
         let stream = Stream::new(lopdf::Dictionary::new(), content.into_bytes());
         let stream_id = self.inner_mut().add_object(stream);
         self.append_content_by_id(page_id, stream_id)?;
 
         Ok(())
+    }
+
+    /// Premier nom de ressource libre de la forme `prefixe{n}`.
+    fn free_xobject_name(&self, page_id: (u32, u16), prefix: &str) -> Result<String> {
+        let used: Vec<Vec<u8>> = self
+            .read_resources(page_id)?
+            .get(b"XObject")
+            .ok()
+            .and_then(|object| object.as_dict().ok())
+            .map(|xobjects| xobjects.iter().map(|(name, _)| name.clone()).collect())
+            .unwrap_or_default();
+        for index in 0..1000u32 {
+            let candidate = format!("{prefix}{index}");
+            if !used.iter().any(|name| name == candidate.as_bytes()) {
+                return Ok(candidate);
+            }
+        }
+        Err(Error::Pdf("plus de nom d'image libre".to_owned()))
     }
 
     /// Enregistre un XObject dans les ressources d'une page.
@@ -266,13 +288,11 @@ impl Document {
         name: &str,
         object_id: (u32, u16),
     ) -> Result<()> {
-        // Lecture des ressources actuelles.
+        // Lecture des ressources actuelles. `/XObject` peut être une
+        // référence : la résoudre évite d'écraser un dictionnaire partagé.
         let mut resources = self.read_resources(page_id)?;
-        let mut xobjects = resources
-            .get(b"XObject")
-            .ok()
-            .and_then(|o| o.as_dict().ok())
-            .cloned()
+        let mut xobjects = self
+            .resolve_dict(resources.get(b"XObject").ok())
             .unwrap_or_default();
         xobjects.set(name, lopdf::Object::Reference(object_id));
         resources.set("XObject", lopdf::Object::Dictionary(xobjects));
@@ -289,21 +309,10 @@ impl Document {
         Ok(())
     }
 
-    /// Lit les ressources d'une page, en résolvant les références.
+    /// Lit les ressources d'une page, en résolvant les références et en
+    /// héritant de ses parents.
     fn read_resources(&self, page_id: (u32, u16)) -> Result<lopdf::Dictionary> {
-        let page = self
-            .inner()
-            .get_dictionary(page_id)
-            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
-        match page.get(b"Resources") {
-            Ok(lopdf::Object::Dictionary(d)) => Ok(d.clone()),
-            Ok(lopdf::Object::Reference(id)) => self
-                .inner()
-                .get_dictionary(*id)
-                .map_err(|e| Error::Pdf(format!("Ressources : {e}")))
-                .cloned(),
-            _ => Ok(lopdf::Dictionary::new()),
-        }
+        self.page_resources(page_id)
     }
 
     /// Ajoute un flux de contenu (déjà stocké) à la fin du contenu d'une page.

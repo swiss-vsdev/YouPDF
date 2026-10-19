@@ -6,7 +6,8 @@
 //! testable : l'inspecteur ne doit jamais sortir du cadre de la fenêtre.
 
 use egui::{pos2, Color32, Painter, Rect, RichText, Rounding, Sense, Shape, Stroke, Vec2};
-use youpdf_core::{PatchFont, TextAlign, TextStyle};
+use egui_phosphor::regular as ph;
+use youpdf_core::{ImageTransform, PatchFont, TextAlign, TextStyle};
 use youpdf_shared::pal;
 
 /// Identificateur d'un bloc de texte dans la page.
@@ -38,9 +39,6 @@ pub enum InspectorTarget {
         bounds: Rect,
     },
     /// Image (mode Édition).
-    ///
-    /// Construit par la tâche 3.4 (inspecteur d'image).
-    #[allow(dead_code)]
     ImageElement {
         page: usize,
         id: ImageId,
@@ -415,6 +413,112 @@ pub fn text_style_row(
         });
     }
     changed
+}
+
+/// Action demandée par l'inspecteur d'image.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ImageAction {
+    /// Choisir un fichier et remplacer les pixels.
+    Replace,
+    /// Exporter l'image d'origine en PNG.
+    Extract,
+    /// Tourner ou retourner l'image.
+    Transform(ImageTransform),
+    /// Entrer en mode rognage (poignées sur le canevas).
+    StartCrop,
+    /// Appliquer le rognage en cours.
+    ApplyCrop,
+    /// Abandonner le rognage en cours.
+    CancelCrop,
+    /// Régler l'opacité, de 0 à 1.
+    Opacity(f32),
+    /// Retirer l'image de la page.
+    Delete,
+}
+
+/// Contrôles de l'image sélectionnée, sur une ligne qui passe à la ligne.
+///
+/// `cropping` bascule la ligne en mode rognage : les réglages cèdent la place
+/// à *Apply* et *Cancel*, les poignées étant sur le canevas.
+pub fn image_controls(
+    ui: &mut egui::Ui,
+    alpha: &mut f32,
+    cropping: bool,
+) -> Option<ImageAction> {
+    let mut action = None;
+    ui.horizontal_wrapped(|ui| {
+        if cropping {
+            if ui
+                .small_button(format!("{} Apply", ph::CHECK))
+                .on_hover_text("Apply the crop")
+                .clicked()
+            {
+                action = Some(ImageAction::ApplyCrop);
+            }
+            if ui
+                .small_button(format!("{} Cancel", ph::X))
+                .on_hover_text("Cancel the crop")
+                .clicked()
+            {
+                action = Some(ImageAction::CancelCrop);
+            }
+            return;
+        }
+        if ui
+            .small_button(format!("{} Replace", ph::ARROWS_CLOCKWISE))
+            .on_hover_text("Replace the image, keeping its place")
+            .clicked()
+        {
+            action = Some(ImageAction::Replace);
+        }
+        if ui
+            .small_button(format!("{} Extract", ph::EXPORT))
+            .on_hover_text("Export the image as PNG")
+            .clicked()
+        {
+            action = Some(ImageAction::Extract);
+        }
+        for transform in ImageTransform::ALL {
+            let icon = match transform {
+                ImageTransform::RotateCw => ph::ARROW_CLOCKWISE,
+                ImageTransform::RotateCcw => ph::ARROW_COUNTER_CLOCKWISE,
+                ImageTransform::FlipHorizontal => ph::FLIP_HORIZONTAL,
+                ImageTransform::FlipVertical => ph::FLIP_VERTICAL,
+            };
+            if ui
+                .small_button(icon)
+                .on_hover_text(transform.display_name())
+                .clicked()
+            {
+                action = Some(ImageAction::Transform(transform));
+            }
+        }
+        if ui
+            .small_button(ph::CROP)
+            .on_hover_text("Crop the image")
+            .clicked()
+        {
+            action = Some(ImageAction::StartCrop);
+        }
+        if ui
+            .small_button(ph::TRASH)
+            .on_hover_text("Delete the image")
+            .clicked()
+        {
+            action = Some(ImageAction::Delete);
+        }
+        // Opacité : le curseur rend la nouvelle valeur dès qu'elle bouge.
+        let slider = ui.add(
+            egui::Slider::new(alpha, 0.0..=1.0)
+                .show_value(false)
+                .text(ph::DROP),
+        );
+        if slider.changed() {
+            action = Some(ImageAction::Opacity(*alpha));
+        }
+        slider.on_hover_text(format!("Opacity {:.0}%", *alpha * 100.0));
+    });
+    action
 }
 
 #[cfg(test)]
