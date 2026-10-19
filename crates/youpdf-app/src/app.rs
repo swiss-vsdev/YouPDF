@@ -1109,6 +1109,10 @@ pub struct YouPdfApp {
     crop_range: u8,
     /// Boîte écrite : 0 CropBox, 1 ArtBox, 2 BleedBox, 3 TrimBox.
     crop_target: u8,
+    /// Bandeau « scan détecté », proposé à l'ouverture.
+    scan_banner: bool,
+    /// L'utilisateur ne veut plus voir le bandeau pendant cette session.
+    scan_banner_off: bool,
     /// Fenêtre de découpage en tuiles.
     tile_split_open: bool,
     tile_rows: usize,
@@ -1443,6 +1447,8 @@ impl YouPdfApp {
             crop_unit: 0,
             crop_range: 0,
             crop_target: 0,
+            scan_banner: false,
+            scan_banner_off: false,
             tile_split_open: false,
             tile_rows: 2,
             tile_cols: 2,
@@ -1724,6 +1730,8 @@ impl YouPdfApp {
             .as_deref()
             .map(Document::file_is_encrypted)
             .unwrap_or(false);
+        // Un scan se reconnaît avant que le document n'entre dans l'onglet.
+        let scanned = doc.looks_scanned(1);
         let annots = annots_to_display(&doc, doc.read_annotations());
         if !annots.is_empty() && doc.clear_youpdf_annotations().is_err() {
             tracing::warn!("purge des annotations impossible");
@@ -1754,6 +1762,7 @@ impl YouPdfApp {
             protected,
         });
         self.active = self.tabs.len() - 1;
+        self.scan_banner = scanned && !self.scan_banner_off;
         self.panel = Some(Panel::Thumbnails);
         self.home_open = false;
         // Le nouvel onglet devient actif tout de suite : sans cela, la trame
@@ -7858,6 +7867,41 @@ impl YouPdfApp {
         }
     }
 
+    /// Bandeau proposant l'OCR quand la page 1 ressemble à un scan.
+    fn scan_banner_ui(&mut self, ui: &mut egui::Ui) {
+        if !self.scan_banner {
+            return;
+        }
+        let palette = pal();
+        Frame::none()
+            .fill(palette.widget_bg)
+            .inner_margin(Margin::symmetric(12.0, 8.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(
+                            "Scanned document detected. Recognize text to search, copy and edit it.",
+                        )
+                        .size(11.5)
+                        .color(palette.icon_bright),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.small_button("Dismiss").clicked() {
+                            self.scan_banner = false;
+                        }
+                        if ui.small_button("Don't show again").clicked() {
+                            self.scan_banner = false;
+                            self.scan_banner_off = true;
+                        }
+                        if ui.button("Perform OCR").clicked() {
+                            self.ocr_open = true;
+                            self.scan_banner = false;
+                        }
+                    });
+                });
+            });
+    }
+
     /// Fenêtre « Recadrage » : marges retirées des quatre bords.
     fn crop_window(&mut self, ctx: &egui::Context) {
         if !self.crop_open {
@@ -12072,6 +12116,7 @@ impl eframe::App for YouPdfApp {
                 } else if self.organize_open {
                     self.organize_view(ui);
                 } else {
+                    self.scan_banner_ui(ui);
                     self.canvas(ui);
                 }
             });
