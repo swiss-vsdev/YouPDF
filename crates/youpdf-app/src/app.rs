@@ -755,6 +755,14 @@ struct EditTextDraft {
     style: TextStyle,
     /// Premier affichage : demande le focus clavier.
     fresh: bool,
+    /// Abscisse du clic d'origine, en repère affiché — le même que les `rect`
+    /// des fragments, pas le repère page : elle se remet à l'échelle pour
+    /// poser le curseur entre les glyphes au premier rendu du champ.
+    caret_at: Option<f32>,
+    /// Le bloc tenait-il sur une ligne ? Figé à l'ouverture : coller un texte
+    /// à saut de ligne dans un champ d'une ligne ne doit pas changer le type
+    /// du champ en cours d'édition (Entrée valide, donc).
+    single_line: bool,
 }
 
 /// Champ de formulaire que trace un outil du mode « Prepare form ».
@@ -3721,6 +3729,8 @@ impl YouPdfApp {
                     buffer: fragment.text.clone(),
                     style: TextStyle::from_fragment(&fragment),
                     fresh: true,
+                    caret_at: Some(point[0]),
+                    single_line: !fragment.text.contains('\n'),
                     fragment,
                 });
             }
@@ -9917,24 +9927,69 @@ impl YouPdfApp {
                                     d.style.color[1],
                                     d.style.color[2],
                                 );
-                                let resp = ui.put(
-                                    field.shrink2(vec2(3.0, 0.0)),
+                                // Courier est la seule des trois familles que
+                                // l'interface sait rendre : egui n'embarque
+                                // pas de police à empattements.
+                                let font_id = match d.style.font {
+                                    PatchFont::Courier => {
+                                        FontId::monospace((d.style.size * scale).clamp(8.0, 96.0))
+                                    }
+                                    _ => {
+                                        FontId::proportional((d.style.size * scale).clamp(8.0, 96.0))
+                                    }
+                                };
+                                let edit_rect = field.shrink2(vec2(3.0, 0.0));
+                                // Un paragraphe (texte déjà coupé) se réécrit
+                                // en plusieurs lignes, Entrée y insère un saut ;
+                                // une ligne seule se valide avec Entrée.
+                                let single_line = d.single_line;
+                                let field_edit = if single_line {
                                     TextEdit::singleline(&mut d.buffer)
+                                } else {
+                                    TextEdit::multiline(&mut d.buffer)
+                                };
+                                let resp = ui.put(
+                                    edit_rect,
+                                    field_edit
                                         .frame(false)
-                                        .font(match d.style.font {
-                                            // Courier est la seule des trois
-                                            // familles que l'interface sait
-                                            // rendre : egui n'embarque pas de
-                                            // police à empattements.
-                                            PatchFont::Courier => FontId::monospace(
-                                                (d.style.size * scale).clamp(8.0, 96.0),
-                                            ),
-                                            _ => FontId::proportional(
-                                                (d.style.size * scale).clamp(8.0, 96.0),
-                                            ),
-                                        })
+                                        .font(font_id.clone())
                                         .text_color(ink),
                                 );
+                                // Le curseur se pose entre les glyphes sous
+                                // le clic d'origine : le champ n'existait pas
+                                // encore à ce moment-là, egui ne peut pas le
+                                // placer seul.
+                                if let Some(x) = d.caret_at.take() {
+                                    // Le curseur d'un paragraphe se place à
+                                    // deux dimensions : ici on ne sait viser
+                                    // qu'une abscisse, donc seulement une
+                                    // ligne. `TextEdit` dessine son texte à sa
+                                    // marge interne, 4 points à gauche, 2 en
+                                    // haut.
+                                    if single_line {
+                                        let text_origin = edit_rect.min + vec2(4.0, 2.0);
+                                        let galley = ui.fonts(|fonts| {
+                                            fonts.layout_no_wrap(d.buffer.clone(), font_id, ink)
+                                        });
+                                        let local = vec2(
+                                            (page_rect.min.x + x * scale - text_origin.x)
+                                                .clamp(0.0, galley.size().x),
+                                            galley.size().y / 2.0,
+                                        );
+                                        let index = galley.cursor_from_pos(local).ccursor.index;
+                                        let mut state = TextEdit::load_state(
+                                            ui.ctx(),
+                                            resp.id,
+                                        )
+                                        .unwrap_or_default();
+                                        state.cursor.set_char_range(Some(
+                                            egui::text_selection::CCursorRange::one(
+                                                egui::text::CCursor::new(index),
+                                            ),
+                                        ));
+                                        state.store(ui.ctx(), resp.id);
+                                    }
+                                }
                                 // Aperçu des traits : le texte écrit dans le
                                 // PDF les portera, autant les voir ici.
                                 if d.style.underline || d.style.strikeout {
@@ -9981,7 +10036,8 @@ impl YouPdfApp {
                                 }
                                 if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                                     edit_cancel = true;
-                                } else if ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                } else if (single_line
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                                     || (resp.lost_focus() && !inspector_hovered)
                                 {
                                     edit_commit = true;
