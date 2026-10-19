@@ -21,8 +21,9 @@ use youpdf_shared::{pal, set_palette, Theme};
 use crate::ai::AiPanel;
 use crate::home::{self, HomeCategory, HomeView, ViewMode};
 use crate::inspector::{
-    arrow_x, paint_arrow, place_inspector, AnnotationId, InspectorTarget, TextBlockId,
-    INSPECTOR_HEIGHT, INSPECTOR_WIDTH,
+    arrow_x, paint_arrow, place_inspector, text_style_row, AnnotationId, InspectorTarget,
+    TextBlockId, TextStyleUi, INSPECTOR_HEIGHT, INSPECTOR_WIDTH, PALETTE_HEIGHT,
+    TEXT_INSPECTOR_HEIGHT,
 };
 use youpdf_core::compress::CompressionLevel;
 use youpdf_core::render::NullRenderer;
@@ -34,8 +35,9 @@ use youpdf_core::{
     EncryptionOptions, EncryptionStrength, ExtractedTable, FieldProperties, FormDataFormat,
     FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, MeasureKind, Measurement,
     NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem, OutlineStyle,
-    OutlineTarget, PageRange, PageBitmap, PdfiumRenderer, RedactionRegion, RenderOptions, Renderer,
-    SearchIndex, SearchOptions, SearchResult, TextFormat, TextFragment, Watermark, STAMP_NAMES,
+    OutlineTarget, PageRange, PageBitmap, PatchFont, PdfiumRenderer, RedactionRegion,
+    RenderOptions, Renderer, SearchIndex, SearchOptions, SearchResult, TextFormat, TextFragment,
+    TextStyle, Watermark, STAMP_NAMES,
 };
 
 // --------------------------------------------------------------------------
@@ -687,6 +689,8 @@ struct EditTextDraft {
     /// Bloc touché, tel qu'extrait du document.
     fragment: TextFragment,
     buffer: String,
+    /// Mise en forme du texte réécrit (inspecteur de texte).
+    style: TextStyle,
     /// Premier affichage : demande le focus clavier.
     fresh: bool,
 }
@@ -876,6 +880,8 @@ pub struct YouPdfApp {
     inspector_target: Option<InspectorTarget>,
     /// Taille mesurée du dernier inspecteur affiché, pour le cadrer.
     inspector_size: Option<egui::Vec2>,
+    /// État des contrôles de texte (palette ouverte, saisie hexa).
+    inspector_text_ui: TextStyleUi,
     /// Liste déroulante `Outils` ouverte.
     tools_open: bool,
     /// Menu `…` (enregistrer, exporter, propriétés).
@@ -1179,6 +1185,7 @@ impl YouPdfApp {
             mode: None,
             inspector_target: None,
             inspector_size: None,
+            inspector_text_ui: TextStyleUi::default(),
             tools_open: false,
             actions_open: false,
             props_open: false,
@@ -1668,6 +1675,7 @@ impl YouPdfApp {
         self.text_sel = None;
         self.inspector_target = None;
         self.inspector_size = None;
+        self.inspector_text_ui = TextStyleUi::default();
         self.organize_selected.clear();
         // Les clés de chemin des signets sont les mêmes d'un document à
         // l'autre : sans ce nettoyage, le nouveau plan s'ouvrirait en édition
@@ -3634,6 +3642,7 @@ impl YouPdfApp {
                     // Réécriture sur place : on part du texte existant, le
                     // curseur à la fin, comme dans un traitement de texte.
                     buffer: fragment.text.clone(),
+                    style: TextStyle::from_fragment(&fragment),
                     fresh: true,
                     fragment,
                 });
@@ -3647,7 +3656,9 @@ impl YouPdfApp {
         let Some(draft) = self.edit_text.take() else {
             return;
         };
-        if draft.buffer == draft.fragment.text {
+        // Une retouche de style compte autant qu'une retouche de texte : sans
+        // cela, changer la couleur ou le corps n'écrirait rien.
+        if draft.buffer == draft.fragment.text && draft.style == TextStyle::from_fragment(&draft.fragment) {
             return;
         }
         // Couleur du fond sous le bloc : le patch écrit par le cœur doit se
@@ -3661,7 +3672,7 @@ impl YouPdfApp {
                 fragment.rect = rect_to_page(&tab.doc, fragment.page, fragment.rect);
                 let background = Some([bg[0] as f32 / 255.0, bg[1] as f32 / 255.0, bg[2] as f32 / 255.0]);
                 tab.doc
-                    .replace_text_fragment(&fragment, &draft.buffer, background)
+                    .replace_text_fragment_styled(&fragment, &draft.buffer, background, &draft.style)
             }
             None => return,
         };
@@ -6403,9 +6414,23 @@ impl YouPdfApp {
                 .cloned(),
             _ => None,
         };
-        let size = self.inspector_size.unwrap_or(vec2(INSPECTOR_WIDTH, INSPECTOR_HEIGHT));
+        // Taille de la trame précédente ; à défaut, une estimation par type de
+        // cible, large plutôt que courte : un panneau qui se croit plus haut
+        // qu'il n'est laisse un vide, plus bas il recouvre son élément.
+        let fallback = if matches!(target, InspectorTarget::TextElement { .. }) {
+            vec2(INSPECTOR_WIDTH, TEXT_INSPECTOR_HEIGHT)
+        } else {
+            vec2(INSPECTOR_WIDTH, INSPECTOR_HEIGHT)
+        };
+        let mut size = self.inspector_size.unwrap_or(fallback);
+        if let InspectorTarget::TextElement { .. } = &target {
+            if self.inspector_text_ui.palette_open {
+                size.y += PALETTE_HEIGHT;
+            }
+        }
         let placement = place_inspector(target.bounds(), ctx.screen_rect(), size);
         let mut measured: Option<egui::Vec2> = None;
+        let mut style_changed = false;
         let mut close = false;
         let mut delete = false;
         let mut delete_id = None;
@@ -6445,6 +6470,17 @@ impl YouPdfApp {
                                 close = true;
                             }
                         });
+                        // Contrôles de texte : ils agissent sur le bloc en
+                        // cours de réécriture, qui porte la mise en forme.
+                        if matches!(target, InspectorTarget::TextElement { .. }) {
+                            if let Some(draft) = self.edit_text.as_mut() {
+                                style_changed = text_style_row(
+                                    ui,
+                                    &mut draft.style,
+                                    &mut self.inspector_text_ui,
+                                );
+                            }
+                        }
                     });
                 let rect = body.response.rect;
                 measured = Some(rect.size());
@@ -6458,6 +6494,11 @@ impl YouPdfApp {
                 );
             });
         self.inspector_size = measured;
+        if style_changed {
+            // L'aperçu sur la page suit le style : un repaint immédiat évite
+            // de croire que le réglage n'a rien fait.
+            ctx.request_repaint();
+        }
         if delete {
             // C'est bien l'annotation visée qui part, pas celle que la trame a
             // sélectionnée entre-temps.
@@ -9248,6 +9289,18 @@ impl YouPdfApp {
         let tint_color = Color32::from_rgba_unmultiplied(tint[0], tint[1], tint[2], tint[3]);
         let tint_on = tint[3] > 0;
         let show_border = self.page_border;
+        // Le clic qui vise l'inspecteur ne doit pas valider la saisie en cours :
+        // sans ce garde, le premier clic sur un réglage rendrait le focus du
+        // champ, clavier compris, avant même d'avoir pu le régler.
+        let inspector_hovered = self.inspector_target.as_ref().is_some_and(|target| {
+            let size = self
+                .inspector_size
+                .unwrap_or(vec2(INSPECTOR_WIDTH, TEXT_INSPECTOR_HEIGHT));
+            let rect = place_inspector(target.bounds(), ui.ctx().screen_rect(), size).rect;
+            ui.ctx()
+                .pointer_latest_pos()
+                .is_some_and(|pos| rect.expand(6.0).contains(pos))
+        });
         // L'inspecteur suit la sélection : la trame du canevas le calcule, la
         // barre d'outils (dessinée après) le pose.
         let mode = self.mode;
@@ -9534,7 +9587,7 @@ impl YouPdfApp {
                                 // et une réécriture plus longue que l'original
                                 // déborde du blanc. La couleur suit la page.
                                 let height =
-                                    (block.height().max(d.fragment.font_size * scale) * 1.3)
+                                    (block.height().max(d.style.size * scale) * 1.3)
                                         .max(20.0);
                                 let field = Rect::from_min_size(
                                     pos2(block.min.x - 3.0, block.center().y - height / 2.0),
@@ -9552,19 +9605,49 @@ impl YouPdfApp {
                                     Stroke::new(1.0_f32, pal().accent),
                                 );
                                 let ink = Color32::from_rgb(
-                                    d.fragment.color[0],
-                                    d.fragment.color[1],
-                                    d.fragment.color[2],
+                                    d.style.color[0],
+                                    d.style.color[1],
+                                    d.style.color[2],
                                 );
                                 let resp = ui.put(
                                     field.shrink2(vec2(3.0, 0.0)),
                                     TextEdit::singleline(&mut d.buffer)
                                         .frame(false)
-                                        .font(FontId::proportional(
-                                            (d.fragment.font_size * scale).clamp(8.0, 96.0),
-                                        ))
+                                        .font(match d.style.font {
+                                            // Courier est la seule des trois
+                                            // familles que l'interface sait
+                                            // rendre : egui n'embarque pas de
+                                            // police à empattements.
+                                            PatchFont::Courier => FontId::monospace(
+                                                (d.style.size * scale).clamp(8.0, 96.0),
+                                            ),
+                                            _ => FontId::proportional(
+                                                (d.style.size * scale).clamp(8.0, 96.0),
+                                            ),
+                                        })
                                         .text_color(ink),
                                 );
+                                // Aperçu des traits : le texte écrit dans le
+                                // PDF les portera, autant les voir ici.
+                                if d.style.underline || d.style.strikeout {
+                                    let rule = (d.style.size * scale * 0.07).max(0.5);
+                                    if d.style.underline {
+                                        ui.painter().line_segment(
+                                            [
+                                                pos2(field.min.x, field.max.y - 3.0),
+                                                pos2(field.max.x, field.max.y - 3.0),
+                                            ],
+                                            Stroke::new(rule, ink),
+                                        );
+                                    }
+                                    if d.style.strikeout {
+                                        let y = field.center().y;
+                                        ui.painter().line_segment(
+                                            [pos2(field.min.x, y), pos2(field.max.x, y)],
+                                            Stroke::new(rule, ink),
+                                        );
+                                    }
+                                }
                                 // Inspecteur du bloc en cours de réécriture.
                                 if mode == Some(1) {
                                     let block_id = tab
@@ -9591,7 +9674,7 @@ impl YouPdfApp {
                                 if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                                     edit_cancel = true;
                                 } else if ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                    || resp.lost_focus()
+                                    || (resp.lost_focus() && !inspector_hovered)
                                 {
                                     edit_commit = true;
                                 }

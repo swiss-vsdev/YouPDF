@@ -51,6 +51,180 @@ pub struct TextFragment {
     pub color: [u8; 3],
 }
 
+/// Police standard-14 utilisée par un patch de texte.
+///
+/// Le patch écrit par-dessus le contenu d'origine avec une police dédiée : il
+/// ne peut donc pas reprendre la police réelle du document, mais peut au moins
+/// en choisir une parmi celles que tout lecteur connaît, sans incorporer de
+/// fichier de police.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PatchFont {
+    /// Sans empattement (Helvetica).
+    #[default]
+    Helvetica,
+    /// À empattements (Times).
+    Times,
+    /// À chasse fixe (Courier).
+    Courier,
+}
+
+impl PatchFont {
+    /// Les trois familles proposées.
+    pub const ALL: [PatchFont; 3] = [PatchFont::Helvetica, PatchFont::Times, PatchFont::Courier];
+
+    /// Nom du fichier de base PDF pour cette famille, dans la variante
+    /// demandée (gras / italique).
+    pub fn base_font(self, bold: bool, italic: bool) -> &'static str {
+        match (self, bold, italic) {
+            (PatchFont::Helvetica, false, false) => "Helvetica",
+            (PatchFont::Helvetica, true, false) => "Helvetica-Bold",
+            (PatchFont::Helvetica, false, true) => "Helvetica-Oblique",
+            (PatchFont::Helvetica, true, true) => "Helvetica-BoldOblique",
+            (PatchFont::Times, false, false) => "Times-Roman",
+            (PatchFont::Times, true, false) => "Times-Bold",
+            (PatchFont::Times, false, true) => "Times-Italic",
+            (PatchFont::Times, true, true) => "Times-BoldItalic",
+            (PatchFont::Courier, false, false) => "Courier",
+            (PatchFont::Courier, true, false) => "Courier-Bold",
+            (PatchFont::Courier, false, true) => "Courier-Oblique",
+            (PatchFont::Courier, true, true) => "Courier-BoldOblique",
+        }
+    }
+
+    /// Libellé affiché dans l'interface.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            PatchFont::Helvetica => "Helvetica",
+            PatchFont::Times => "Times",
+            PatchFont::Courier => "Courier",
+        }
+    }
+
+    /// Largeur moyenne d'un caractère, en millièmes de cadratin.
+    ///
+    /// C'est une estimation : les tables de largeur des polices standard ne
+    /// sont pas dans le fichier PDF. Elle ne sert qu'à poser un alignement
+    /// centré ou à droite, jamais à décider d'un débordement.
+    fn average_width(self) -> f32 {
+        match self {
+            PatchFont::Helvetica => 0.52,
+            PatchFont::Times => 0.46,
+            PatchFont::Courier => 0.6,
+        }
+    }
+}
+
+/// Alignement du texte patché dans la boîte du fragment d'origine.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum TextAlign {
+    /// Collé au bord gauche de la boîte.
+    #[default]
+    Left,
+    /// Centré dans la boîte.
+    Center,
+    /// Collé au bord droit de la boîte.
+    Right,
+}
+
+impl TextAlign {
+    /// Les trois alignements, dans l'ordre de l'interface.
+    pub const ALL: [TextAlign; 3] = [TextAlign::Left, TextAlign::Center, TextAlign::Right];
+
+    /// Libellé affiché dans l'interface.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            TextAlign::Left => "Left",
+            TextAlign::Center => "Center",
+            TextAlign::Right => "Right",
+        }
+    }
+}
+
+/// Mise en forme d'un patch de texte.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextStyle {
+    /// Famille de police.
+    pub font: PatchFont,
+    /// Corps, en points.
+    pub size: f32,
+    /// Couleur RGB (0–255).
+    pub color: [u8; 3],
+    /// Gras.
+    pub bold: bool,
+    /// Italique.
+    pub italic: bool,
+    /// Souligné.
+    pub underline: bool,
+    /// Barré.
+    pub strikeout: bool,
+    /// Alignement dans la boîte d'origine.
+    pub align: TextAlign,
+    /// Interligne, en multiples du corps.
+    pub line_spacing: f32,
+    /// Approche (espace ajouté après chaque caractère), en points.
+    pub char_spacing: f32,
+}
+
+impl TextStyle {
+    /// Les corps proposés dans l'interface.
+    pub const SIZES: [f32; 12] = [
+        8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 24.0, 36.0, 48.0, 72.0,
+    ];
+
+    /// Interlignes proposées dans l'interface.
+    pub const LINE_SPACINGS: [f32; 4] = [1.0, 1.15, 1.5, 2.0];
+
+    /// Style d'un fragment tel qu'extrait du document : c'est ce qui est
+    /// appliqué quand l'utilisateur ne touche qu'au texte.
+    pub fn from_fragment(fragment: &TextFragment) -> Self {
+        TextStyle {
+            font: PatchFont::Helvetica,
+            size: fragment.font_size,
+            color: fragment.color,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikeout: false,
+            align: TextAlign::Left,
+            line_spacing: 1.0,
+            char_spacing: 0.0,
+        }
+    }
+}
+
+/// Largeur estimée d'une ligne, en points.
+///
+/// Approximation assumée : faute des tables de largeur des polices standard,
+/// on compte une largeur moyenne par caractère. Courier étant à chasse fixe,
+/// son compte est exact au dixième de cadratin près.
+pub fn estimate_text_width(text: &str, style: &TextStyle) -> f32 {
+    let chars = text.chars().count() as f32;
+    // Le corps est celui que le flux écrit réellement : sans cette borne, un
+    // corps dégénéré ferait diverger l'alignement de la largeur rendue.
+    let size = style.size.clamp(MIN_TEXT_SIZE, MAX_TEXT_SIZE);
+    chars * size * style.font.average_width() + chars * style.char_spacing
+}
+
+/// Corps minimal accepté par un patch : en dessous, le texte est illisible et
+/// les traits du souligné se confondent.
+const MIN_TEXT_SIZE: f32 = 1.0;
+
+/// Corps maximal accepté par un patch : au-delà, la ligne déborde de toute
+/// page.
+const MAX_TEXT_SIZE: f32 = 500.0;
+
+/// Nom de ressource PDF de la police de patch pour un fichier de base donné.
+///
+/// Helvetica garde `YouPdfF1`, le nom historique : les documents déjà produits
+/// et les tests qui le vérifient restent valides.
+pub fn patch_font_name(base_font: &str) -> String {
+    if base_font == "Helvetica" {
+        "YouPdfF1".to_owned()
+    } else {
+        format!("YouPdf{}", base_font.replace('-', ""))
+    }
+}
+
 /// Une plage de texte à l'intérieur d'un fragment.
 #[derive(Debug, Clone)]
 pub struct TextSpan {
@@ -528,6 +702,24 @@ impl Document {
     ///   est de supprimer une information sensible (utiliser le
     ///   caviardage pour ça).
     pub fn replace_text_fragment(&mut self, fragment: &TextFragment, new_text: &str, background: Option<[f32; 3]>) -> Result<()> {
+        let style = TextStyle::from_fragment(fragment);
+        self.replace_text_fragment_styled(fragment, new_text, background, &style)
+    }
+
+    /// Remplace un fragment de texte avec une mise en forme choisie.
+    ///
+    /// Mêmes masquage et emplacement que [`Document::replace_text_fragment`] ;
+    /// la police, le corps, la couleur, les styles (gras, italique, souligné,
+    /// barré), l'alignement, l'interligne et l'approche viennent de `style`.
+    /// Les lignes sont séparées par `\n`. La police reste l'une des quatorze
+    /// standard : le patch ne peut pas reprendre la police d'origine.
+    pub fn replace_text_fragment_styled(
+        &mut self,
+        fragment: &TextFragment,
+        new_text: &str,
+        background: Option<[f32; 3]>,
+        style: &TextStyle,
+    ) -> Result<()> {
         let page_id = self
             .page_id(fragment.page as u32)
             .map_err(|e| Error::Pdf(format!("page : {e}")))?;
@@ -535,13 +727,36 @@ impl Document {
         // 1. Préparer le flux de patch.
         let [x1, y1, x2, y2] = fragment.rect;
         let w = x2 - x1;
-        let h = y2 - y1;
 
         // Le flux est construit en **octets** : un `String` intermédiaire puis
         // `into_bytes()` ré-encoderait chaque octet WinAnsi
         // >= 0x80 en deux octets UTF-8, ce qui reproduirait exactement le
         // défaut d'affichage des accents que ce correctif supprime.
         let mut content: Vec<u8> = Vec::new();
+
+        // 2. Géométrie des lignes. La première garde la ligne de base du
+        //    fragment d'origine ; les suivantes descendent d'un interligne.
+        //    Le masque couvre donc tout ce qui sera écrit, sinon la seconde
+        //    ligne se poserait sur le contenu de la page.
+        let size = style.size.clamp(MIN_TEXT_SIZE, MAX_TEXT_SIZE);
+        let ink = [
+            style.color[0] as f32 / 255.0,
+            style.color[1] as f32 / 255.0,
+            style.color[2] as f32 / 255.0,
+        ];
+        let base = style.font.base_font(style.bold, style.italic);
+        let font_name = patch_font_name(base);
+        let line_step = size * style.line_spacing.max(0.5);
+        let first_baseline = y1 + size * 0.2;
+        // Un `\r` de fin de ligne (texte venu d'un champ CRLF) ne fait pas
+        // partie du texte : il serait écrit comme une espace.
+        let lines: Vec<&str> = new_text
+            .split('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line))
+            .collect();
+        let line_count = lines.len().max(1) as f32;
+        let last_baseline = first_baseline - (line_count - 1.0) * line_step;
+        let mask_bottom = (last_baseline - size * 0.3).min(y1) - 1.0;
 
         // Rectangle de masquage : couleur contrôlée, par défaut blanc.
         let bg = background.unwrap_or([1.0, 1.0, 1.0]);
@@ -551,54 +766,87 @@ impl Document {
                 bg[1],
                 bg[2],
                 x1 - 1.0,
-                y1 - 1.0,
+                mask_bottom,
                 w + 2.0,
-                h + 2.0)
+                (y2 + 1.0 - mask_bottom).max(1.0))
             .as_bytes(),
         );
 
-        // Texte de remplacement. La couleur est reposée explicitement : après
-        // le `Q` du masque, la couleur de remplissage courante est celle
-        // qu'avait laissée le contenu de la page, qui n'a rien à voir.
-        let ink = [
-            fragment.color[0] as f32 / 255.0,
-            fragment.color[1] as f32 / 255.0,
-            fragment.color[2] as f32 / 255.0,
-        ];
-        let safe = encode_pdf_literal(new_text);
-        content.extend_from_slice(
-            format!(
-                "BT\n{:.3} {:.3} {:.3} rg\n/YouPdfF1 {:.2} Tf\n{:.2} {:.2} Td\n",
-                ink[0],
-                ink[1],
-                ink[2],
-                fragment.font_size,
-                x1,
-                y1 + fragment.font_size * 0.2
-            )
-            .as_bytes(),
-        );
-        content.push(b'(');
-        content.extend_from_slice(&safe);
-        content.extend_from_slice(b") Tj\nET\n");
+        // 3. Texte de remplacement. La couleur est reposée explicitement :
+        //    après le `Q` du masque, la couleur de remplissage courante est
+        //    celle qu'avait laissée le contenu de la page, qui n'a rien à voir.
+        for (line_index, line) in lines.iter().enumerate() {
+            let width = estimate_text_width(line, style);
+            let dx = match style.align {
+                TextAlign::Left => 0.0,
+                TextAlign::Center => ((w - width) / 2.0).max(0.0),
+                TextAlign::Right => (w - width).max(0.0),
+            };
+            let baseline = first_baseline - line_index as f32 * line_step;
+            let x = x1 + dx;
+            // L'approche n'est écrite que si elle est demandée : un patch sans
+            // réglage garde le flux qu'il produisait avant l'inspecteur.
+            let spacing = if style.char_spacing == 0.0 {
+                String::new()
+            } else {
+                format!("{:.2} Tc\n", style.char_spacing)
+            };
+            content.extend_from_slice(
+                format!(
+                    "BT\n{:.3} {:.3} {:.3} rg\n/{} {:.2} Tf\n{spacing}{:.2} {:.2} Td\n",
+                    ink[0], ink[1], ink[2], font_name, size, x, baseline
+                )
+                .as_bytes(),
+            );
+            content.push(b'(');
+            content.extend_from_slice(&encode_pdf_literal(line));
+            content.extend_from_slice(b") Tj\nET\n");
+
+            // Souligné et barré se dessinent : le format texte de PDF n'a pas
+            // de trait sous le glyphe. Une ligne vide n'a rien à souligner :
+            // un trait d'un point trahirait le patch.
+            let rule = (size * 0.07).max(0.5);
+            let ruled = width > 0.1;
+            if style.underline && ruled {
+                let y = baseline - size * 0.14;
+                content.extend_from_slice(
+                    format!(
+                        "q\n{:.3} {:.3} {:.3} rg\n{:.2} {:.2} {:.2} {:.2} re\nf\nQ\n",
+                        ink[0], ink[1], ink[2], x, y, width.max(1.0), rule
+                    )
+                    .as_bytes(),
+                );
+            }
+            if style.strikeout && ruled {
+                let y = baseline + size * 0.28;
+                content.extend_from_slice(
+                    format!(
+                        "q\n{:.3} {:.3} {:.3} rg\n{:.2} {:.2} {:.2} {:.2} re\nf\nQ\n",
+                        ink[0], ink[1], ink[2], x, y, width.max(1.0), rule
+                    )
+                    .as_bytes(),
+                );
+            }
+        }
 
         let patch = Stream::new(Dictionary::new(), content);
         let patch_id = self.inner_mut().add_object(patch);
 
-        // 2. Police dédiée aux patchs (Helvetica + WinAnsi), indépendante
+        // 3. Police dédiée aux patchs (police standard + WinAnsi), indépendante
         //    des polices déjà présentes sur la page.
-        self.ensure_patch_font(page_id)?;
+        self.ensure_patch_font(page_id, base)?;
 
-        // 3. Concaténer le patch au flux de contenu.
+        // 4. Concaténer le patch au flux de contenu.
         self.append_to_page_content(page_id, patch_id)?;
 
         Ok(())
     }
 
-    /// Garantit qu'une police Helvetica est disponible dans le document.
+    /// Garantit qu'une police standard est disponible dans le document.
     ///
-    /// Retourne sa référence. Réutilise une police existante si elle
-    /// est déjà présente.
+    /// Le nom de ressource dépend du fichier de base : chaque variante
+    /// (gras, italique, famille) garde la sienne, sinon la seconde écraserait
+    /// la première. Réutilise la police si elle est déjà présente.
     /// Nom de ressource de la police posée par les patchs YouPDF.
     ///
     /// On n'utilise **jamais** le `/F1` de la page : cette police peut être
@@ -606,33 +854,62 @@ impl Document {
     /// en `Identity-H` (UTF-16) ou toute autre encodage. Y écrire des octets
     /// WinAnsi produit du texte illisible. Une police dédiée garantit
     /// l'encodage et n'écrase rien.
-    const PATCH_FONT_NAME: &[u8] = b"YouPdfF1";
-
-    /// Renvoie une Helvetica /WinAnsiEncoding dédiée aux patchs, créée une
-    /// seule fois par page.
-    fn ensure_patch_font(&mut self, page_id: (u32, u16)) -> Result<(u32, u16)> {
-        // Déjà posée sur cette page ?
-        if let Ok(fonts) = self
-            .inner()
-            .get_dictionary(page_id)
-            .and_then(|p| p.get(b"Resources"))
-            .and_then(|r| r.as_dict())
-            .and_then(|r| r.get(b"Font"))
-            .and_then(|f| f.as_dict())
-        {
-            if let Ok(Object::Reference(id)) = fonts.get(Self::PATCH_FONT_NAME) {
-                return Ok(*id);
+    fn ensure_patch_font(&mut self, page_id: (u32, u16), base_font: &str) -> Result<(u32, u16)> {
+        // Nom libre, ou nom déjà pris par **la même** variante. Le nom seul ne
+        // suffit pas : un document peut porter `/YouPdfF1` sur un autre fichier
+        // de base (patch d'une version antérieure, outil tiers). Dans ce cas on
+        // prend un nom suffixé plutôt que d'écraser une police dont d'autres
+        // textes se servent.
+        let base_name = patch_font_name(base_font);
+        let mut name = base_name.clone();
+        let mut suffix = 1u32;
+        loop {
+            let existing = self
+                .inner()
+                .get_dictionary(page_id)
+                .ok()
+                .and_then(|page| {
+                    page.get(b"Resources")
+                        .ok()
+                        .and_then(|resources| resources.as_dict().ok())
+                })
+                .and_then(|resources| {
+                    resources
+                        .get(b"Font")
+                        .ok()
+                        .and_then(|fonts| fonts.as_dict().ok())
+                })
+                .and_then(|fonts| fonts.get(name.as_bytes()).ok())
+                .and_then(|object| object.as_reference().ok());
+            let Some(id) = existing else {
+                break;
+            };
+            let matching = self
+                .inner()
+                .get_dictionary(id)
+                .ok()
+                .and_then(|font| {
+                    font.get(b"BaseFont")
+                        .ok()
+                        .and_then(|base| base.as_name().ok())
+                        .map(|base| base == base_font.as_bytes())
+                })
+                .unwrap_or(false);
+            if matching {
+                return Ok(id);
             }
+            suffix += 1;
+            name = format!("{base_name}{suffix}");
         }
 
         let font = Dictionary::from_iter(vec![
             ("Type", Object::Name(b"Font".to_vec())),
             ("Subtype", Object::Name(b"Type1".to_vec())),
-            ("BaseFont", Object::Name(b"Helvetica".to_vec())),
+            ("BaseFont", Object::Name(base_font.as_bytes().to_vec())),
             ("Encoding", Object::Name(b"WinAnsiEncoding".to_vec())),
         ]);
         let font_id = self.inner_mut().add_object(Object::Dictionary(font));
-        self.link_font_to_page(page_id, "YouPdfF1", font_id)?;
+        self.link_font_to_page(page_id, &name, font_id)?;
         Ok(font_id)
     }
 

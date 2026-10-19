@@ -56,7 +56,10 @@ pub use create::{blank_document, document_from_images};
 pub use crop::CropMargins;
 pub use compress::CompressionReport;
 pub use document::{Document, PageBoxes, PageView};
-pub use edit::{ImageInfo, TextFragment, TextSpan, encode_pdf_literal};
+pub use edit::{
+    encode_pdf_literal, estimate_text_width, patch_font_name, ImageInfo, PatchFont, TextAlign,
+    TextFragment, TextSpan, TextStyle,
+};
 pub use extract::{ExtractedTable, KeyValue};
 pub use forms::{FieldProperties, FormDataFormat, FormField, FormFieldKind, NewFormField};
 pub use measure::{MeasureKind, Measurement};
