@@ -34,7 +34,7 @@ use youpdf_core::render::NullRenderer;
 use youpdf_core::ocr::{make_searchable, TesseractEngine};
 use youpdf_core::{
     blank_document, document_from_images, export_comments, fold_case, Annotation, AnnotationKind,
-    AnnotationState, AnnotationStyle, AttachmentInfo, Background, Bates, BatesPosition,
+    AnnotationState, AnnotationStyle, AttachmentInfo, Background, BandSlots, Bates, BatesPosition,
     CommentFormat, ComparisonReport, Conformance, CropMargins, DifferenceKind, Document,
     EncryptionOptions, EncryptionStrength, ExtractedTable, FieldProperties, FormDataFormat,
     FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, MeasureKind, Measurement,
@@ -1174,6 +1174,24 @@ pub struct YouPdfApp {
     batch_protect: bool,
     batch_flatten: bool,
     batch_report: String,
+    /// Format Office de conversion du lot (`None` : pas de conversion).
+    batch_convert: Option<OfficeFormat>,
+    /// Pages à retirer de chaque fichier (« 1-2, 5 »).
+    batch_remove_pages: String,
+    /// Texte du filigrane appliqué au lot.
+    batch_watermark_text: String,
+    /// Texte centré d'en-tête ou de pied de page appliqué au lot.
+    batch_header_text: String,
+    /// Préfixe Bates, appliqué en continu sur tout le lot.
+    batch_bates_prefix: String,
+    batch_bates_start: u32,
+    /// Fusionner tous les fichiers en un seul document.
+    batch_combine: bool,
+    /// Préfixe et suffixe ajoutés au nom de chaque sortie.
+    batch_prefix: String,
+    batch_suffix: String,
+    /// Envoyer chaque fichier à l'imprimante système.
+    batch_print: bool,
     /// Lignes du lot en cours, envoyées par le fil de travail.
     batch_rx: Option<std::sync::mpsc::Receiver<String>>,
     /// Vrai tant qu'un lot tourne.
@@ -1491,6 +1509,16 @@ impl YouPdfApp {
             batch_protect: false,
             batch_flatten: false,
             batch_report: String::new(),
+            batch_convert: None,
+            batch_remove_pages: String::new(),
+            batch_watermark_text: String::new(),
+            batch_header_text: String::new(),
+            batch_bates_prefix: "DOC-".to_string(),
+            batch_bates_start: 1,
+            batch_combine: false,
+            batch_prefix: String::new(),
+            batch_suffix: String::new(),
+            batch_print: false,
             batch_rx: None,
             batch_running: false,
             annot_tool: None,
@@ -9308,6 +9336,7 @@ impl YouPdfApp {
         }
         let mut open = true;
         let mut add_files = false;
+        let mut add_folder = false;
         let mut choose_dir = false;
         let mut clear = false;
         let mut run = false;
@@ -9328,6 +9357,9 @@ impl YouPdfApp {
                 ui.horizontal(|ui| {
                     if ui.button("Add PDFs…").clicked() {
                         add_files = true;
+                    }
+                    if ui.button("Add folder…").clicked() {
+                        add_folder = true;
                     }
                     if ui.button("Clear").clicked() {
                         clear = true;
@@ -9372,6 +9404,76 @@ impl YouPdfApp {
                     &mut self.batch_flatten,
                     "Write a copy with the annotations flattened",
                 );
+                ui.checkbox(&mut self.batch_combine, "Combine every file into one PDF");
+                ui.checkbox(&mut self.batch_print, "Send each file to the system printer");
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Convert").size(11.0).color(pal().muted));
+                    let current = self.batch_convert;
+                    egui::ComboBox::from_id_salt("batch-convert")
+                        .selected_text(
+                            current
+                                .map(|format| format.display_name().to_owned())
+                                .unwrap_or_else(|| "None".to_owned()),
+                        )
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(current.is_none(), "None").clicked() {
+                                self.batch_convert = None;
+                            }
+                            for format in OfficeFormat::ALL {
+                                if ui
+                                    .selectable_label(current == Some(format), format.display_name())
+                                    .clicked()
+                                {
+                                    self.batch_convert = Some(format);
+                                }
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Remove pages").size(11.0).color(pal().muted));
+                    ui.add(
+                        TextEdit::singleline(&mut self.batch_remove_pages)
+                            .hint_text("1-2, 5")
+                            .desired_width(120.0),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Watermark").size(11.0).color(pal().muted));
+                    ui.add(
+                        TextEdit::singleline(&mut self.batch_watermark_text)
+                            .hint_text("CONFIDENTIAL")
+                            .desired_width(160.0),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Header/footer").size(11.0).color(pal().muted));
+                    ui.add(
+                        TextEdit::singleline(&mut self.batch_header_text)
+                            .hint_text("My Company")
+                            .desired_width(160.0),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Bates prefix").size(11.0).color(pal().muted));
+                    ui.add(
+                        TextEdit::singleline(&mut self.batch_bates_prefix).desired_width(80.0),
+                    );
+                    ui.label(RichText::new("start").size(11.0).color(pal().muted));
+                    ui.add(egui::DragValue::new(&mut self.batch_bates_start).range(1..=999_999));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Output name").size(11.0).color(pal().muted));
+                    ui.add(
+                        TextEdit::singleline(&mut self.batch_prefix)
+                            .hint_text("prefix")
+                            .desired_width(90.0),
+                    );
+                    ui.add(
+                        TextEdit::singleline(&mut self.batch_suffix)
+                            .hint_text("suffix")
+                            .desired_width(90.0),
+                    );
+                });
                 ui.add_space(8.0);
                 if ui
                     .add_enabled(
@@ -9406,6 +9508,29 @@ impl YouPdfApp {
                 .pick_files()
             {
                 for path in paths {
+                    if !self.batch_files.contains(&path) {
+                        self.batch_files.push(path);
+                    }
+                }
+            }
+        }
+        if add_folder {
+            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                let mut found: Vec<PathBuf> = std::fs::read_dir(&folder)
+                    .map(|entries| {
+                        entries
+                            .filter_map(|entry| entry.ok())
+                            .map(|entry| entry.path())
+                            .filter(|path| {
+                                path.extension()
+                                    .map(|ext| ext.eq_ignore_ascii_case("pdf"))
+                                    .unwrap_or(false)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                found.sort();
+                for path in found {
                     if !self.batch_files.contains(&path) {
                         self.batch_files.push(path);
                     }
@@ -9454,6 +9579,16 @@ impl YouPdfApp {
             protect: self.batch_protect,
             flatten: self.batch_flatten,
             protect_options: self.protect.clone(),
+            convert: self.batch_convert,
+            remove_pages: self.batch_remove_pages.clone(),
+            watermark_text: self.batch_watermark_text.clone(),
+            header_text: self.batch_header_text.clone(),
+            bates_prefix: self.batch_bates_prefix.clone(),
+            bates_start: self.batch_bates_start,
+            combine: self.batch_combine,
+            prefix: self.batch_prefix.clone(),
+            suffix: self.batch_suffix.clone(),
+            print: self.batch_print,
         };
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || job.run(&tx));
@@ -12353,6 +12488,38 @@ fn csv_cell(value: &str) -> String {
 
 /// Un lot à traiter : les fichiers, le dossier de sortie et les opérations
 /// cochées.
+/// Lit « 1-3, 7 » en numéros de page bornés au document.
+fn parse_page_numbers(text: &str, total: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    for part in text.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        match part.split_once('-') {
+            Some((first, last)) => {
+                if let (Ok(first), Ok(last)) = (
+                    first.trim().parse::<usize>(),
+                    last.trim().parse::<usize>(),
+                ) {
+                    for number in first..=last.min(total) {
+                        out.push(number);
+                    }
+                }
+            }
+            None => {
+                if let Ok(number) = part.parse::<usize>() {
+                    out.push(number);
+                }
+            }
+        }
+    }
+    out.retain(|number| *number >= 1 && *number <= total);
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 struct BatchJob {
     files: Vec<PathBuf>,
     dir: PathBuf,
@@ -12362,6 +12529,16 @@ struct BatchJob {
     protect: bool,
     flatten: bool,
     protect_options: EncryptionOptions,
+    convert: Option<OfficeFormat>,
+    remove_pages: String,
+    watermark_text: String,
+    header_text: String,
+    bates_prefix: String,
+    bates_start: u32,
+    combine: bool,
+    prefix: String,
+    suffix: String,
+    print: bool,
 }
 
 impl BatchJob {
@@ -12372,6 +12549,40 @@ impl BatchJob {
     fn run(self, tx: &std::sync::mpsc::Sender<String>) {
         let mut done = 0usize;
         let mut failed = 0usize;
+        let mut bates_next = self.bates_start.max(1);
+
+        if self.combine && !self.files.is_empty() {
+            let out = self.dir.join(format!("{}combined{}", self.prefix, ".pdf"));
+            match Document::open(&self.files[0]) {
+                Ok(mut merged) => {
+                    let mut ok = true;
+                    for path in self.files.iter().skip(1) {
+                        let after = merged.page_count();
+                        if let Err(err) = merged.insert_pages_after(after, path) {
+                            ok = false;
+                            let _ = tx.send(format!("combine: {err}"));
+                            break;
+                        }
+                    }
+                    if ok {
+                        match merged.save(&out) {
+                            Ok(()) => {
+                                let _ = tx.send(format!("combined: {}", out.display()));
+                            }
+                            Err(err) => {
+                                failed += 1;
+                                let _ = tx.send(format!("combine: {err}"));
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    failed += 1;
+                    let _ = tx.send(format!("combine: {err}"));
+                }
+            }
+        }
+
         for path in &self.files {
             let stem = path
                 .file_stem()
@@ -12381,6 +12592,7 @@ impl BatchJob {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let stem = format!("{}{}{}", self.prefix, stem, self.suffix);
             let mut doc = match Document::open(path) {
                 Ok(doc) => doc,
                 Err(err) => {
@@ -12390,6 +12602,58 @@ impl BatchJob {
                 }
             };
             let mut errors: Vec<String> = Vec::new();
+            let mut edited = false;
+            if let Some(format) = self.convert {
+                let out = self.dir.join(format!("{stem}.{}", format.extension()));
+                if let Err(err) = doc.export_office(&out, format) {
+                    errors.push(format!("convert: {err}"));
+                }
+            }
+            let removable = parse_page_numbers(&self.remove_pages, doc.page_count());
+            if !removable.is_empty() {
+                match doc.delete_pages(&removable) {
+                    Ok(_) => edited = true,
+                    Err(err) => errors.push(format!("remove pages: {err}")),
+                }
+            }
+            if !self.watermark_text.trim().is_empty() {
+                let mut watermark = Watermark::default();
+                watermark.text = self.watermark_text.clone();
+                watermark.tiled = true;
+                match doc.add_text_watermark(&watermark) {
+                    Ok(_) => edited = true,
+                    Err(err) => errors.push(format!("watermark: {err}")),
+                }
+            }
+            if !self.header_text.trim().is_empty() {
+                let hf = HeaderFooter {
+                    header: BandSlots {
+                        center: self.header_text.clone(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                match doc.add_header_footer(&hf) {
+                    Ok(_) => edited = true,
+                    Err(err) => errors.push(format!("header/footer: {err}")),
+                }
+            }
+            if !self.bates_prefix.trim().is_empty() {
+                let prefix = self.bates_prefix.clone();
+                let start = bates_next;
+                let bates = Bates {
+                    prefix,
+                    start,
+                    ..Default::default()
+                };
+                match doc.add_bates(&bates) {
+                    Ok(_) => {
+                        bates_next = start + doc.page_count() as u32;
+                        edited = true;
+                    }
+                    Err(err) => errors.push(format!("bates: {err}")),
+                }
+            }
             if self.text {
                 let out = self.dir.join(format!("{stem}.txt"));
                 match doc.export_text(TextFormat::Plain) {
@@ -12433,6 +12697,19 @@ impl BatchJob {
                         }
                     }
                     Err(err) => errors.push(format!("flatten: {err}")),
+                }
+            }
+            if edited && !(self.compress || self.protect || self.flatten) {
+                let out = self.dir.join(format!("{stem}-batch.pdf"));
+                if let Err(err) = doc.save(&out) {
+                    errors.push(format!("save: {err}"));
+                }
+            }
+            if self.print {
+                match std::process::Command::new("lp").arg(path).status() {
+                    Ok(status) if status.success() => {}
+                    Ok(status) => errors.push(format!("print: lp exited with {status}")),
+                    Err(err) => errors.push(format!("print: {err}")),
                 }
             }
             if errors.is_empty() {

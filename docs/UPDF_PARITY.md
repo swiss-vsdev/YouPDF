@@ -58,8 +58,7 @@ Unchecked below = still open. The plan document is the authoritative task list.
 
 ## 4. File & Batch Operations
 *   **UPDF:** `Batch Processing` tool (Convert, OCR, Combine, Insert, Create, Watermark, Background, Header/Footer, Bates, Compress, Encrypt, Remove, Print).
-*   **YouPDF:** Basic batch interface implemented; lacks comprehensive sub-tool coverage.
-*   **Action:** Extend batch infrastructure to support all UPDF batch operations, specifically adding `Combine` (multi-PDF), `Insert`, `Remove`, and `Print`.
+*   **YouPDF:** Batch window with file queue (files or a whole folder), output folder, prefix/suffix naming, and operations: Office conversion (Word/Excel/PowerPoint), text export, page PNG export, page removal, watermark, header/footer, continuous Bates numbering across the queue, compression, protection, annotation flattening, combine-into-one, and printing through the system `lp` command. The work runs on a worker thread and streams one status line per file.
 
 ## 5. Advanced Tools
 *   **OCR:** UPDF offers 38 languages, 3 output modes (Editable, Searchable, Text/Pictures).
