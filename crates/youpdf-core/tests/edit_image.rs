@@ -328,6 +328,79 @@ fn rotation_antihoraire_amene_la_gauche_en_bas() {
     );
 }
 
+/// Déplacer une image n'est qu'un déplacement d'origine : elle atterrit
+/// ailleurs, sans réencodage des pixels.
+#[test]
+fn deplacer_une_image_la_pose_ailleurs() {
+    let mut doc = document_avec_image(&moities_gauche_droite(), 8, 8);
+    let images = doc.extract_images(1).expect("liste des images");
+    let [a, b, c, d, e, f] = doc
+        .image_matrix(&images[0])
+        .expect("matrice")
+        .expect("une matrice");
+    doc.set_image_matrix(&images[0], [a, b, c, d, e + 100.0, f - 60.0])
+        .expect("déplacement");
+
+    let [x1, y1, x2, y2] = doc
+        .image_rect(&images[0])
+        .expect("boîte")
+        .expect("une boîte");
+    assert!((x1 - 250.0).abs() < 0.5, "gauche : {x1}");
+    assert!((x2 - 450.0).abs() < 0.5, "droite : {x2}");
+    assert!((y1 - 240.0).abs() < 0.5, "bas : {y1}");
+    assert!((y2 - 440.0).abs() < 0.5, "haut : {y2}");
+
+    // Le rendu suit : le rouge a quitté le tiers gauche de la page.
+    let renderer = PdfiumRenderer::load().expect("pdfium");
+    let bitmap = renderer
+        .render_page(&doc, 1, &RenderOptions::default())
+        .expect("rendu");
+    let (rouge_x, _) = centroide(&bitmap, true).expect("moitié rouge");
+    assert!(
+        rouge_x > 275.0,
+        "le rouge devrait avoir suivi le déplacement : x={rouge_x}"
+    );
+}
+
+/// Redimensionner une image allonge ses deux vecteurs : la boîte double et la
+/// surface quadruple.
+#[test]
+fn redimensionner_une_image_etire_la_boite() {
+    let mut doc = document_avec_image(&moities_gauche_droite(), 8, 8);
+    let images = doc.extract_images(1).expect("liste des images");
+    let [a, b, c, d, e, f] = doc
+        .image_matrix(&images[0])
+        .expect("matrice")
+        .expect("une matrice");
+    // Coin bas-gauche inchangé, vecteurs doublés : la boîte va de (150, 300)
+    // à (550, 700).
+    doc.set_image_matrix(&images[0], [a * 2.0, b * 2.0, c * 2.0, d * 2.0, e, f])
+        .expect("redimensionnement");
+
+    let [x1, y1, x2, y2] = doc
+        .image_rect(&images[0])
+        .expect("boîte")
+        .expect("une boîte");
+    assert!(
+        (x2 - x1 - 400.0).abs() < 0.5 && (y2 - y1 - 400.0).abs() < 0.5,
+        "boîte : {x1} {y1} {x2} {y2}"
+    );
+
+    let renderer = PdfiumRenderer::load().expect("pdfium");
+    let bitmap = renderer
+        .render_page(&doc, 1, &RenderOptions::default())
+        .expect("rendu");
+    let rouges = bitmap
+        .pixels
+        .chunks_exact(4)
+        .filter(|px| px[0] as i32 - px[2] as i32 > 60 && px[0] as i32 - px[1] as i32 > 60)
+        .count();
+    assert!(
+        rouges > 30_000,
+        "l'image redimensionnée devrait couvrir plus de surface : {rouges}"
+    );
+}
+
 /// Le miroir horizontal amène la moitié gauche à droite.
 #[test]
 fn miroir_horizontal_amene_la_gauche_a_droite() {

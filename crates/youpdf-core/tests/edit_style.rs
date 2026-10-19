@@ -5,7 +5,9 @@
 //! dans le document pour rester au plus près de ce que fait l'application.
 
 use lopdf::{dictionary, Document as LopdfDoc, Object, Stream};
-use youpdf_core::{Document, PatchFont, TextAlign, TextStyle};
+use youpdf_core::{
+    Document, PageBitmap, PatchFont, PdfiumRenderer, RenderOptions, Renderer, TextAlign, TextStyle,
+};
 
 /// PDF d'une page portant le texte `content`.
 fn pdf_with(content: &str) -> Vec<u8> {
@@ -347,4 +349,57 @@ fn unstyled_call_matches_the_styled_default() {
     assert!(plain.contains("/YouPdfF1 12.00 Tf"), "police historique");
     assert!(styled.contains("/YouPdfF1 12.00 Tf"), "police par défaut");
     assert_eq!(tdf_x(&plain), tdf_x(&styled));
+}
+
+/// Pixels d'encre dans une bande du repère page : `x` et `y` sont les bornes
+/// basses, le rendu par défaut se fait à 72 ppp (un point par pixel).
+fn encre(bitmap: &PageBitmap, [x1, x2]: [f32; 2], [y1, y2]: [f32; 2]) -> usize {
+    let largeur = bitmap.width as f32;
+    let mut compte = 0;
+    for (index, px) in bitmap.pixels.chunks_exact(4).enumerate() {
+        let x = (index as f32) % largeur;
+        let y = bitmap.height as f32 - (index as f32 / largeur);
+        if x < x1 || x > x2 || y < y1 || y > y2 {
+            continue;
+        }
+        // Encre = pixel nettement plus sombre que le fond blanc.
+        let somme = px[0] as u32 + px[1] as u32 + px[2] as u32;
+        if somme < 600 {
+            compte += 1;
+        }
+    }
+    compte
+}
+
+/// Déplacer un bloc écrit le texte à sa nouvelle place et efface l'ancienne :
+/// sans le masque de la réunion, le déplacement laisserait un doublon.
+#[test]
+fn moving_a_text_block_erases_the_old_spot() {
+    let (mut doc, fragment) = document_with_fragment();
+    let [x1, y1, x2, y2] = fragment.rect;
+    let target = [x1, y1 - 200.0, x2, y2 - 200.0];
+    let style = TextStyle::from_fragment(&fragment);
+    doc.replace_text_fragment_at(&fragment, "Invoice 12345", target, None, &style)
+        .expect("déplacement");
+
+    let Some(bitmap) = PdfiumRenderer::load()
+        .ok()
+        .and_then(|renderer| renderer.render_page(&doc, 1, &RenderOptions::default()).ok())
+    else {
+        eprintln!("pdfium indisponible : test ignoré");
+        return;
+    };
+
+    let bande = |bas: f32| [bas, bas + style.size.max(12.0)];
+    let colonne = [x1 - 8.0, x2 + 8.0];
+    let nouveau = encre(&bitmap, colonne, bande(target[1]));
+    let ancien = encre(&bitmap, colonne, bande(y1));
+    assert!(
+        nouveau > 50,
+        "le texte déplacé n'apparaît pas à sa nouvelle place ({nouveau} pixels)"
+    );
+    assert!(
+        ancien * 4 < nouveau,
+        "l'ancien emplacement n'a pas été effacé ({ancien} pixels contre {nouveau})"
+    );
 }
