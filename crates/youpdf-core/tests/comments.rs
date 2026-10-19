@@ -327,3 +327,57 @@ fn apparence_surlignage_multi_lignes() {
     let content = String::from_utf8(ann.appearance_content().expect("apparence")).expect("utf8");
     assert_eq!(content.matches("re f").count(), 2);
 }
+
+/// Le lissage Catmull-Rom garde les extrémités et densifie le tracé.
+#[test]
+fn lissage_du_crayon_garde_les_extremites() {
+    let raw = vec![[0.0, 0.0], [10.0, 10.0], [20.0, 0.0], [30.0, 10.0]];
+    let smooth = youpdf_core::annotate::smooth_polyline(&raw, 4);
+
+    assert!(smooth.len() > raw.len(), "le tracé doit être densifié");
+    assert_eq!(smooth[0], raw[0], "premier point inchangé");
+    assert_eq!(*smooth.last().unwrap(), raw[raw.len() - 1], "dernier point");
+
+    let mut ann = Annotation::new(1, AnnotationKind::Ink, [0.0, 0.0, 30.0, 10.0]);
+    ann.add_ink_stroke(raw.clone());
+    ann.smooth_ink(4);
+    assert!(ann.ink_points[0].len() > raw.len());
+    assert_eq!(ann.ink_points[0][0], [0.0, 0.0]);
+}
+
+/// La gomme mode segment coupe un trait en deux et jette le milieu.
+#[test]
+fn gomme_segment_coupe_le_trait() {
+    let mut ann = Annotation::new(1, AnnotationKind::Ink, [0.0, 0.0, 100.0, 20.0]);
+    ann.add_ink_stroke((0..=20).map(|i| [i as f32 * 5.0, 10.0]).collect());
+    assert_eq!(ann.ink_points.len(), 1);
+
+    // Le segment vertical coupe au milieu, autour de x = 50.
+    let removed = ann.erase_ink_segment([51.0, 0.0], [51.0, 20.0], 4.0);
+    assert!(removed > 0, "des points doivent disparaître");
+    assert_eq!(ann.ink_points.len(), 2, "le trait doit être coupé en deux");
+
+    let hors = ann.erase_ink_segment([51.0, 0.0], [51.0, 20.0], 4.0);
+    assert_eq!(hors, 0, "un second passage ne retire plus rien");
+}
+
+/// La gomme mode segment qui couvre tout le trait le fait disparaître.
+#[test]
+fn gomme_segment_qui_couvre_tout_supprime_le_trait() {
+    let mut ann = Annotation::new(1, AnnotationKind::Ink, [0.0, 0.0, 100.0, 20.0]);
+    ann.add_ink_stroke(vec![[10.0, 10.0], [12.0, 10.0], [14.0, 10.0]]);
+
+    let removed = ann.erase_ink_segment([0.0, 10.0], [100.0, 10.0], 20.0);
+    assert_eq!(removed, 3);
+    assert!(ann.ink_points.is_empty());
+}
+
+/// La gomme mode trait touche le tracé, pas sa boîte englobante.
+#[test]
+fn gomme_trait_vise_le_trace() {
+    let mut ann = Annotation::new(1, AnnotationKind::Ink, [0.0, 0.0, 100.0, 100.0]);
+    ann.add_ink_stroke(vec![[0.0, 0.0], [100.0, 100.0]]);
+
+    assert!(ann.ink_hit([50.0, 50.0], 2.0), "sur le trait");
+    assert!(!ann.ink_hit([50.0, 10.0], 2.0), "dans la boîte, hors du trait");
+}
