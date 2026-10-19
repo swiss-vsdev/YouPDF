@@ -40,6 +40,8 @@ use youpdf_core::{
     TextStyle, Watermark, STAMP_NAMES, smooth_polyline,
 };
 
+use youpdf_core::annotate::BorderDash;
+
 // --------------------------------------------------------------------------
 // Palette
 // --------------------------------------------------------------------------
@@ -2316,6 +2318,9 @@ impl YouPdfApp {
             opacity: 1.0,
             line_width: self.annot_width,
             font_size: 12.0,
+            fill: None,
+            dash: BorderDash::Solid,
+            cloudy: false,
         };
         let _ = &mut style;
         style.opacity = match kind {
@@ -13057,6 +13062,8 @@ fn annot_label(kind: AnnotationKind) -> &'static str {
         AnnotationKind::Circle => "Circle",
         AnnotationKind::Line => "Line",
         AnnotationKind::Arrow => "Arrow",
+        AnnotationKind::Polygon => "Polygon",
+        AnnotationKind::PolyLine => "Polyligne",
         AnnotationKind::Ink => "Ink",
         AnnotationKind::Stamp => "Stamp",
         AnnotationKind::Link => "Link",
