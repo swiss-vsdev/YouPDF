@@ -40,6 +40,12 @@ pub enum FormFieldKind {
     MultiChoice,
     /// Champ de signature.
     Signature,
+    /// Bouton poussoir (`/Btn` avec le bit 17).
+    Button,
+    /// Champ texte formaté en date (icône calendrier dans l'interface).
+    Date,
+    /// Champ code-barres (champ texte à police code-barres).
+    Barcode,
     /// Type inconnu ou non supporté.
     Other(String),
 }
@@ -65,8 +71,20 @@ impl FormFieldKind {
             FormFieldKind::Choice => "Liste",
             FormFieldKind::MultiChoice => "Liste multiple",
             FormFieldKind::Signature => "Signature",
+            FormFieldKind::Button => "Bouton",
+            FormFieldKind::Date => "Date",
+            FormFieldKind::Barcode => "Code-barres",
             FormFieldKind::Other(_) => "Autre",
         }
+    }
+}
+
+/// Un nombre PDF, entier ou réel, en `f32`.
+fn number_f32(object: &Object) -> Option<f32> {
+    match object {
+        Object::Integer(value) => Some(*value as f32),
+        Object::Real(value) => Some(*value),
+        _ => object.as_i64().ok().map(|value| value as f32),
     }
 }
 
@@ -246,7 +264,7 @@ impl Document {
                 if flags & 0x8000 != 0 {
                     kind = FormFieldKind::Radio;
                 } else if flags & 0x10000 != 0 {
-                    kind = FormFieldKind::Other("Bouton".to_string());
+                    kind = FormFieldKind::Button;
                 }
             }
 
@@ -323,11 +341,7 @@ impl Document {
                 dict.get(b"Rect")
                     .and_then(|o| o.as_array())
                     .and_then(|arr| {
-                        let vals: Vec<f32> = arr
-                            .iter()
-                            .filter_map(|o| o.as_i64().ok())
-                            .map(|v| v as f32)
-                            .collect();
+                        let vals: Vec<f32> = arr.iter().filter_map(number_f32).collect();
                         if vals.len() >= 4 {
                             Ok(Some([vals[0], vals[1], vals[2], vals[3]]))
                         } else {
@@ -426,6 +440,8 @@ impl Document {
             FormFieldKind::Radio => 1 << 15,
             FormFieldKind::Choice => 1 << 17,
             FormFieldKind::MultiChoice => (1 << 17) | (1 << 20),
+            // Bit 17 : bouton poussoir (pas d'état coché).
+            FormFieldKind::Button => 1 << 16,
             _ => 0,
         };
         if field.read_only {
@@ -438,6 +454,10 @@ impl Document {
             FormFieldKind::Checkbox | FormFieldKind::Radio => b"Btn",
             FormFieldKind::Choice | FormFieldKind::MultiChoice => b"Ch",
             FormFieldKind::Signature => b"Sig",
+            // Un bouton poussoir reste un `/Btn` : le drapeau 17 suffit.
+            FormFieldKind::Button => b"Btn",
+            // Un code-barres PDF est un champ texte à police dédiée.
+            FormFieldKind::Date | FormFieldKind::Barcode => b"Tx",
             FormFieldKind::Other(ref other) => {
                 return Err(Error::InvalidInput(format!(
                     "type de champ non créable : {other}"
@@ -743,6 +763,68 @@ impl FormDataFormat {
 }
 
 impl Document {
+    /// Remet tous les champs à leur valeur par défaut (`/DV`), ou les vide.
+    ///
+    /// Renvoie le nombre de champs touchés.
+    pub fn reset_form_fields(&mut self) -> Result<usize> {
+        let fields = self.read_form_fields();
+        let mut count = 0;
+        for field in fields {
+            if field.read_only {
+                continue;
+            }
+            let default = self
+                .inner()
+                .get_object(field.object_id)
+                .ok()
+                .and_then(|obj| obj.as_dict().ok())
+                .and_then(|dict| dict.get(b"DV").ok().cloned())
+                .and_then(|obj| match obj {
+                    Object::String(bytes, _) => Some(crate::structure::decode_pdf_text(&bytes)),
+                    Object::Name(name) => Some(crate::structure::decode_pdf_text(&name)),
+                    _ => None,
+                });
+            let value = match field.kind {
+                FormFieldKind::Checkbox | FormFieldKind::Radio | FormFieldKind::Button => {
+                    default.unwrap_or_else(|| "Off".to_string())
+                }
+                _ => default.unwrap_or_default(),
+            };
+            if self.fill_form_field(&field, &value).is_ok() {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
+    /// Déplace et redimensionne un champ de formulaire.
+    ///
+    /// Met à jour le `/Rect` du widget et, quand le champ porte ses propres
+    /// limites, celui du dictionnaire de champ. L'apparence est régénérée par
+    /// les lecteurs (`/NeedAppearances` reste vrai).
+    pub fn set_form_field_rect(&mut self, field: &FormField, rect: [f32; 4]) -> Result<()> {
+        if rect[2] - rect[0] < 2.0 || rect[3] - rect[1] < 2.0 {
+            return Err(Error::InvalidInput(
+                "un champ doit mesurer au moins 2 × 2 points".to_string(),
+            ));
+        }
+        let array = vec![
+            Object::Real(rect[0]),
+            Object::Real(rect[1]),
+            Object::Real(rect[2]),
+            Object::Real(rect[3]),
+        ];
+        let obj = self
+            .inner_mut()
+            .get_object_mut(field.object_id)
+            .map_err(|e| Error::Pdf(format!("champ « {} » : {e}", field.name)))?;
+        let dict = obj
+            .as_dict_mut()
+            .map_err(|e| Error::Pdf(format!("champ « {} » : {e}", field.name)))?;
+        dict.set("Rect", Object::Array(array));
+        Ok(())
+    }
+
     /// Applique `props` au champ dont le nom actuel est `field.name`.
     pub fn update_form_field(&mut self, field: &FormField, props: &FieldProperties) -> Result<()> {
         let object_id = self

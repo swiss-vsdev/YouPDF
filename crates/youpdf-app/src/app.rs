@@ -829,6 +829,9 @@ enum FormKind {
     Choice,
     MultiChoice,
     Signature,
+    Button,
+    Date,
+    Barcode,
 }
 
 impl FormKind {
@@ -841,6 +844,9 @@ impl FormKind {
             FormKind::Choice => "Dropdown",
             FormKind::MultiChoice => "List",
             FormKind::Signature => "Signature field",
+            FormKind::Button => "Button",
+            FormKind::Date => "Date field",
+            FormKind::Barcode => "Barcode",
         }
     }
 }
@@ -1262,6 +1268,8 @@ pub struct YouPdfApp {
     form_hover: Option<usize>,
     /// Teinte bleue sur tous les champs remplissables.
     form_highlight: bool,
+    /// Champs sélectionnés dans le mode Préparer un formulaire.
+    form_selection: BTreeSet<usize>,
     /// Format choisi pour l'échange de données de formulaire.
     form_data_format: FormDataFormat,
     /// Fond du canevas choisi dans Aspect.
@@ -1364,6 +1372,7 @@ impl YouPdfApp {
             form_editing: None,
             form_hover: None,
             form_highlight: true,
+            form_selection: BTreeSet::new(),
             inspector_size: None,
             inspector_text_ui: TextStyleUi::default(),
             selected_image: None,
@@ -3183,6 +3192,9 @@ impl YouPdfApp {
                 Some(3) => ToolAction::FormField(FormKind::Radio),
                 Some(4) => ToolAction::FormField(FormKind::Choice),
                 Some(5) => ToolAction::FormField(FormKind::MultiChoice),
+                Some(6) => ToolAction::FormField(FormKind::Button),
+                Some(7) => ToolAction::FormField(FormKind::Date),
+                Some(8) => ToolAction::FormField(FormKind::Barcode),
                 Some(9) => ToolAction::FormField(FormKind::Signature),
                 _ => ToolAction::None,
             };
@@ -6200,6 +6212,22 @@ impl YouPdfApp {
             FormKind::Signature => {
                 let mut field = NewFormField::text(page as u32, rect, name);
                 field.kind = FormFieldKind::Signature;
+                field
+            }
+            FormKind::Button => {
+                let mut field = NewFormField::text(page as u32, rect, name);
+                field.kind = FormFieldKind::Button;
+                field.value = Some("Button".to_string());
+                field
+            }
+            FormKind::Date => {
+                let mut field = NewFormField::text(page as u32, rect, name);
+                field.kind = FormFieldKind::Date;
+                field
+            }
+            FormKind::Barcode => {
+                let mut field = NewFormField::text(page as u32, rect, name);
+                field.kind = FormFieldKind::Barcode;
                 field
             }
         }
@@ -9419,6 +9447,7 @@ impl YouPdfApp {
         let mut pending_image: Option<(usize, [f32; 2])> = None;
         let mut pending_redact: Option<(usize, [f32; 4])> = None;
         let mut pending_form: Option<(usize, [f32; 4], FormKind)> = None;
+        let mut pending_form_select: Option<(usize, [f32; 4])> = None;
         let mut pending_measure: Option<(usize, [f32; 2], [f32; 2])> = None;
         let redact_marks = &self.redact_regions;
         let search_rects = &self.search_rects;
@@ -9448,6 +9477,7 @@ impl YouPdfApp {
         let form_highlight = self.form_highlight;
         let form_editing = self.form_editing;
         let form_hover = self.form_hover;
+        let form_selection = self.form_selection.clone();
         let mut form_draft = self.form_edit.take();
         let mut form_commit = false;
         let mut form_cancel = false;
@@ -9708,8 +9738,10 @@ impl YouPdfApp {
                                         page_rect.max.y - y1.min(y2) * scale,
                                     ),
                                 );
+                                let selected = form_selection.contains(&index);
                                 let active = form_editing == Some(index)
-                                    || form_hover == Some(index);
+                                    || form_hover == Some(index)
+                                    || selected;
                                 ui.painter().rect_filled(
                                     rect,
                                     Rounding::same(2.0),
@@ -9724,8 +9756,12 @@ impl YouPdfApp {
                                     rect,
                                     Rounding::same(2.0),
                                     Stroke::new(
-                                        if active { 1.5 } else { 1.0 },
-                                        Color32::from_rgb(70, 130, 220),
+                                        if selected { 2.0 } else if active { 1.5 } else { 1.0 },
+                                        if selected {
+                                            Color32::from_rgb(230, 120, 40)
+                                        } else {
+                                            Color32::from_rgb(70, 130, 220)
+                                        },
                                     ),
                                 );
                             }
@@ -10444,25 +10480,69 @@ impl YouPdfApp {
                                     let from = drag_from.take();
                                     let to = drag_to.take();
                                     if let (Some(a), Some(b)) = (from, to) {
-                                        pending_form = Some((
+                                        let rect = [
+                                            a[0].min(b[0]),
+                                            a[1].min(b[1]),
+                                            a[0].max(b[0]),
+                                            a[1].max(b[1]),
+                                        ];
+                                        let (rect, _) = snap_form_rect(
+                                            rect,
+                                            &tab.forms,
                                             page as usize,
-                                            [
-                                                a[0].min(b[0]),
-                                                a[1].min(b[1]),
-                                                a[0].max(b[0]),
-                                                a[1].max(b[1]),
-                                            ],
-                                            kind,
-                                        ));
+                                            6.0 / scale,
+                                        );
+                                        pending_form = Some((page as usize, rect, kind));
                                     }
                                 }
                                 if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
-                                    let rect = Rect::from_two_pos(to_screen(a), to_screen(b));
+                                    let raw = [
+                                        a[0].min(b[0]),
+                                        a[1].min(b[1]),
+                                        a[0].max(b[0]),
+                                        a[1].max(b[1]),
+                                    ];
+                                    let (snapped, guides) =
+                                        snap_form_rect(raw, &tab.forms, page as usize, 6.0 / scale);
+                                    let rect = Rect::from_two_pos(
+                                        pos2(
+                                            page_rect.min.x + snapped[0] * scale,
+                                            page_rect.max.y - snapped[3] * scale,
+                                        ),
+                                        pos2(
+                                            page_rect.min.x + snapped[2] * scale,
+                                            page_rect.max.y - snapped[1] * scale,
+                                        ),
+                                    );
                                     ui.painter().rect_stroke(
                                         rect,
                                         Rounding::same(2.0),
                                         Stroke::new(1.5_f32, pal().accent),
                                     );
+                                    // Guides d'alignement rouges.
+                                    for (vertical, at) in guides {
+                                        let stroke =
+                                            Stroke::new(1.0_f32, Color32::from_rgb(220, 60, 60));
+                                        if vertical {
+                                            let x = page_rect.min.x + at * scale;
+                                            ui.painter().line_segment(
+                                                [
+                                                    pos2(x, page_rect.min.y),
+                                                    pos2(x, page_rect.max.y),
+                                                ],
+                                                stroke,
+                                            );
+                                        } else {
+                                            let y = page_rect.max.y - at * scale;
+                                            ui.painter().line_segment(
+                                                [
+                                                    pos2(page_rect.min.x, y),
+                                                    pos2(page_rect.max.x, y),
+                                                ],
+                                                stroke,
+                                            );
+                                        }
+                                    }
                                 }
                             }
                             ToolAction::Erase => {
@@ -10499,6 +10579,45 @@ impl YouPdfApp {
                                 }
                             }
                             ToolAction::Select => {
+                                // Mode Préparer un formulaire : un glissé
+                                // encadre plusieurs champs, un clic en vise un.
+                                if mode == Some(2) {
+                                    if resp.dragged() {
+                                        let point = resp.interact_pointer_pos().map(to_pdf);
+                                        if drag_from.is_none() {
+                                            *drag_from = point;
+                                        }
+                                        if point.is_some() {
+                                            *drag_to = point;
+                                        }
+                                    }
+                                    if resp.drag_stopped() {
+                                        let from = drag_from.take();
+                                        let to = drag_to.take();
+                                        if let (Some(a), Some(b)) = (from, to) {
+                                            let rect = [
+                                                a[0].min(b[0]),
+                                                a[1].min(b[1]),
+                                                a[0].max(b[0]),
+                                                a[1].max(b[1]),
+                                            ];
+                                            pending_form_select = Some((page as usize, rect));
+                                        }
+                                    }
+                                    if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
+                                        let rect = Rect::from_two_pos(to_screen(a), to_screen(b));
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            Rounding::same(2.0),
+                                            Color32::from_rgba_unmultiplied(70, 130, 220, 30),
+                                        );
+                                        ui.painter().rect_stroke(
+                                            rect,
+                                            Rounding::same(2.0),
+                                            Stroke::new(1.0_f32, Color32::from_rgb(70, 130, 220)),
+                                        );
+                                    }
+                                }
                                 if resp.clicked() {
                                     if let Some(p) = resp.interact_pointer_pos() {
                                         pending_hit = Some((page as usize, to_pdf(p)));
@@ -10591,6 +10710,9 @@ impl YouPdfApp {
         if let Some((page, rect, kind)) = pending_form {
             self.create_form_field(page, rect, kind, &ctx);
         }
+        if let Some((page, rect)) = pending_form_select {
+            self.select_form_fields_in(page, rect);
+        }
         if let Some((page, rect)) = pending_redact {
             if (rect[2] - rect[0]).abs() > 2.0 && (rect[3] - rect[1]).abs() > 2.0 {
                 self.redact_regions.push(RedactionRegion { page, rect });
@@ -10662,8 +10784,13 @@ impl YouPdfApp {
         }
         if let Some((page, point)) = pending_hit {
             // Vérifier d'abord si un champ de formulaire a été touché (mode Lecture).
-            if self.mode.is_none() || self.mode == Some(0) {
+            if matches!(self.mode, None | Some(0) | Some(2)) {
                 if let Some(form_idx) = self.form_hit_test(page, point) {
+                    // En mode Préparer, le clic sélectionne le champ (Maj :
+                    // ajoute ou retire de la sélection).
+                    if self.mode == Some(2) {
+                        self.toggle_form_selection(form_idx);
+                    } else {
                     let field = self.tabs[self.active].forms[form_idx].clone();
                     match &field.kind {
                         FormFieldKind::Text => {
@@ -10708,6 +10835,7 @@ impl YouPdfApp {
                             self.form_edit =
                                 Some((form_idx, field.value.clone().unwrap_or_default()));
                         }
+                    }
                     }
                 }
             }
@@ -12909,15 +13037,85 @@ fn panel_hint(ui: &mut egui::Ui, title: &str, detail: &str) {
     });
 }
 
+/// Aligne un rectangle de champ sur les bords et centres des champs voisins.
+///
+/// Renvoie le rectangle ajusté et les guides à dessiner : `(vertical, position)`,
+/// en repère page. Un écart inférieur à `tol` (en points) déclenche l'aimant.
+fn snap_form_rect(
+    rect: [f32; 4],
+    fields: &[FormField],
+    page: usize,
+    tol: f32,
+) -> ([f32; 4], Vec<(bool, f32)>) {
+    let mut out = rect;
+    let mut guides = Vec::new();
+    let neighbors: Vec<[f32; 4]> = fields
+        .iter()
+        .filter(|field| field.page == Some(page + 1) && field.rect != [0.0; 4])
+        .map(|field| field.rect)
+        .collect();
+    if neighbors.is_empty() || tol <= 0.0 {
+        return (out, guides);
+    }
+    // Candidats verticaux : gauche, centre, droite.
+    let mut best_x: Option<(f32, f32)> = None;
+    for neighbor in &neighbors {
+        let nx = [
+            neighbor[0].min(neighbor[2]),
+            (neighbor[0] + neighbor[2]) / 2.0,
+            neighbor[0].max(neighbor[2]),
+        ];
+        let moving = [(out[0], 0usize), ((out[0] + out[2]) / 2.0, 1), (out[2], 2)];
+        for (value, _) in moving {
+            for target in nx {
+                let delta = target - value;
+                if delta.abs() <= tol && best_x.map_or(true, |(d, _)| delta.abs() < d.abs()) {
+                    best_x = Some((delta, target));
+                }
+            }
+        }
+    }
+    if let Some((delta, target)) = best_x {
+        out[0] += delta;
+        out[2] += delta;
+        guides.push((true, target));
+    }
+    let mut best_y: Option<(f32, f32)> = None;
+    for neighbor in &neighbors {
+        let ny = [
+            neighbor[1].min(neighbor[3]),
+            (neighbor[1] + neighbor[3]) / 2.0,
+            neighbor[1].max(neighbor[3]),
+        ];
+        let moving = [(out[1], 0usize), ((out[1] + out[3]) / 2.0, 1), (out[3], 2)];
+        for (value, _) in moving {
+            for target in ny {
+                let delta = target - value;
+                if delta.abs() <= tol && best_y.map_or(true, |(d, _)| delta.abs() < d.abs()) {
+                    best_y = Some((delta, target));
+                }
+            }
+        }
+    }
+    if let Some((delta, target)) = best_y {
+        out[1] += delta;
+        out[3] += delta;
+        guides.push((false, target));
+    }
+    (out, guides)
+}
+
 /// Libellé anglais d'un type de champ de formulaire.
-fn form_kind_label(kind: &FormFieldKind) -> String {
-    match kind {
+fn form_kind_label(kind: &FormFieldKind) -> String {    match kind {
         FormFieldKind::Text => "Text field".to_owned(),
         FormFieldKind::Checkbox => "Checkbox".to_owned(),
         FormFieldKind::Radio => "Radio".to_owned(),
         FormFieldKind::Choice => "Dropdown".to_owned(),
         FormFieldKind::MultiChoice => "List".to_owned(),
         FormFieldKind::Signature => "Signature".to_owned(),
+        FormFieldKind::Button => "Button".to_owned(),
+        FormFieldKind::Date => "Date field".to_owned(),
+        FormFieldKind::Barcode => "Barcode".to_owned(),
         FormFieldKind::Other(name) => format!("Field ({name})"),
     }
 }
@@ -13599,6 +13797,35 @@ mod tests {
 
     fn cachet(rows: &[Vec<u32>]) -> HashSet<u32> {
         rows.iter().flatten().copied().collect()
+    }
+
+    /// L'aimant d'un champ prend le bord voisin et signale le guide.
+    #[test]
+    fn snap_form_rect_aligns_to_neighbor_edge() {
+        let neighbor = FormField {
+            object_id: (1, 0),
+            name: "a".to_string(),
+            kind: FormFieldKind::Text,
+            value: None,
+            options: Vec::new(),
+            read_only: false,
+            tooltip: String::new(),
+            required: false,
+            multiline: false,
+            page: Some(1),
+            rect: [100.0, 100.0, 200.0, 140.0],
+        };
+        // Bord gauche à 2 pt de celui du voisin : il doit coller.
+        let (rect, guides) =
+            snap_form_rect([102.0, 200.0, 130.0, 220.0], &[neighbor], 0, 6.0);
+        assert!((rect[0] - 100.0).abs() < 1e-4, "{rect:?}");
+        assert!((rect[2] - 128.0).abs() < 1e-4, "{rect:?}");
+        assert!(guides.iter().any(|(vertical, at)| *vertical && (*at - 100.0).abs() < 1e-4));
+        // Aucun voisin à portée : rien ne bouge.
+        let (far, guides) =
+            snap_form_rect([400.0, 400.0, 450.0, 420.0], &[], 0, 6.0);
+        assert_eq!(far, [400.0, 400.0, 450.0, 420.0]);
+        assert!(guides.is_empty());
     }
 
     /// L'onglet actif suit son document à travers un réordonnancement.
