@@ -75,6 +75,11 @@ const PAGE_TINTS: [(&str, [u8; 4]); 7] = [
     ("Sky Blue", [203, 228, 250, 80]),
 ];
 
+/// Couleurs du comparateur : vert ajouté, rouge supprimé, ambre modifié.
+const ADDED_GREEN: Color32 = Color32::from_rgb(0x28, 0xA7, 0x45);
+const REMOVED_RED: Color32 = Color32::from_rgb(0xDC, 0x35, 0x45);
+const MODIFIED_AMBER: Color32 = Color32::from_rgb(0xFF, 0xC1, 0x07);
+
 const TITLE_H: f32 = 40.0;
 const STATUS_H: f32 = 26.0;
 const RAIL_W: f32 = 52.0;
@@ -1177,6 +1182,10 @@ pub struct YouPdfApp {
     measure_scale: f32,
     /// Unité affichée.
     measure_unit: String,
+    /// Distance réelle saisie pour l'étalonnage.
+    measure_known: f32,
+    /// Longueur en points du dernier tracé, base de l'étalonnage.
+    measure_last_len: Option<f32>,
     /// Fenêtre « Extraire les données » et son résultat.
     extract_open: bool,
     extract_tables: Vec<ExtractedTable>,
@@ -1520,6 +1529,8 @@ impl YouPdfApp {
             measure_kind: MeasureKind::Distance,
             measure_scale: 72.0,
             measure_unit: "in".to_owned(),
+            measure_known: 1.0,
+            measure_last_len: None,
             extract_open: false,
             extract_tables: Vec::new(),
             extract_pairs: Vec::new(),
@@ -8696,6 +8707,7 @@ impl YouPdfApp {
         let mut open = true;
         let mut pick = false;
         let mut run = false;
+        let mut jump: Option<usize> = None;
         let name = self
             .compare_path
             .as_ref()
@@ -8741,18 +8753,28 @@ impl YouPdfApp {
                         .color(pal().icon_bright),
                     );
                     ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        for (label, color) in [
+                            ("Inserted", ADDED_GREEN),
+                            ("Deleted", REMOVED_RED),
+                            ("Modified", MODIFIED_AMBER),
+                        ] {
+                            ui.label(
+                                RichText::new(format!("\u{25a0} {label}"))
+                                    .size(10.5)
+                                    .color(color),
+                            );
+                        }
+                    });
+                    ui.add_space(4.0);
                     ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                         for diff in report.differences.iter().take(300) {
                             let (tag, color) = match diff.kind {
-                                DifferenceKind::Added => {
-                                    ("+", Color32::from_rgb(0x7A, 0xC0, 0x7A))
-                                }
-                                DifferenceKind::Removed => ("-", pal().redact_red),
-                                DifferenceKind::Modified => ("~", pal().accent),
-                                DifferenceKind::PageAdded => {
-                                    ("+ page", Color32::from_rgb(0x7A, 0xC0, 0x7A))
-                                }
-                                DifferenceKind::PageRemoved => ("- page", pal().redact_red),
+                                DifferenceKind::Added => ("+", ADDED_GREEN),
+                                DifferenceKind::Removed => ("-", REMOVED_RED),
+                                DifferenceKind::Modified => ("~", MODIFIED_AMBER),
+                                DifferenceKind::PageAdded => ("+ page", ADDED_GREEN),
+                                DifferenceKind::PageRemoved => ("- page", REMOVED_RED),
                             };
                             let text = diff
                                 .after
@@ -8760,16 +8782,29 @@ impl YouPdfApp {
                                 .or_else(|| diff.before.clone())
                                 .unwrap_or_default();
                             let page = diff.page_b.or(diff.page_a).unwrap_or(0);
-                            ui.label(
-                                RichText::new(format!("{tag}  p{page}  {text}"))
-                                    .size(11.0)
-                                    .color(color),
-                            );
+                            if ui
+                                .selectable_label(
+                                    false,
+                                    RichText::new(format!("{tag}  p{page}  {text}"))
+                                        .size(11.0)
+                                        .color(color),
+                                )
+                                .clicked()
+                            {
+                                jump = Some(page);
+                            }
                         }
                     });
                 }
             });
 
+        if let Some(page) = jump {
+            if let Some(tab) = self.tabs.get_mut(self.active) {
+                if page >= 1 {
+                    tab.page = page.min(tab.total());
+                }
+            }
+        }
         if pick {
             self.compare_path = rfd::FileDialog::new()
                 .add_filter("PDF", &["pdf"])
@@ -9374,6 +9409,29 @@ impl YouPdfApp {
                     ui.add(
                         TextEdit::singleline(&mut app.measure_unit).desired_width(80.0),
                     );
+                    ui.end_row();
+                    ui.label(RichText::new("Known").size(12.0).color(pal().muted));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut app.measure_known)
+                                .range(0.0001..=1_000_000.0)
+                                .speed(0.1),
+                        );
+                        if ui
+                            .add_enabled(
+                                app.measure_last_len.is_some(),
+                                egui::Button::new("Calibrate"),
+                            )
+                            .on_hover_text(
+                                "Use the last drawn distance as the known real distance",
+                            )
+                            .clicked()
+                        {
+                            if let Some(length) = app.measure_last_len {
+                                app.measure_scale = length / app.measure_known.max(0.0001);
+                            }
+                        }
+                    });
                     ui.end_row();
                 });
             ui.add_space(6.0);
@@ -11335,6 +11393,8 @@ impl YouPdfApp {
                 ],
                 MeasureKind::Area => vec![low, [high[0], low[1]], high, [low[0], high[1]]],
             };
+            let drawing_len = ((from[0] - to[0]).powi(2) + (from[1] - to[1]).powi(2)).sqrt();
+            self.measure_last_len = Some(drawing_len);
             let measurement = Measurement {
                 kind: self.measure_kind,
                 points,
