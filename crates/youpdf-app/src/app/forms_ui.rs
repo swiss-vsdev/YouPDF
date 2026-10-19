@@ -230,20 +230,7 @@ impl YouPdfApp {
             self.form_props = self
                 .tabs
                 .get(self.active)
-                .and_then(|tab| tab.forms.get(idx))
-                .map(|field| {
-                    (
-                        idx,
-                        FieldProperties {
-                            name: field.name.clone(),
-                            tooltip: field.tooltip.clone(),
-                            required: field.required,
-                            read_only: field.read_only,
-                            multiline: field.multiline,
-                            options: field.options.clone(),
-                        },
-                    )
-                });
+                .and_then(|tab| tab.forms.get(idx).map(|field| (idx, tab.doc.read_field_properties(field))));
             if let Some(page) = rows.get(idx).and_then(|row| row.2) {
                 self.jump = Some(page);
             }
@@ -308,24 +295,23 @@ impl YouPdfApp {
             });
         ui.add_space(6.0);
 
-        // Propriétés du champ : nom, aide, drapeaux, options.
+        // Propriétés du champ, en onglets : Général, Apparence, Options,
+        // Actions, Format, Calcul.
         let mut props = self
             .form_props
             .take()
             .filter(|(i, _)| *i == idx)
             .map(|(_, props)| props)
-            .unwrap_or_else(|| FieldProperties {
-                name: field.name.clone(),
-                tooltip: field.tooltip.clone(),
-                required: field.required,
-                read_only: field.read_only,
-                multiline: field.multiline,
-                options: field.options.clone(),
-            });
+            .unwrap_or_else(|| FieldProperties::from_field(&field));
         let mut apply_props = false;
+        let mut tab = self.form_props_tab.min(5);
         let choice = matches!(
             field.kind,
             FormFieldKind::Choice | FormFieldKind::MultiChoice
+        );
+        let text_like = matches!(
+            field.kind,
+            FormFieldKind::Text | FormFieldKind::Date | FormFieldKind::Barcode
         );
         Frame::none()
             .fill(pal().widget_bg)
@@ -334,69 +320,285 @@ impl YouPdfApp {
             .show(ui, |ui| {
                 ui.label(RichText::new("Properties").size(11.5).color(pal().icon_bright));
                 ui.add_space(4.0);
-                ui.add_sized(
-                    vec2(self.panel_w - 46.0, 24.0),
-                    TextEdit::singleline(&mut props.name).hint_text("Name"),
-                );
-                ui.add_sized(
-                    vec2(self.panel_w - 46.0, 24.0),
-                    TextEdit::singleline(&mut props.tooltip).hint_text("Tooltip"),
-                );
-                ui.checkbox(&mut props.required, "Required");
-                ui.checkbox(&mut props.read_only, "Read only");
-                if matches!(field.kind, FormFieldKind::Text) {
-                    ui.checkbox(&mut props.multiline, "Multiline");
-                }
-                if choice {
-                    let mut options = props.options.join(", ");
-                    if ui
-                        .add_sized(
-                            vec2(self.panel_w - 46.0, 24.0),
-                            TextEdit::singleline(&mut options)
-                                .hint_text("Options, comma separated"),
-                        )
-                        .changed()
+                ui.horizontal_wrapped(|ui| {
+                    for (index, label) in [
+                        "General",
+                        "Appearance",
+                        "Options",
+                        "Actions",
+                        "Format",
+                        "Calculate",
+                    ]
+                    .iter()
+                    .enumerate()
                     {
-                        props.options = options
-                            .split(',')
-                            .map(|item| item.trim().to_owned())
-                            .filter(|item| !item.is_empty())
-                            .collect();
+                        if ui.selectable_label(tab == index, *label).clicked() {
+                            tab = index;
+                        }
+                    }
+                });
+                ui.separator();
+                let width = self.panel_w - 46.0;
+                match tab {
+                    0 => {
+                        ui.add_sized(
+                            vec2(width, 24.0),
+                            TextEdit::singleline(&mut props.name).hint_text("Name"),
+                        );
+                        if props.name.trim().is_empty() {
+                            ui.label(
+                                RichText::new("A field needs a name")
+                                    .size(10.0)
+                                    .color(pal().muted),
+                            );
+                        }
+                        ui.add_sized(
+                            vec2(width, 24.0),
+                            TextEdit::singleline(&mut props.tooltip).hint_text("Tooltip"),
+                        );
+                        egui::ComboBox::from_id_salt("form-visibility")
+                            .width(width)
+                            .selected_text(
+                                [
+                                    "Visible",
+                                    "Hidden",
+                                    "Visible, no print",
+                                    "Hidden, printable",
+                                ][props.visibility.min(3) as usize],
+                            )
+                            .show_ui(ui, |ui| {
+                                for (value, label) in [
+                                    (0u8, "Visible"),
+                                    (1, "Hidden"),
+                                    (2, "Visible, no print"),
+                                    (3, "Hidden, printable"),
+                                ] {
+                                    if ui
+                                        .selectable_label(props.visibility == value, label)
+                                        .clicked()
+                                    {
+                                        props.visibility = value;
+                                    }
+                                }
+                            });
+                        ui.checkbox(&mut props.required, "Required");
+                        ui.checkbox(&mut props.read_only, "Read only");
+                    }
+                    1 => {
+                        ui.label(RichText::new("Border").size(10.5).color(pal().muted));
+                        ui.add(
+                            egui::Slider::new(&mut props.border_width, 0.0..=8.0)
+                                .text("Width"),
+                        );
+                        egui::ComboBox::from_id_salt("form-border-style")
+                            .width(width)
+                            .selected_text(
+                                ["Solid", "Dashed", "Beveled", "Inset", "Underline"]
+                                    [props.border_style.min(4) as usize],
+                            )
+                            .show_ui(ui, |ui| {
+                                for (value, label) in [
+                                    (0u8, "Solid"),
+                                    (1, "Dashed"),
+                                    (2, "Beveled"),
+                                    (3, "Inset"),
+                                    (4, "Underline"),
+                                ] {
+                                    if ui
+                                        .selectable_label(props.border_style == value, label)
+                                        .clicked()
+                                    {
+                                        props.border_style = value;
+                                    }
+                                }
+                            });
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Border colour").size(10.5));
+                            ui.color_edit_button_srgb(&mut props.border_color);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut props.fill, "Fill");
+                            ui.color_edit_button_srgb(&mut props.fill_color);
+                        });
+                        ui.separator();
+                        ui.label(RichText::new("Text").size(10.5).color(pal().muted));
+                        egui::ComboBox::from_id_salt("form-font")
+                            .width(width)
+                            .selected_text(props.font.clone())
+                            .show_ui(ui, |ui| {
+                                for font in ["Helvetica", "Courier", "Times"] {
+                                    if ui
+                                        .selectable_label(props.font == font, font)
+                                        .clicked()
+                                    {
+                                        props.font = font.to_string();
+                                    }
+                                }
+                            });
+                        ui.add(
+                            egui::Slider::new(&mut props.font_size, 0.0..=72.0)
+                                .text("Size (0 = auto)"),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Text colour").size(10.5));
+                            ui.color_edit_button_srgb(&mut props.text_color);
+                        });
+                    }
+                    2 => {
+                        if text_like {
+                            egui::ComboBox::from_id_salt("form-align")
+                                .width(width)
+                                .selected_text(
+                                    ["Left", "Centre", "Right"]
+                                        [props.alignment.min(2) as usize],
+                                )
+                                .show_ui(ui, |ui| {
+                                    for (value, label) in
+                                        [(0u8, "Left"), (1, "Centre"), (2, "Right")]
+                                    {
+                                        if ui
+                                            .selectable_label(props.alignment == value, label)
+                                            .clicked()
+                                        {
+                                            props.alignment = value;
+                                        }
+                                    }
+                                });
+                            ui.add_sized(
+                                vec2(width, 24.0),
+                                TextEdit::singleline(&mut props.default_value)
+                                    .hint_text("Default value"),
+                            );
+                            ui.checkbox(&mut props.multiline, "Multiline");
+                            ui.checkbox(&mut props.password, "Password");
+                            ui.add(
+                                egui::Slider::new(&mut props.comb, 0..=20)
+                                    .text("Comb cells"),
+                            );
+                        }
+                        if choice {
+                            let mut options = props.options.join("\n");
+                            if ui
+                                .add_sized(
+                                    vec2(width, 72.0),
+                                    TextEdit::multiline(&mut options)
+                                        .hint_text("One option per line"),
+                                )
+                                .changed()
+                            {
+                                props.options = options
+                                    .lines()
+                                    .map(|item| item.trim().to_owned())
+                                    .filter(|item| !item.is_empty())
+                                    .collect();
+                            }
+                            if ui.button("Sort options").clicked() {
+                                props.options.sort();
+                            }
+                            ui.checkbox(&mut props.editable, "Allow custom text");
+                        }
+                    }
+                    3 => {
+                        ui.label(
+                            RichText::new("Run JavaScript on click")
+                                .size(10.5)
+                                .color(pal().muted),
+                        );
+                        ui.add_sized(
+                            vec2(width, 90.0),
+                            TextEdit::multiline(&mut props.action_js)
+                                .hint_text("app.alert(\"Hello\");"),
+                        );
+                    }
+                    4 => {
+                        egui::ComboBox::from_id_salt("form-format")
+                            .width(width)
+                            .selected_text(if props.format_js.is_empty() {
+                                "None".to_string()
+                            } else {
+                                "Custom / preset".to_string()
+                            })
+                            .show_ui(ui, |ui| {
+                                for (label, script) in [
+                                    ("None", ""),
+                                    ("Number 2 decimals", "AFNumber_Format(2, 0, 0, 0, \"\", true);"),
+                                    ("Percentage", "AFPercent_Format(0, 2, false);"),
+                                    ("Date YYYY-MM-DD", "AFDate_FormatEx(\"yyyy-mm-dd\");"),
+                                    ("Date DD/MM/YYYY", "AFDate_FormatEx(\"dd/mm/yyyy\");"),
+                                ] {
+                                    if ui.selectable_label(props.format_js == script, label).clicked()
+                                    {
+                                        props.format_js = script.to_string();
+                                    }
+                                }
+                            });
+                        ui.label(
+                            RichText::new("Format script")
+                                .size(10.5)
+                                .color(pal().muted),
+                        );
+                        ui.add_sized(
+                            vec2(width, 70.0),
+                            TextEdit::multiline(&mut props.format_js),
+                        );
+                    }
+                    _ => {
+                        let mut sources = String::new();
+                        egui::ComboBox::from_id_salt("form-calc")
+                            .width(width)
+                            .selected_text("Sum / Product / Average")
+                            .show_ui(ui, |ui| {
+                                ui.label(
+                                    RichText::new("Source fields, comma separated")
+                                        .size(10.0),
+                                );
+                                ui.add_sized(
+                                    vec2(width - 20.0, 24.0),
+                                    TextEdit::singleline(&mut sources)
+                                        .hint_text("A, B, C"),
+                                );
+                                for (label, op) in [
+                                    ("Sum", "SUM"),
+                                    ("Product", "PRD"),
+                                    ("Average", "AVG"),
+                                    ("Minimum", "MIN"),
+                                    ("Maximum", "MAX"),
+                                ] {
+                                    if ui.button(label).clicked() {
+                                        let names: Vec<String> = sources
+                                            .split(',')
+                                            .map(|name| name.trim().to_owned())
+                                            .filter(|name| !name.is_empty())
+                                            .map(|name| format!("\"{name}\""))
+                                            .collect();
+                                        props.calc_js = format!(
+                                            "AFSimple_Calculate(\"{op}\", new Array({}));",
+                                            names.join(", ")
+                                        );
+                                    }
+                                }
+                            });
+                        ui.label(
+                            RichText::new("Calculate script")
+                                .size(10.5)
+                                .color(pal().muted),
+                        );
+                        ui.add_sized(
+                            vec2(width, 70.0),
+                            TextEdit::multiline(&mut props.calc_js),
+                        );
                     }
                 }
                 ui.add_space(4.0);
-                if ui.button("Apply properties").clicked() {
+                if ui
+                    .add_enabled(!props.name.trim().is_empty(), egui::Button::new("Apply properties"))
+                    .clicked()
+                {
                     apply_props = true;
                 }
             });
+        self.form_props_tab = tab;
         ui.add_space(6.0);
-
-        if apply_props {
-            if let Some(tab) = self.tabs.get_mut(self.active) {
-                if let Some(field) = tab.forms.get(idx).cloned() {
-                    match tab.doc.update_form_field(&field, &props) {
-                        Ok(()) => {
-                            if let Some(entry) = tab.forms.get_mut(idx) {
-                                entry.name = props.name.clone();
-                                entry.tooltip = props.tooltip.clone();
-                                entry.required = props.required;
-                                entry.read_only = props.read_only;
-                                entry.multiline = props.multiline;
-                                entry.options = props.options.clone();
-                            }
-                            tab.dirty = true;
-                            tab.structural_dirty = true;
-                            tab.invalidate_render();
-                            self.toast(ctx, format!("Field {} updated", props.name));
-                        }
-                        Err(err) => self.toast(ctx, format!("Field update failed: {err}")),
-                    }
-                }
-            }
-            self.form_props = None;
-        } else {
-            self.form_props = Some((idx, props));
-        }
 
         if apply {
             let Some(tab) = self.tabs.get_mut(self.active) else {

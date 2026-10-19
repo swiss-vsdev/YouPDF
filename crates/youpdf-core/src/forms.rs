@@ -79,6 +79,26 @@ impl FormFieldKind {
     }
 }
 
+/// Alias de police standard pour `/DA`.
+fn da_font_alias(font: &str) -> &'static str {
+    match font {
+        "Courier" => "Cour",
+        "Times" => "TiRo",
+        _ => "Helv",
+    }
+}
+
+/// Action JavaScript (`/S /JavaScript`, `/JS`).
+fn js_action(script: &str) -> Object {
+    let mut dict = Dictionary::new();
+    dict.set("S", Object::Name(b"JavaScript".to_vec()));
+    dict.set(
+        "JS",
+        Object::string_literal(crate::edit::encode_pdf_literal(script)),
+    );
+    Object::Dictionary(dict)
+}
+
 /// Un nombre PDF, entier ou réel, en `f32`.
 fn number_f32(object: &Object) -> Option<f32> {
     match object {
@@ -711,7 +731,7 @@ impl Document {
 }
 
 /// Propriétés modifiables d'un champ de formulaire existant.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FieldProperties {
     /// Nom complet du champ (préfixe de parent conservé).
     pub name: String,
@@ -725,6 +745,234 @@ pub struct FieldProperties {
     pub multiline: bool,
     /// Options d'une liste, dans l'ordre. Ignoré pour les autres types.
     pub options: Vec<String>,
+    /// Liste déroulante éditable (bit 19 de `/Ff`).
+    pub editable: bool,
+    /// Visibilité : 0 visible, 1 masqué, 2 visible non imprimable,
+    /// 3 masqué mais imprimable.
+    pub visibility: u8,
+    /// Valeur par défaut (`/DV`), appliquée par « Reset form ».
+    pub default_value: String,
+    /// Saisie masquée (bit 14 de `/Ff`).
+    pub password: bool,
+    /// Peigne de N caractères (bit 25 de `/Ff`), 0 = désactivé.
+    pub comb: u8,
+    /// Alignement du texte (`/Q`) : 0 gauche, 1 centre, 2 droite.
+    pub alignment: u8,
+    /// Épaisseur de bordure (`/BS /W`).
+    pub border_width: f32,
+    /// Style de bordure (`/BS /S`) : 0 plein, 1 tireté, 2 biseau, 3 creux,
+    /// 4 souligné.
+    pub border_style: u8,
+    /// Couleur de bordure (`/MK /BC`).
+    pub border_color: [u8; 3],
+    /// Couleur de fond (`/MK /BG`), appliquée quand `fill` est vrai.
+    pub fill_color: [u8; 3],
+    /// Remplir le fond.
+    pub fill: bool,
+    /// Police d'apparence (`/DA`).
+    pub font: String,
+    /// Corps de la police (`/DA`), 0 = automatique.
+    pub font_size: f32,
+    /// Couleur du texte (`/DA`).
+    pub text_color: [u8; 3],
+    /// Action JavaScript sur clic (`/AA /E`).
+    pub action_js: String,
+    /// Script de format (`/AA /F`).
+    pub format_js: String,
+    /// Script de calcul (`/AA /C`).
+    pub calc_js: String,
+}
+
+impl Default for FieldProperties {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            tooltip: String::new(),
+            required: false,
+            read_only: false,
+            multiline: false,
+            options: Vec::new(),
+            editable: false,
+            visibility: 0,
+            default_value: String::new(),
+            password: false,
+            comb: 0,
+            alignment: 0,
+            border_width: 1.0,
+            border_style: 0,
+            border_color: [0, 0, 0],
+            fill_color: [255, 255, 255],
+            fill: false,
+            font: "Helvetica".to_string(),
+            font_size: 0.0,
+            text_color: [0, 0, 0],
+            action_js: String::new(),
+            format_js: String::new(),
+            calc_js: String::new(),
+        }
+    }
+}
+
+impl FieldProperties {
+    /// Propriétés d'un champ existant, avec ses réglages courants.
+    pub fn from_field(field: &FormField) -> Self {
+        Self {
+            name: field.name.clone(),
+            tooltip: field.tooltip.clone(),
+            required: field.required,
+            read_only: field.read_only,
+            multiline: field.multiline,
+            options: field.options.clone(),
+            visibility: 0,
+            ..Self::default()
+        }
+    }
+}
+/// Lit les réglages d'apparence, de visibilité et d'action d'un champ.
+impl Document {
+    /// Relit les propriétés éditables d'un champ depuis son dictionnaire.
+    pub fn read_field_properties(&self, field: &FormField) -> FieldProperties {
+        let mut props = FieldProperties::from_field(field);
+        let Ok(obj) = self.inner().get_object(field.object_id) else {
+            return props;
+        };
+        let Ok(dict) = obj.as_dict() else {
+            return props;
+        };
+
+        let flags = dict
+            .get(b"Ff")
+            .ok()
+            .and_then(|o| o.as_i64().ok())
+            .unwrap_or(0);
+        props.password = flags & (1 << 13) != 0;
+        props.comb = if flags & (1 << 24) != 0 {
+            dict.get(b"MaxLen")
+                .ok()
+                .and_then(|o| o.as_i64().ok())
+                .unwrap_or(0)
+                .clamp(0, 20) as u8
+        } else {
+            0
+        };
+        props.editable = flags & (1 << 18) != 0;
+        props.alignment = dict
+            .get(b"Q")
+            .ok()
+            .and_then(|o| o.as_i64().ok())
+            .unwrap_or(0)
+            .clamp(0, 2) as u8;
+
+        let field_flags = dict
+            .get(b"F")
+            .ok()
+            .and_then(|o| o.as_i64().ok())
+            .unwrap_or(0);
+        props.visibility = if field_flags & 1 != 0 {
+            if field_flags & 2 != 0 {
+                3
+            } else {
+                1
+            }
+        } else if field_flags & 32 != 0 {
+            2
+        } else {
+            0
+        };
+
+        props.default_value = dict
+            .get(b"DV")
+            .ok()
+            .and_then(|o| match o {
+                Object::String(bytes, _) => Some(crate::structure::decode_pdf_text(bytes)),
+                Object::Name(name) => Some(crate::structure::decode_pdf_text(name)),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        if let Ok(mk) = dict.get(b"MK").and_then(|o| o.as_dict()) {
+            if let Ok(bc) = mk.get(b"BC").and_then(|o| o.as_array()) {
+                let channels: Vec<u8> = bc
+                    .iter()
+                    .filter_map(number_f32)
+                    .map(|value| (value * 255.0).round().clamp(0.0, 255.0) as u8)
+                    .collect();
+                if channels.len() >= 3 {
+                    props.border_color = [channels[0], channels[1], channels[2]];
+                }
+            }
+            if let Ok(bg) = mk.get(b"BG").and_then(|o| o.as_array()) {
+                let channels: Vec<u8> = bg
+                    .iter()
+                    .filter_map(number_f32)
+                    .map(|value| (value * 255.0).round().clamp(0.0, 255.0) as u8)
+                    .collect();
+                if channels.len() >= 3 {
+                    props.fill_color = [channels[0], channels[1], channels[2]];
+                    props.fill = true;
+                }
+            }
+        }
+
+        if let Ok(bs) = dict.get(b"BS").and_then(|o| o.as_dict()) {
+            props.border_width = bs
+                .get(b"W")
+                .ok()
+                .and_then(number_f32)
+                .unwrap_or(1.0);
+            props.border_style = match bs.get(b"S").ok().and_then(|o| o.as_name().ok()) {
+                Some(b"D") => 1,
+                Some(b"B") => 2,
+                Some(b"I") => 3,
+                Some(b"U") => 4,
+                _ => 0,
+            };
+        }
+
+        if let Ok(da) = dict.get(b"DA").and_then(|o| o.as_str()) {
+            let text = String::from_utf8_lossy(da);
+            let parts: Vec<&str> = text.split_whitespace().collect();
+            if let Some(size) = parts
+                .iter()
+                .position(|part| *part == "Tf")
+                .and_then(|index| index.checked_sub(1))
+                .and_then(|index| parts.get(index))
+                .and_then(|value| value.parse::<f32>().ok())
+            {
+                props.font_size = size;
+            }
+            if let Some(index) = parts.iter().position(|part| *part == "rg") {
+                let channels: Vec<f32> = parts[index.saturating_sub(3)..index]
+                    .iter()
+                    .filter_map(|value| value.parse::<f32>().ok())
+                    .collect();
+                if channels.len() == 3 {
+                    props.text_color = [
+                        (channels[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+                        (channels[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+                        (channels[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+                    ];
+                }
+            }
+        }
+
+        if let Ok(aa) = dict.get(b"AA").and_then(|o| o.as_dict()) {
+            let script = |key: &[u8]| -> String {
+                aa.get(key)
+                    .ok()
+                    .and_then(|action| action.as_dict().ok())
+                    .and_then(|action| action.get(b"JS").ok())
+                    .and_then(|js| js.as_str().ok())
+                    .map(|bytes| String::from_utf8_lossy(bytes).to_string())
+                    .unwrap_or_default()
+            };
+            props.action_js = script(b"E");
+            props.format_js = script(b"F");
+            props.calc_js = script(b"C");
+        }
+
+        props
+    }
 }
 
 /// Format d'échange des valeurs de formulaire.
@@ -880,7 +1128,6 @@ impl Document {
             set_bit(&mut flags, 1, props.read_only);
             set_bit(&mut flags, 2, props.required);
             set_bit(&mut flags, 4096, props.multiline);
-            dict.set("Ff", Object::Integer(flags));
 
             if is_choice && !props.options.is_empty() {
                 let opts: Vec<Object> = props
@@ -889,6 +1136,124 @@ impl Document {
                     .map(|o| Object::string_literal(crate::edit::encode_pdf_literal(o)))
                     .collect();
                 dict.set("Opt", Object::Array(opts));
+                // Bit 19 : l'utilisateur peut saisir une valeur absente de la
+                // liste (liste déroulante éditable).
+                set_bit(&mut flags, 1 << 18, props.editable);
+            }
+            // Bits 14 (mot de passe) et 25 (peigne).
+            set_bit(&mut flags, 1 << 13, props.password);
+            set_bit(&mut flags, 1 << 24, props.comb > 0);
+            if props.comb > 0 {
+                dict.set("MaxLen", Object::Integer(props.comb as i64));
+            }
+            dict.set("Ff", Object::Integer(flags));
+
+            // Alignement du texte.
+            dict.set("Q", Object::Integer(props.alignment.min(2) as i64));
+
+            // Visibilité : bit 2 masqué, bit 3 imprimable, bit 6 masqué à
+            // l'écran.
+            let mut field_flags = dict
+                .get(b"F")
+                .ok()
+                .and_then(|o| o.as_i64().ok())
+                .unwrap_or(0);
+            set_bit(&mut field_flags, 1, props.visibility == 1 || props.visibility == 3);
+            set_bit(&mut field_flags, 2, props.visibility != 2);
+            set_bit(&mut field_flags, 32, props.visibility == 2);
+            dict.set("F", Object::Integer(field_flags));
+
+            // Valeur par défaut.
+            if !props.default_value.is_empty() {
+                dict.set(
+                    "DV",
+                    Object::string_literal(crate::edit::encode_pdf_literal(&props.default_value)),
+                );
+            }
+
+            // Apparence : bordure et fond.
+            let mut mk = Dictionary::new();
+            mk.set(
+                "BC",
+                Object::Array(
+                    props
+                        .border_color
+                        .iter()
+                        .map(|c| Object::Real(*c as f32 / 255.0))
+                        .collect(),
+                ),
+            );
+            if props.fill {
+                mk.set(
+                    "BG",
+                    Object::Array(
+                        props
+                            .fill_color
+                            .iter()
+                            .map(|c| Object::Real(*c as f32 / 255.0))
+                            .collect(),
+                    ),
+                );
+            }
+            dict.set("MK", Object::Dictionary(mk));
+
+            let style = match props.border_style {
+                1 => "D",
+                2 => "B",
+                3 => "I",
+                4 => "U",
+                _ => "S",
+            };
+            let mut bs = Dictionary::new();
+            bs.set("W", Object::Real(props.border_width.clamp(0.0, 12.0)));
+            bs.set("S", Object::Name(style.as_bytes().to_vec()));
+            dict.set("BS", Object::Dictionary(bs));
+
+            // `/DA` : police, corps et couleur du texte.
+            let size = if props.font_size > 0.0 {
+                props.font_size
+            } else {
+                12.0
+            };
+            let [r, g, b] = props.text_color.map(|c| c as f32 / 255.0);
+            let da = format!(
+                "/{} {} Tf {r:.3} {g:.3} {b:.3} rg",
+                da_font_alias(&props.font),
+                size
+            );
+            dict.set("DA", Object::string_literal(da.as_bytes().to_vec()));
+
+            // Actions, format et calcul.
+            let mut aa = Dictionary::new();
+            if !props.action_js.is_empty() {
+                aa.set("E", js_action(&props.action_js));
+            }
+            if !props.format_js.is_empty() {
+                aa.set("F", js_action(&props.format_js));
+            }
+            if !props.calc_js.is_empty() {
+                aa.set("C", js_action(&props.calc_js));
+            }
+            if !aa.is_empty() {
+                dict.set("AA", Object::Dictionary(aa));
+            }
+        }
+
+        // Les apparences ne sont plus à jour : les lecteurs les régénèrent.
+        if let Some(acro) = self.acroform_dict().cloned() {
+            let mut acro = acro;
+            acro.set("NeedAppearances", Object::Boolean(true));
+            if let Ok(root) = self
+                .inner()
+                .trailer
+                .get(b"Root")
+                .and_then(|o| o.as_reference())
+            {
+                if let Ok(catalog) = self.inner_mut().get_object_mut(root) {
+                    if let Ok(catalog) = catalog.as_dict_mut() {
+                        catalog.set("AcroForm", Object::Dictionary(acro));
+                    }
+                }
             }
         }
 

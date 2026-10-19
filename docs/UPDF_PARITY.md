@@ -66,8 +66,8 @@ Unchecked below = still open. The plan document is the authoritative task list.
 *   **YouPDF:** Tesseract-based, searchable-only.
 *   **Action:** Upgrade OCR engine to support all 3 modes and provide UI for language selection; enable `PDF/UA` tag generation.
 *   **Forms:** UPDF provides properties editors (name, tooltip, required, read-only).
-*   **YouPDF:** Field creation (text, checkbox, radio, dropdown, list, button, date, barcode, signature), red alignment guides with edge/centre snapping, rubber-band multi-select in Prepare form, align/distribute/match toolbar, properties editor, form data import/export (FDF/XFDF/CSV/JSON), Reset Form, and interactive filling in reader mode.
-*   **Action:** Add the multi-tab properties inspector (General/Appearance/Options/Actions/Format/Calculate) and push-button action dispatch.
+*   **YouPDF:** Field creation (text, checkbox, radio, dropdown, list, button, date, barcode, signature), red alignment guides with edge/centre snapping, rubber-band multi-select in Prepare form, align/distribute/match toolbar, a six-tab properties inspector (General, Appearance, Options, Actions, Format, Calculate), form data import/export (FDF/XFDF/CSV/JSON), Reset Form, and interactive filling in reader mode.
+*   **Action:** Add push-button action dispatch (Reset/Submit/JavaScript), date picker grid, and Cmd/Ctrl-click multi-selection for list boxes.
 *   **Compression:** UPDF has quality grades (Screen 72dpi, Ebook 150dpi, Print 300dpi).
 *   **YouPDF:** Minimalist deflating.
 *   **Action:** Implement image resampling (Lanczos) for the three grades.
