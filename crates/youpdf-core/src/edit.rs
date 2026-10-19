@@ -1315,13 +1315,22 @@ fn tokenize_content(content: &[u8]) -> Vec<String> {
             chars.next();
             let mut s = String::from("/");
             while let Some(&nc) = chars.peek() {
-                if nc.is_whitespace() || nc == '/' || nc == '(' || nc == '[' {
+                if nc.is_whitespace() || nc == '/' || nc == '(' || nc == '[' || nc == ']' {
                     break;
                 }
                 s.push(nc);
                 chars.next();
             }
             tokens.push(s);
+            continue;
+        }
+
+        // Délimiteur d'array : un jeton à part entière. Sans ce cas, le `[`
+        // ou le `]` serait relu sans fin — la boucle extérieure le repère, la
+        // boucle « Opérateur ou nombre » le rejette sans l'avancer.
+        if c == '[' || c == ']' {
+            chars.next();
+            tokens.push(c.to_string());
             continue;
         }
 
