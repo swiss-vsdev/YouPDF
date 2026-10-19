@@ -389,6 +389,40 @@ impl Document {
                         fragments.push(f);
                     }
                 }
+                "TJ" => {
+                    // Tableau `[ (mot) -250 (mot) ] TJ` : les espacements
+                    // numériques ne sont pas du texte, seulement les chaînes.
+                    // On remonte jusqu'au `[` ouvrant pour les rassembler ;
+                    // sans `[` trouvé, on ne prend rien : remonter plus loin
+                    // ramasserait les chaînes d'un bloc précédent.
+                    let mut parts: Vec<String> = Vec::new();
+                    let mut opened = false;
+                    let mut j = i;
+                    while j > 0 {
+                        j -= 1;
+                        if tokens[j] == "[" {
+                            opened = true;
+                            break;
+                        }
+                        if let Some(text) = extract_string_literal(&tokens[j]) {
+                            parts.push(text);
+                        }
+                    }
+                    if opened && !parts.is_empty() {
+                        parts.reverse();
+                        push_fragment(
+                            &mut fragments,
+                            &mut current,
+                            parts.join(""),
+                            page as usize,
+                            tx,
+                            ty,
+                            font_size,
+                            font_name.clone(),
+                        );
+                        tx += font_size * 0.5 * current_text_len(&fragments) as f32;
+                    }
+                }
                 _ => {}
             }
             i += 1;
