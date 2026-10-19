@@ -32,6 +32,7 @@ impl YouPdfApp {
         // Échange de données de formulaire (FDF, XFDF, CSV, JSON).
         let mut import = false;
         let mut export = false;
+        let mut reset_form = false;
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("form-data-format")
                 .width(80.0)
@@ -67,6 +68,56 @@ impl YouPdfApp {
             ui.checkbox(&mut self.form_highlight, "Highlight fields");
         });
         ui.add_space(2.0);
+        // Outils d'alignement du mode Préparer un formulaire.
+        if self.mode == Some(2) {
+            let selected = self.form_selection.len();
+            ui.horizontal(|ui| {
+                ui.add_space(2.0);
+                ui.label(
+                    RichText::new(format!("{selected} selected"))
+                        .size(10.5)
+                        .color(pal().muted),
+                );
+                if ui
+                    .add_enabled(selected >= 2, egui::Button::new("Reset form"))
+                    .clicked()
+                {
+                    reset_form = true;
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                for (label, action) in [
+                    ("L", FormAlign::Left),
+                    ("R", FormAlign::Right),
+                    ("T", FormAlign::Top),
+                    ("B", FormAlign::Bottom),
+                    ("H", FormAlign::DistributeH),
+                    ("V", FormAlign::DistributeV),
+                    ("W", FormAlign::MatchWidth),
+                    ("H=", FormAlign::MatchHeight),
+                ] {
+                    if ui
+                        .add_enabled(selected >= 2, egui::Button::new(label))
+                        .clicked()
+                    {
+                        self.align_form_fields(action);
+                    }
+                }
+            });
+        }
+        ui.add_space(2.0);
+
+        if reset_form {
+            if let Some(tab) = self.tabs.get_mut(self.active) {
+                if tab.doc.reset_form_fields().is_ok() {
+                    tab.forms = tab.doc.read_form_fields();
+                    tab.dirty = true;
+                    tab.structural_dirty = true;
+                    tab.invalidate_render();
+                }
+            }
+            self.toast(ctx, "Form reset".to_string());
+        }
 
         if import {
             let format = self.form_data_format;
@@ -428,4 +479,168 @@ impl YouPdfApp {
             tab.forms = tab.doc.read_form_fields();
         }
     }
+}
+
+impl YouPdfApp {
+    /// Sélectionne les champs de `page` qui croisent `rect` (repère affiché).
+    pub(super) fn select_form_fields_in(&mut self, page: usize, rect: [f32; 4]) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        if (rect[2] - rect[0]) < 2.0 && (rect[3] - rect[1]) < 2.0 {
+            self.form_selection.clear();
+            return;
+        }
+        let hits: Vec<usize> = tab
+            .forms
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| {
+                field.page == Some(page + 1)
+                    && field.rect[0] < rect[2]
+                    && field.rect[2] > rect[0]
+                    && field.rect[1] < rect[3]
+                    && field.rect[3] > rect[1]
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+        self.form_selection = hits.into_iter().collect();
+        self.form_editing = None;
+        self.form_edit = None;
+    }
+
+    /// Bascule un champ dans la sélection (clic avec Maj).
+    pub(super) fn toggle_form_selection(&mut self, idx: usize) {
+        if !self.form_selection.insert(idx) {
+            self.form_selection.remove(&idx);
+        }
+        self.form_editing = None;
+        self.form_edit = None;
+    }
+
+    /// Aligne, répartit ou égalise les champs sélectionnés.
+    pub(super) fn align_form_fields(&mut self, action: FormAlign) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let mut fields: Vec<(usize, FormField)> = self
+            .form_selection
+            .iter()
+            .filter_map(|idx| tab.forms.get(*idx).cloned().map(|field| (*idx, field)))
+            .collect();
+        if fields.len() < 2 {
+            return;
+        }
+        let bounds = fields.iter().fold(
+            [f32::MAX, f32::MAX, f32::MIN, f32::MIN],
+            |mut acc, (_, field)| {
+                acc[0] = acc[0].min(field.rect[0].min(field.rect[2]));
+                acc[1] = acc[1].min(field.rect[1].min(field.rect[3]));
+                acc[2] = acc[2].max(field.rect[0].max(field.rect[2]));
+                acc[3] = acc[3].max(field.rect[1].max(field.rect[3]));
+                acc
+            },
+        );
+        match action {
+            FormAlign::Left => {
+                for (_, field) in fields.iter_mut() {
+                    let w = field.rect[2] - field.rect[0];
+                    field.rect[0] = bounds[0];
+                    field.rect[2] = bounds[0] + w;
+                }
+            }
+            FormAlign::Right => {
+                for (_, field) in fields.iter_mut() {
+                    let w = field.rect[2] - field.rect[0];
+                    field.rect[2] = bounds[2];
+                    field.rect[0] = bounds[2] - w;
+                }
+            }
+            FormAlign::Top => {
+                for (_, field) in fields.iter_mut() {
+                    let h = field.rect[3] - field.rect[1];
+                    field.rect[3] = bounds[3];
+                    field.rect[1] = bounds[3] - h;
+                }
+            }
+            FormAlign::Bottom => {
+                for (_, field) in fields.iter_mut() {
+                    let h = field.rect[3] - field.rect[1];
+                    field.rect[1] = bounds[1];
+                    field.rect[3] = bounds[1] + h;
+                }
+            }
+            FormAlign::DistributeH | FormAlign::DistributeV => {
+                let (low, high, vertical) = if action == FormAlign::DistributeH {
+                    (0usize, 2usize, true)
+                } else {
+                    (1, 3, false)
+                };
+                fields.sort_by(|a, b| {
+                    a.1.rect[low]
+                        .partial_cmp(&b.1.rect[low])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let first = fields.first().unwrap().1.rect[low];
+                let last = fields.last().unwrap().1.rect[high];
+                let count = fields.len() as f32;
+                let span = (last - first).max(0.0);
+                for (index, (_, field)) in fields.iter_mut().enumerate() {
+                    let size = field.rect[high] - field.rect[low];
+                    let slot = first + span * index as f32 / (count - 1.0);
+                    if vertical {
+                        field.rect[0] = slot;
+                        field.rect[2] = slot + size;
+                    } else {
+                        field.rect[1] = slot;
+                        field.rect[3] = slot + size;
+                    }
+                }
+            }
+            FormAlign::MatchWidth | FormAlign::MatchHeight => {
+                let mut target = fields[0].1.rect;
+                for (_, field) in fields.iter() {
+                    if action == FormAlign::MatchWidth {
+                        target[2] = target[2].max(field.rect[2]);
+                        target[0] = target[0].min(field.rect[0]);
+                    } else {
+                        target[3] = target[3].max(field.rect[3]);
+                        target[1] = target[1].min(field.rect[1]);
+                    }
+                }
+                for (_, field) in fields.iter_mut() {
+                    if action == FormAlign::MatchWidth {
+                        let w = target[2] - target[0];
+                        field.rect[2] = field.rect[0] + w;
+                    } else {
+                        let h = target[3] - target[1];
+                        field.rect[3] = field.rect[1] + h;
+                    }
+                }
+            }
+        }
+        for (idx, field) in fields {
+            if tab.doc.set_form_field_rect(&field, field.rect).is_ok() {
+                if let Some(entry) = tab.forms.get_mut(idx) {
+                    entry.rect = field.rect;
+                }
+            }
+        }
+        tab.dirty = true;
+        tab.structural_dirty = true;
+        tab.invalidate_render();
+    }
+}
+
+/// Opérations d'alignement de champs du mode Préparer un formulaire.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FormAlign {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    DistributeH,
+    DistributeV,
+    MatchWidth,
+    MatchHeight,
 }

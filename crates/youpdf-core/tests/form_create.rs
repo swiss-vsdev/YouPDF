@@ -201,3 +201,38 @@ fn multi_selection_drapeau() {
     assert!(text.contains("/Ff 1179648"), "drapeaux inattendus : {text}");
     assert_eq!(doc.read_form_fields()[0].kind, FormFieldKind::MultiChoice);
 }
+
+/// Déplacer un champ met à jour le `/Rect` relu, sans changer son nom.
+#[test]
+fn deplacer_un_champ() {
+    let mut doc = Document::from_bytes(&page_blanche()).expect("ouverture");
+    doc.create_form_field(&NewFormField::text(1, [72.0, 600.0, 172.0, 620.0], "Nom"))
+        .expect("création");
+    let field = doc.read_form_fields().remove(0);
+    assert_eq!(field.rect, [72.0, 600.0, 172.0, 620.0], "rect initial : {:?}", field.rect);
+
+    doc.set_form_field_rect(&field, [100.0, 500.0, 260.0, 530.0])
+        .expect("déplacement");
+    let moved = doc.read_form_fields().remove(0);
+    assert_eq!(moved.rect, [100.0, 500.0, 260.0, 530.0], "rect déplacé : {:?}", moved.rect);
+    assert_eq!(moved.name, "Nom");
+}
+
+/// Réinitialiser vide un champ texte et décoche une case.
+#[test]
+fn reinitialiser_le_formulaire() {
+    let mut doc = Document::from_bytes(&page_blanche()).expect("ouverture");
+    let mut text = NewFormField::text(1, [72.0, 600.0, 172.0, 620.0], "Nom");
+    text.value = Some("Ada".to_string());
+    doc.create_form_field(&text).expect("création texte");
+    let mut check = NewFormField::checkbox(1, [72.0, 560.0, 92.0, 580.0], "Case");
+    check.value = Some("Yes".to_string());
+    doc.create_form_field(&check).expect("création case");
+
+    doc.reset_form_fields().expect("réinitialisation");
+    let fields = doc.read_form_fields();
+    let nom = fields.iter().find(|f| f.name == "Nom").expect("champ Nom");
+    assert_eq!(nom.value.as_deref(), Some(""));
+    let case = fields.iter().find(|f| f.name == "Case").expect("champ Case");
+    assert_eq!(case.value.as_deref(), Some("Off"));
+}
