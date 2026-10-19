@@ -509,6 +509,120 @@ impl Document {
         copy.save(path)
     }
 
+    /// Remplace les pages `pages` par le contenu d'un autre PDF.
+    ///
+    /// Les pages de `source` prennent la place du premier page visée ; la
+    /// sélection est supprimée avant l'insertion pour garder les numéros
+    /// cohérents. Renvoie le nombre de pages insérées.
+    pub fn replace_pages(&mut self, pages: &[usize], source: &Path) -> Result<usize> {
+        if pages.is_empty() {
+            return Err(Error::InvalidInput(
+                "aucune page à remplacer".to_string(),
+            ));
+        }
+        let first = pages.iter().copied().min().unwrap_or(1);
+        let total = self.page_count();
+        let mut remove: Vec<usize> = pages
+            .iter()
+            .copied()
+            .filter(|page| *page >= 1 && *page <= total)
+            .collect();
+        remove.sort_unstable();
+        remove.dedup();
+        self.delete_pages(&remove)?;
+        // Les pages supprimées libèrent `remove.len()` emplacements : la
+        // première page visée prend la place laissée libre avant elle.
+        let after = first.saturating_sub(1).min(self.page_count());
+        self.insert_pages_after(after, source)
+    }
+
+    /// Découpe en fichiers ne dépassant pas `max_bytes`.
+    ///
+    /// La taille est mesurée sur un document reconstruit, pas estimée : un
+    /// groupe trop gros est réduit page par page jusqu'à tenir.
+    pub fn split_by_size(&self, directory: &Path, max_bytes: u64) -> Result<Vec<PathBuf>> {
+        let total = self.page_count();
+        if total == 0 {
+            return Err(Error::Pdf("document vide".into()));
+        }
+        let stem = self
+            .path
+            .as_ref()
+            .and_then(|path| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "document".to_owned());
+        let mut written = Vec::new();
+        let mut start = 1usize;
+        while start <= total {
+            let mut end = start;
+            let mut last_ok = start;
+            while end <= total {
+                let mut copy = Document::from_lopdf(self.inner.clone());
+                let keep: HashSet<usize> = (start..=end).collect();
+                let remove: Vec<usize> = (1..=copy.page_count())
+                    .filter(|number| !keep.contains(number))
+                    .collect();
+                if !remove.is_empty() {
+                    copy.delete_pages(&remove)?;
+                }
+                let size = copy.to_bytes()?.len() as u64;
+                if size <= max_bytes || end == start {
+                    last_ok = end;
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            let pages: Vec<usize> = (start..=last_ok).collect();
+            let target = directory.join(format!("{stem} p{start}-{last_ok}.pdf"));
+            self.extract_pages(&pages, &target)?;
+            written.push(target);
+            start = last_ok + 1;
+        }
+        Ok(written)
+    }
+
+    /// Découpe aux pages des signets de premier niveau.
+    pub fn split_by_bookmarks(&self, directory: &Path) -> Result<Vec<PathBuf>> {
+        let total = self.page_count();
+        let mut cuts: Vec<usize> = self
+            .outline()
+            .into_iter()
+            .filter(|item| item.level == 0)
+            .filter_map(|item| item.page)
+            .filter(|page| *page >= 1 && *page <= total)
+            .collect();
+        cuts.sort_unstable();
+        cuts.dedup();
+        if cuts.is_empty() {
+            return Err(Error::InvalidInput(
+                "aucun signet de premier niveau".to_string(),
+            ));
+        }
+        if cuts.first().copied() != Some(1) {
+            cuts.insert(0, 1);
+        }
+        let stem = self
+            .path
+            .as_ref()
+            .and_then(|path| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "document".to_owned());
+        let mut written = Vec::new();
+        for (index, start) in cuts.iter().enumerate() {
+            let end = cuts
+                .get(index + 1)
+                .map(|next| next.saturating_sub(1))
+                .unwrap_or(total);
+            if end < *start {
+                continue;
+            }
+            let pages: Vec<usize> = (*start..=end).collect();
+            let target = directory.join(format!("{stem} p{start}-{end}.pdf"));
+            self.extract_pages(&pages, &target)?;
+            written.push(target);
+        }
+        Ok(written)
+    }
+
     /// Découpe le document en fichiers de `per_file` pages maximum.
     pub fn split(&self, directory: &Path, per_file: usize) -> Result<Vec<PathBuf>> {
         let per_file = per_file.max(1);

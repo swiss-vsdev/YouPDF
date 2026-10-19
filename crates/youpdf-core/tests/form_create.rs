@@ -246,8 +246,6 @@ fn reinitialiser_le_formulaire() {
 /// Les réglages d'apparence et de format se relisent après écriture.
 #[test]
 fn proprietes_de_champ_aller_retour() {
-    use youpdf_core::forms::FieldProperties;
-
     let mut doc = Document::from_bytes(&page_blanche()).expect("ouverture");
     doc.create_form_field(&NewFormField::text(1, [72.0, 600.0, 272.0, 620.0], "Nom"))
         .expect("création");

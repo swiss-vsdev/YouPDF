@@ -81,6 +81,7 @@ Unchecked below = still open. The plan document is the authoritative task list.
 *   **Action:** Complete the prompt engineering for `LegalReview` and `FinancialReview` modes in `crates/youpdf-ai/src/tasks.rs`.
 
 ## 7. Missing UI Parity
+*   **Organize pages:** full-window grid with select all/odd/even, rotate, delete, extract, insert, replace, split, duplicate, shift/Cmd multi-select and drag reorder with insertion bar; Extract/Insert/Replace/Split dialogs cover the planned options.
 *   **Slideshow:** Needs implementing (F5 triggered).
 *   **Measure Tools:** Needs `Perimeter`/`Area` markup rendering.
 *   **Export Formats:** Needs DOCX/XLSX/PPTX writer implementations.

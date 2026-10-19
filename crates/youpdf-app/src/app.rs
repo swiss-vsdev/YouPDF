@@ -19,6 +19,7 @@ use egui::{
 use egui_phosphor::regular as ph;
 
 mod forms_ui;
+mod organize_ui;
 
 use youpdf_shared::{pal, set_palette, Theme};
 use crate::ai::AiPanel;
@@ -1246,6 +1247,24 @@ pub struct YouPdfApp {
     organize_selected: BTreeSet<usize>,
     /// Pages par fichier pour le découpage.
     organize_split: usize,
+    /// Ancre du dernier clic (Maj = plage).
+    organize_anchor: Option<usize>,
+    /// Page en cours de glissement.
+    organize_drag: Option<usize>,
+    /// Fenêtre d'action ouverte.
+    organize_dialog: Option<organize_ui::OrganizeDialog>,
+    /// Extraction : un seul fichier, et suppression des pages d'origine.
+    organize_extract_single: bool,
+    organize_extract_delete: bool,
+    /// Insertion : position (0 avant, 1 après, 2 début, 3 fin) et page.
+    organize_insert_where: u8,
+    organize_insert_page: usize,
+    /// Remplacement : plage visée.
+    organize_replace_from: usize,
+    organize_replace_to: usize,
+    /// Découpe : 0 pages, 1 taille, 2 signets ; taille max en Mo.
+    organize_split_mode: u8,
+    organize_split_mb: f32,
     /// Ligne « remplacer » ouverte.
     replace_open: bool,
     /// Texte de remplacement.
@@ -1491,6 +1510,17 @@ impl YouPdfApp {
             organize_open: false,
             organize_selected: BTreeSet::new(),
             organize_split: 1,
+            organize_anchor: None,
+            organize_drag: None,
+            organize_dialog: None,
+            organize_extract_single: true,
+            organize_extract_delete: false,
+            organize_insert_where: 1,
+            organize_insert_page: 1,
+            organize_replace_from: 1,
+            organize_replace_to: 1,
+            organize_split_mode: 0,
+            organize_split_mb: 5.0,
             replace_open: false,
             replace_text: String::new(),
             redact_regions: Vec::new(),
@@ -5942,251 +5972,6 @@ impl YouPdfApp {
     /// suppression, extraction, découpage et insertion. Les opérations
     /// s'appliquent immédiatement au document en mémoire ; rien n'est écrit
     /// sur le disque tant que l'utilisateur n'enregistre pas.
-    fn organize_window(&mut self, ctx: &egui::Context) {
-        if !self.organize_open {
-            return;
-        }
-        if self.tabs.is_empty() {
-            self.organize_open = false;
-            return;
-        }
-
-        let active = self.active;
-        let ppp = ctx.pixels_per_point();
-        let renderer = &*self.renderer;
-        let status = &mut self.render_status;
-        let tab = &mut self.tabs[active];
-        let total = tab.total();
-        let current = tab.page;
-        let mut selected = std::mem::take(&mut self.organize_selected);
-        // Un document plus court (suppression, nouvelle ouverture) laisse des
-        // pages fantômes dans la sélection.
-        selected.retain(|page| *page >= 1 && *page <= total);
-        let mut split_per = self.organize_split;
-        let mut action: Option<OrganizeAction> = None;
-        let mut open = true;
-
-        egui::Window::new("Organize pages")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size(vec2(720.0, 520.0))
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    if organize_button(ui, icon_rotate_left, "Rotate left") {
-                        action = Some(OrganizeAction::Rotate(-90));
-                    }
-                    if organize_button(ui, icon_rotate_right, "Rotate right") {
-                        action = Some(OrganizeAction::Rotate(90));
-                    }
-                    if organize_button(ui, icon_trash, "Delete") {
-                        action = Some(OrganizeAction::Delete);
-                    }
-                    if organize_button(ui, icon_export, "Extract…") {
-                        action = Some(OrganizeAction::Extract);
-                    }
-                    if organize_button(ui, icon_scissors, "Split…") {
-                        action = Some(OrganizeAction::Split);
-                    }
-                    if organize_button(ui, icon_file_plus, "Insert…") {
-                        action = Some(OrganizeAction::Insert);
-                    }
-                });
-                ui.add_space(6.0);
-                ui.horizontal_wrapped(|ui| {
-                    let count = if selected.is_empty() { total } else { selected.len() };
-                    ui.label(
-                        RichText::new(if selected.is_empty() {
-                            format!("No selection: actions apply to all {total} page(s)")
-                        } else {
-                            format!("{count} of {total} page(s) selected")
-                        })
-                        .size(11.0)
-                        .color(pal().muted),
-                    );
-                    if ui.small_button("Select all").clicked() {
-                        selected = (1..=total).collect();
-                    }
-                    if ui.small_button("Clear").clicked() {
-                        selected.clear();
-                    }
-                    ui.add_space(8.0);
-                    ui.label(RichText::new("Split every").size(11.0).color(pal().muted));
-                    ui.add(egui::DragValue::new(&mut split_per).range(1..=200).speed(0.2));
-                    ui.label(RichText::new("page(s)").size(11.0).color(pal().muted));
-                });
-                ui.add_space(6.0);
-                ui.separator();
-
-                ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            for page in 1..=total as u32 {
-                                let (wp, hp) = tab.doc.page_size(page);
-                                let scale = 104.0 / wp.max(1.0);
-                                let thumb = vec2(wp * scale, hp * scale);
-                                let (rect, resp) =
-                                    ui.allocate_exact_size(vec2(116.0, 172.0), Sense::click());
-                                let img_rect = Rect::from_center_size(
-                                    pos2(rect.center().x, rect.min.y + 8.0 + thumb.y * 0.5),
-                                    thumb,
-                                );
-                                let picked = selected.contains(&(page as usize));
-                                ui.painter().rect_filled(
-                                    img_rect.expand(3.0),
-                                    Rounding::same(3.0),
-                                    if picked {
-                                        pal().thumb_tint
-                                    } else {
-                                        Color32::from_rgb(0x28, 0x28, 0x28)
-                                    },
-                                );
-                                if let Some(tex) = Self::page_texture(
-                                    ctx,
-                                    renderer,
-                                    tab,
-                                    page,
-                                    THUMBNAIL_STEP,
-                                    scale,
-                                    ppp,
-                                    true,
-                                    status,
-                                ) {
-                                    ui.painter().image(
-                                        tex.id(),
-                                        img_rect,
-                                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                                        Color32::WHITE,
-                                    );
-                                }
-                                if picked {
-                                    ui.painter().rect_stroke(
-                                        img_rect.expand(3.0),
-                                        3.0,
-                                        Stroke::new(1.5_f32, pal().accent),
-                                    );
-                                }
-                                ui.painter().text(
-                                    pos2(rect.center().x, img_rect.max.y + 14.0),
-                                    Align2::CENTER_CENTER,
-                                    page.to_string(),
-                                    FontId::proportional(11.0),
-                                    if picked { pal().accent } else { pal().muted },
-                                );
-                                if page as usize == current {
-                                    ui.painter().circle_filled(
-                                        pos2(rect.min.x + 8.0, rect.min.y + 8.0),
-                                        3.0,
-                                        pal().accent,
-                                    );
-                                }
-                                if resp.clicked() {
-                                    if picked {
-                                        selected.remove(&(page as usize));
-                                    } else {
-                                        selected.insert(page as usize);
-                                    }
-                                }
-                                ui.add_space(2.0);
-                            }
-                        });
-                    });
-            });
-
-        self.organize_selected = selected;
-        self.organize_split = split_per.max(1);
-        if !open {
-            self.organize_open = false;
-        }
-        let Some(action) = action else {
-            return;
-        };
-
-        // Pages visées : la sélection, ou le document entier.
-        let pages: Vec<usize> = if self.organize_selected.is_empty() {
-            (1..=total).collect()
-        } else {
-            self.organize_selected.iter().copied().collect()
-        };
-        let Some(tab) = self.tabs.get_mut(active) else {
-            return;
-        };
-        let per_file = self.organize_split;
-
-        let outcome: Result<String, String> = match action {
-            OrganizeAction::Rotate(delta) => tab
-                .doc
-                .rotate_pages(&pages, delta)
-                .map(|count| format!("{count} page(s) rotated"))
-                .map_err(|err| format!("Rotation failed: {err}")),
-            OrganizeAction::Delete => {
-                if pages.len() >= total {
-                    Err("Keep at least one page".to_owned())
-                } else {
-                    tab.doc
-                        .delete_pages(&pages)
-                        .map(|count| format!("{count} page(s) removed"))
-                        .map_err(|err| format!("Delete failed: {err}"))
-                }
-            }
-            OrganizeAction::Extract => match rfd::FileDialog::new()
-                .add_filter("PDF", &["pdf"])
-                .set_file_name("extract.pdf")
-                .save_file()
-            {
-                Some(path) => tab
-                    .doc
-                    .extract_pages(&pages, &path)
-                    .map(|_| {
-                        format!(
-                            "{} page(s) extracted to {}",
-                            pages.len(),
-                            path.file_name().unwrap_or_default().to_string_lossy()
-                        )
-                    })
-                    .map_err(|err| format!("Extract failed: {err}")),
-                None => Err(String::new()),
-            },
-            OrganizeAction::Split => match rfd::FileDialog::new().pick_folder() {
-                Some(directory) => tab
-                    .doc
-                    .split(&directory, per_file)
-                    .map(|files| format!("{} file(s) written", files.len()))
-                    .map_err(|err| format!("Split failed: {err}")),
-                None => Err(String::new()),
-            },
-            OrganizeAction::Insert => match rfd::FileDialog::new()
-                .add_filter("PDF", &["pdf"])
-                .pick_file()
-            {
-                Some(path) => {
-                    let after = pages.iter().copied().max().unwrap_or(1);
-                    tab.doc
-                        .insert_pages_after(after, &path)
-                        .map(|count| format!("{count} page(s) inserted after page {after}"))
-                        .map_err(|err| format!("Insert failed: {err}"))
-                }
-                None => Err(String::new()),
-            },
-        };
-
-        match action {
-            OrganizeAction::Rotate(_) | OrganizeAction::Delete | OrganizeAction::Insert => {
-                if outcome.is_ok() {
-                    self.mark_document_changed();
-                }
-            }
-            OrganizeAction::Extract | OrganizeAction::Split => {}
-        }
-        match outcome {
-            Ok(message) => self.toast(ctx, message),
-            Err(message) if !message.is_empty() => self.toast(ctx, message),
-            Err(_) => {}
-        }
-    }
-
     /// Description du champ à créer pour un outil donné.
     fn new_form_field(
         kind: FormKind,
@@ -11988,6 +11773,8 @@ impl eframe::App for YouPdfApp {
             .show(ctx, |ui| {
                 if self.home_open || self.tabs.is_empty() {
                     self.empty_state(ui);
+                } else if self.organize_open {
+                    self.organize_view(ui);
                 } else {
                     self.canvas(ui);
                 }
@@ -12014,7 +11801,6 @@ impl eframe::App for YouPdfApp {
         self.draft_window(ctx);
         self.redact_window(ctx);
         self.page_props_window(ctx);
-        self.organize_window(ctx);
         self.activity_window(ctx);
         self.ai_window(ctx);
         if !self.render_status.is_empty() {
@@ -12930,21 +12716,6 @@ fn bookmark_all_keys(tree: &[OutlineEntry]) -> Vec<String> {
     let mut out = Vec::new();
     walk(tree, &mut Vec::new(), &mut out);
     out
-}
-
-/// Opérations de la fenêtre « Organiser les pages ».
-#[derive(Clone, Copy)]
-enum OrganizeAction {
-    /// Rotation de `delta` degrés (multiple de 90).
-    Rotate(i64),
-    /// Suppression des pages sélectionnées.
-    Delete,
-    /// Extraction vers un nouveau fichier.
-    Extract,
-    /// Découpage en fichiers de N pages.
-    Split,
-    /// Insertion des pages d'un autre PDF.
-    Insert,
 }
 
 /// Bouton d'action de la fenêtre d'organisation : icône puis libellé.
