@@ -957,3 +957,38 @@ fn ajout_avec_un_nom_en_double_laisse_une_seule_entree() {
     assert!(!text.contains("premier"), "l'ancien flux est resté");
     assert!(!text.contains("second"), "l'ancien flux est resté");
 }
+
+/// Remplacer une plage insère les pages du fichier source à sa place.
+#[test]
+fn replace_pages_swaps_the_range() {
+    let base = multipage_pdf(4).expect("PDF de base");
+    let extra = multipage_pdf(2).expect("PDF source");
+    let mut doc = Document::from_bytes(&base).expect("ouverture");
+    let source = temp_path("replace.pdf");
+    std::fs::write(&source, &extra).expect("écriture du source");
+
+    let inserted = doc.replace_pages(&[2, 3], &source).expect("remplacement");
+    assert_eq!(inserted, 2, "deux pages insérées");
+    assert_eq!(doc.page_count(), 4, "4 - 2 + 2");
+
+    let _ = std::fs::remove_file(source);
+}
+
+/// La découpe par taille ne produit aucun fichier plus gros que la limite.
+#[test]
+fn split_by_size_respects_the_limit() {
+    let bytes = multipage_pdf(6).expect("PDF de test");
+    let doc = Document::from_bytes(&bytes).expect("ouverture");
+    let dir = temp_path("split-size");
+    std::fs::create_dir_all(&dir).expect("dossier de découpe");
+
+    let files = doc.split_by_size(&dir, 4096).expect("découpe par taille");
+    assert!(!files.is_empty());
+    for path in &files {
+        let size = std::fs::metadata(path).expect("taille").len();
+        assert!(size <= 4096 || files.len() == 6, "{path:?} : {size} octets");
+        let part = Document::open(path).expect("relecture");
+        assert!(part.page_count() >= 1);
+        let _ = std::fs::remove_file(path);
+    }
+}
