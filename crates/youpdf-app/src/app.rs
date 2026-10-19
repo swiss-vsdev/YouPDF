@@ -501,6 +501,41 @@ fn selection_text(frags: &[TextFragment], span: Option<([f32; 2], [f32; 2])>) ->
     out
 }
 
+/// Quadrilatères d'une mise en évidence : un par ligne de texte, les blocs
+/// sélectionnés d'une même ligne étant réunis.
+fn markup_quads(frags: &[TextFragment], indices: &[usize]) -> Vec<[f32; 8]> {
+    let mut lines: Vec<[f32; 4]> = Vec::new();
+    for &index in indices {
+        let Some(frag) = frags.get(index) else {
+            continue;
+        };
+        let rect = frag.rect;
+        let height = frag.font_size.max(1.0);
+        let center = (rect[1] + rect[3]) * 0.5;
+        match lines.iter_mut().find(|line| {
+            let line_center = (line[1] + line[3]) * 0.5;
+            (line_center - center).abs() <= height * 0.6
+        }) {
+            Some(line) => {
+                line[0] = line[0].min(rect[0]);
+                line[1] = line[1].min(rect[1]);
+                line[2] = line[2].max(rect[2]);
+                line[3] = line[3].max(rect[3]);
+            }
+            None => lines.push(rect),
+        }
+    }
+    lines
+        .iter()
+        .map(|line| {
+            // Coins : haut-gauche, haut-droit, bas-gauche, bas-droit.
+            [
+                line[0], line[3], line[2], line[3], line[0], line[1], line[2], line[1],
+            ]
+        })
+        .collect()
+}
+
 /// Ordre de lecture des blocs d'une page.
 ///
 /// Deux passes plutôt qu'un comparateur : un comparateur « même ligne ? » n'est
@@ -820,12 +855,13 @@ enum ToolAction {
 }
 
 /// Couleurs de préréglage proposées dans la popup.
-const PRESET_COLORS: [[u8; 3]; 7] = [
+const PRESET_COLORS: [[u8; 3]; 8] = [
     [255, 235, 59],
     [120, 220, 120],
     [255, 140, 200],
     [255, 170, 60],
     [120, 170, 255],
+    [180, 130, 240],
     [230, 80, 80],
     [40, 40, 40],
 ];
@@ -3544,6 +3580,17 @@ impl YouPdfApp {
             let label = STAMP_NAMES[self.stamp_choice.min(STAMP_NAMES.len() - 1)];
             annot.content = label.to_owned();
         }
+        self.push_annot(annot);
+    }
+
+    /// Ajoute une mise en évidence alignée sur les lignes de texte.
+    fn add_markup_annot(&mut self, page: usize, kind: AnnotationKind, quads: Vec<[f32; 8]>) {
+        if quads.is_empty() {
+            return;
+        }
+        let mut annot = Annotation::new(page, kind, [0.0, 0.0, 0.0, 0.0]);
+        annot.style = self.annot_style(kind);
+        annot.set_quads(quads);
         self.push_annot(annot);
     }
 
@@ -9602,6 +9649,13 @@ impl YouPdfApp {
         // Les autres modes et les outils qui dessinent gardent le leur.
         let select_text_tool = matches!(self.mode, None | Some(0))
             && matches!(self.annot_tool, None | Some(0));
+        // Une mise en évidence se pose sur le texte : son glissé sélectionne,
+        // il ne dessine pas de rectangle.
+        let markup_kind = match action {
+            ToolAction::DragRect(kind) if kind.is_markup() => Some(kind),
+            _ => None,
+        };
+        let text_drag = select_text_tool || markup_kind.is_some();
         let mut sel = self.text_sel;
         let mut sel_copy = false;
         let mut sel_all = false;
@@ -9621,6 +9675,7 @@ impl YouPdfApp {
         let drag_from = &mut self.drag_from;
         let drag_to = &mut self.drag_to;
         let mut pending_rect: Option<(usize, AnnotationKind, [f32; 4])> = None;
+        let mut pending_markup: Option<(usize, AnnotationKind, Vec<[f32; 8]>)> = None;
         let mut pending_ink: Option<(usize, Vec<[f32; 2]>)> = None;
         let mut pending_click: Option<(usize, [f32; 2])> = None;
         let mut pending_hit: Option<(usize, [f32; 2])> = None;
@@ -10236,7 +10291,7 @@ impl YouPdfApp {
                     // outil n'est armé, et avec l'outil Sélection du mode
                     // Commentaire. Les outils qui dessinent gardent leur
                     // glissé.
-                    if select_text_tool {
+                    if text_drag {
                         if resp.drag_started() {
                             if !tab.fragments.contains_key(&page) {
                                 extract_page_fragments(renderer, tab, page);
@@ -10258,6 +10313,24 @@ impl YouPdfApp {
                                     }
                                 }
                             }
+                        } else if resp.drag_stopped() {
+                            // Fin du glissé : avec une mise en évidence armée,
+                            // la sélection devient une annotation posée sur les
+                            // lignes touchées.
+                            if let Some(kind) = markup_kind {
+                                if let Some(frags) = tab.fragments.get(&page) {
+                                    let indices =
+                                        selected_indices(frags, sel.and_then(|s| s.span));
+                                    if !indices.is_empty() {
+                                        pending_markup = Some((
+                                            page as usize,
+                                            kind,
+                                            markup_quads(frags, &indices),
+                                        ));
+                                    }
+                                }
+                                sel = None;
+                            }
                         }
                         if resp.clicked() {
                             sel = None;
@@ -10267,7 +10340,7 @@ impl YouPdfApp {
                         // sélectionner » (sans ancre) couvrirait la page
                         // entière et n'apprendrait rien.
                         let explicit_sel = sel.map(|s| s.span.is_some()).unwrap_or(false);
-                        if on_page && explicit_sel {
+                        if on_page && explicit_sel && markup_kind.is_none() {
                             // Inspecteur de la sélection de texte : enveloppe
                             // des blocs sélectionnés.
                             if let Some(frags) = tab.fragments.get(&page) {
@@ -10339,6 +10412,9 @@ impl YouPdfApp {
                             }
                         }
                         match action {
+                            // Une mise en évidence passe par la sélection de
+                            // texte ; seul un rectangle dessiné arrive ici.
+                            ToolAction::DragRect(_) if markup_kind.is_some() => {}
                             ToolAction::DragRect(kind) => {
                                 if resp.dragged() {
                                     let point = resp.interact_pointer_pos().map(to_pdf);
@@ -10571,6 +10647,9 @@ impl YouPdfApp {
 
         if let Some((page, kind, rect)) = pending_rect {
             self.add_rect_annot(page, kind, rect);
+        }
+        if let Some((page, kind, quads)) = pending_markup {
+            self.add_markup_annot(page, kind, quads);
         }
         if let Some((page, points)) = pending_ink {
             tracing::info!("ink annot page {page} points {}", points.len());
@@ -12105,6 +12184,13 @@ fn annots_to_page(doc: &Document, annots: &[Annotation]) -> Vec<Annotation> {
                 *point = view.page_point(*point);
             }
         }
+        for quad in &mut ann.quads {
+            for point in quad.chunks_exact_mut(2) {
+                let converted = view.page_point([point[0], point[1]]);
+                point[0] = converted[0];
+                point[1] = converted[1];
+            }
+        }
     }
     out
 }
@@ -12117,6 +12203,13 @@ fn annots_to_display(doc: &Document, mut annots: Vec<Annotation>) -> Vec<Annotat
         for stroke in &mut ann.ink_points {
             for point in stroke.iter_mut() {
                 *point = view.display_point(*point);
+            }
+        }
+        for quad in &mut ann.quads {
+            for point in quad.chunks_exact_mut(2) {
+                let converted = view.display_point([point[0], point[1]]);
+                point[0] = converted[0];
+                point[1] = converted[1];
             }
         }
     }
@@ -13293,38 +13386,69 @@ fn draw_annots(
         );
         let width = (annot.style.line_width * scale.max(0.3)).max(1.0);
         let font = (annot.style.font_size * scale).clamp(6.0, 48.0);
+        // Une mise en évidence posée sur du texte porte un quadrilatère par
+        // ligne ; sans quadrilatère, le rectangle fait la boîte.
+        let quad_rect = |q: [f32; 8]| -> Rect {
+            let points = [
+                to_screen(q[0], q[1]),
+                to_screen(q[2], q[3]),
+                to_screen(q[4], q[5]),
+                to_screen(q[6], q[7]),
+            ];
+            let mut rect = Rect::from_min_max(points[0], points[0]);
+            for point in points.iter().skip(1) {
+                rect = rect.union(Rect::from_min_max(*point, *point));
+            }
+            rect
+        };
+        let blocks: Vec<Rect> = if annot.quads.is_empty() {
+            vec![r]
+        } else {
+            annot.quads.iter().map(|q| quad_rect(*q)).collect()
+        };
 
         match annot.kind {
             AnnotationKind::Highlight => {
-                painter.rect_filled(r, Rounding::same(2.0), fill);
+                for block in &blocks {
+                    painter.rect_filled(*block, Rounding::same(2.0), fill);
+                }
             }
             AnnotationKind::Squiggly => {
                 // Même ondulation que l'apparence enregistrée : deux crans
                 // par motif, posés sur le bas de la boîte.
                 let amp = (3.0 * scale).max(1.0);
-                let steps = ((r.width() / (4.0 * scale)).ceil() as usize * 2).max(4);
-                let pts: Vec<egui::Pos2> = (0..=steps)
-                    .map(|i| {
-                        let t = i as f32 / steps as f32;
-                        pos2(
-                            r.min.x + t * r.width(),
-                            r.max.y - if i % 2 == 0 { amp * 0.6 } else { amp * 1.8 },
-                        )
-                    })
-                    .collect();
-                painter.add(Shape::line(pts, Stroke::new(width, color)));
+                for block in &blocks {
+                    let steps = ((block.width() / (4.0 * scale)).ceil() as usize * 2).max(4);
+                    let pts: Vec<egui::Pos2> = (0..=steps)
+                        .map(|i| {
+                            let t = i as f32 / steps as f32;
+                            pos2(
+                                block.min.x + t * block.width(),
+                                block.max.y - if i % 2 == 0 { amp * 0.6 } else { amp * 1.8 },
+                            )
+                        })
+                        .collect();
+                    painter.add(Shape::line(pts, Stroke::new(width, color)));
+                }
             }
             AnnotationKind::Underline => {
-                painter.line_segment(
-                    [pos2(r.min.x, r.max.y), pos2(r.max.x, r.max.y)],
-                    Stroke::new(width, color),
-                );
+                for block in &blocks {
+                    painter.line_segment(
+                        [pos2(block.min.x, block.max.y), pos2(block.max.x, block.max.y)],
+                        Stroke::new(width, color),
+                    );
+                }
             }
             AnnotationKind::StrikeOut => {
-                painter.line_segment(
-                    [pos2(r.min.x, r.center().y), pos2(r.max.x, r.center().y)],
-                    Stroke::new(width, color),
-                );
+                for block in &blocks {
+                    painter.line_segment(
+                        [
+                            pos2(block.min.x, block.center().y),
+                            pos2(block.max.x, block.center().y),
+                        ],
+                        Stroke::new(width, color),
+                    );
+                }
             }
             AnnotationKind::Ink => {
                 for stroke in &annot.ink_points {
@@ -13643,6 +13767,26 @@ mod tests {
         let span = Some(([30.0, 88.0], [30.0, 88.0]));
         assert_eq!(selected_indices(&frags, span), vec![1]);
         assert_eq!(selection_text(&frags, span), "bonjour");
+    }
+
+    /// Une mise en évidence pose un quadrilatère par ligne de texte.
+    #[test]
+    fn markup_quads_un_par_ligne() {
+        let frags = vec![
+            frag("bonjour", [10.0, 82.0, 55.0, 94.0], 12.0),
+            frag("monde", [60.0, 82.0, 110.0, 94.0], 12.0),
+            frag("seconde", [10.0, 60.0, 60.0, 72.0], 12.0),
+        ];
+        let quads = markup_quads(&frags, &[0, 1, 2]);
+
+        assert_eq!(quads.len(), 2, "une ligne, puis l'autre");
+        // Première ligne : ses deux blocs sont réunis.
+        assert_eq!(
+            quads[0],
+            [10.0, 94.0, 110.0, 94.0, 10.0, 82.0, 110.0, 82.0]
+        );
+        // Seconde ligne : son propre bloc.
+        assert_eq!(quads[1], [10.0, 72.0, 60.0, 72.0, 10.0, 60.0, 60.0, 60.0]);
     }
 
     /// Un point hors de tout bloc retombe sur le plus proche.

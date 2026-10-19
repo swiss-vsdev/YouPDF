@@ -286,3 +286,44 @@ fn exports_datement_au_format_pdf() {
     let text = String::from_utf8_lossy(&fdf);
     assert!(text.contains("(D:20260304050607Z)"), "date FDF attendue");
 }
+
+/// Une mise en évidence posée sur du texte garde un quadrilatère par ligne.
+#[test]
+fn surlignage_multi_lignes_garde_ses_quadrilateres() {
+    let mut doc = Document::from_bytes(&text_pdf("Bonjour")).expect("ouverture");
+    let mut ann = highlight(1, "");
+    ann.set_quads(vec![
+        [70.0, 712.0, 300.0, 712.0, 70.0, 695.0, 300.0, 695.0],
+        [70.0, 690.0, 200.0, 690.0, 70.0, 673.0, 200.0, 673.0],
+    ]);
+    // `rect` couvre les deux lignes, avec la marge de 2 points.
+    assert_eq!(ann.rect, [68.0, 671.0, 302.0, 714.0]);
+
+    doc.apply_annotations(&[ann]).expect("écriture");
+    let back = doc.read_annotations();
+
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].quads.len(), 2, "un quadrilatère par ligne");
+    assert_eq!(back[0].quads[0][0], 70.0);
+    assert_eq!(back[0].quads[1][7], 673.0);
+}
+
+/// Sans quadrilatère, l'apparence remplit le rectangle comme avant.
+#[test]
+fn apparence_surlignage_sans_quadrilatere() {
+    let ann = highlight(1, "");
+    let content = String::from_utf8(ann.appearance_content().expect("apparence")).expect("utf8");
+    assert_eq!(content.matches("re f").count(), 1);
+}
+
+/// L'apparence d'une mise en évidence multi-lignes a un bloc par ligne.
+#[test]
+fn apparence_surlignage_multi_lignes() {
+    let mut ann = highlight(1, "");
+    ann.set_quads(vec![
+        [70.0, 712.0, 300.0, 712.0, 70.0, 695.0, 300.0, 695.0],
+        [70.0, 690.0, 200.0, 690.0, 70.0, 673.0, 200.0, 673.0],
+    ]);
+    let content = String::from_utf8(ann.appearance_content().expect("apparence")).expect("utf8");
+    assert_eq!(content.matches("re f").count(), 2);
+}
