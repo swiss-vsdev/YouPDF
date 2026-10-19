@@ -54,7 +54,7 @@ pub use compare::{ComparisonReport, Difference, DifferenceKind};
 pub use convert::{ImageFormat, TextFormat};
 pub use create::{blank_document, document_from_images};
 pub use crop::CropMargins;
-pub use compress::CompressionReport;
+pub use compress::{CompressionExtras, CompressionReport};
 pub use document::{Document, PageBoxes, PageView};
 pub use edit::{
     encode_pdf_literal, estimate_text_width, patch_font_name, ImageCrop, ImageInfo, ImageTransform,

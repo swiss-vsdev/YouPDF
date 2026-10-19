@@ -35,7 +35,7 @@ use youpdf_core::ocr::{make_searchable, TesseractEngine};
 use youpdf_core::{
     blank_document, document_from_images, export_comments, fold_case, Annotation, AnnotationKind,
     AnnotationState, AnnotationStyle, AttachmentInfo, Background, BandSlots, Bates, BatesPosition,
-    CommentFormat, ComparisonReport, Conformance, CropMargins, DifferenceKind, Document,
+    CommentFormat, ComparisonReport, CompressionExtras, Conformance, CropMargins, DifferenceKind, Document,
     EncryptionOptions, EncryptionStrength, ExtractedTable, FieldProperties, FormDataFormat,
     FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, MeasureKind, Measurement,
     NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem, OutlineStyle,
@@ -1099,6 +1099,10 @@ pub struct YouPdfApp {
     compress_report: Option<String>,
     /// Niveau de compression d'image choisi.
     compress_level: CompressionLevel,
+    /// Optimisations structurelles de la compression.
+    compress_extras: CompressionExtras,
+    /// Estimation (avant, après) de la dernière simulation.
+    compress_estimate: Option<(usize, usize)>,
     /// Fenêtre « Protéger » et ses réglages.
     protect_open: bool,
     protect: EncryptionOptions,
@@ -1460,6 +1464,8 @@ impl YouPdfApp {
             compress_open: false,
             compress_report: None,
             compress_level: CompressionLevel::Ebook,
+            compress_extras: CompressionExtras::default(),
+            compress_estimate: None,
             protect_open: false,
             protect: EncryptionOptions::default(),
             crop_open: false,
@@ -7566,6 +7572,7 @@ impl YouPdfApp {
         }
         let mut open = true;
         let mut run = false;
+        let mut estimate = false;
         self.show_modal(ctx, "modal-compress", "Compress", 380.0, &mut open, |app, ui| {
             ui.label(
                 RichText::new(
@@ -7592,6 +7599,36 @@ impl YouPdfApp {
                 .size(11.0)
                 .color(pal().muted),
             );
+            ui.add_space(6.0);
+            ui.label(RichText::new("Also remove").size(12.0).color(pal().muted));
+            ui.checkbox(&mut app.compress_extras.strip_metadata, "Metadata and XMP");
+            ui.checkbox(&mut app.compress_extras.strip_thumbnails, "Page thumbnails");
+            ui.checkbox(&mut app.compress_extras.strip_bookmarks, "Bookmarks");
+            ui.checkbox(
+                &mut app.compress_extras.strip_structure,
+                "Tagged structure tree",
+            );
+            ui.horizontal(|ui| {
+                if ui.button("Estimate").clicked() {
+                    estimate = true;
+                }
+                if let Some((before, after)) = app.compress_estimate {
+                    let delta = if after <= before {
+                        format!("-{:.0}%", (1.0 - after as f64 / before.max(1) as f64) * 100.0)
+                    } else {
+                        format!("+{:.0}%", (after as f64 / before.max(1) as f64 - 1.0) * 100.0)
+                    };
+                    ui.label(
+                        RichText::new(format!(
+                            "{:.0} KB → {:.0} KB ({delta})",
+                            before as f64 / 1024.0,
+                            after as f64 / 1024.0
+                        ))
+                        .size(11.0)
+                        .color(pal().icon_bright),
+                    );
+                }
+            });
             if let Some(report) = app.compress_report.clone() {
                 ui.add_space(6.0);
                 ui.label(RichText::new(report).size(12.0).color(pal().icon_bright));
@@ -7603,6 +7640,19 @@ impl YouPdfApp {
         });
         if run {
             self.compress_active(ctx);
+        }
+        if estimate {
+            let level = self.compress_level.options();
+            let extras = self.compress_extras;
+            if let Some(tab) = self.tabs.get(self.active) {
+                match tab.doc.estimate_compressed(&level, &extras) {
+                    Ok(after) => {
+                        let before = tab.doc.to_bytes().map(|bytes| bytes.len()).unwrap_or(after);
+                        self.compress_estimate = Some((before, after));
+                    }
+                    Err(err) => self.toast(ctx, format!("Estimate failed: {err}")),
+                }
+            }
         }
         if !open {
             self.compress_open = false;
@@ -7667,8 +7717,10 @@ impl YouPdfApp {
             return;
         };
         let level = self.compress_level;
-        let result =
-            self.with_annotations_applied(|tab| tab.doc.compress_with(&path, &level.options()));
+        let extras = self.compress_extras;
+        let result = self.with_annotations_applied(|tab| {
+            tab.doc.compress_with_extras(&path, &level.options(), &extras)
+        });
         match result {
             Some(Ok(report)) => {
                 let before = report.before_bytes as f64 / 1024.0;
