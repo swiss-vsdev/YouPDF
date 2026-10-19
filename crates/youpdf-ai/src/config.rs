@@ -81,6 +81,19 @@ pub struct AppSettings {
     pub active_provider: Option<String>,
     /// Modèle actif.
     pub active_model: Option<String>,
+    /// Zoom des nouveaux onglets : `fit-width`, `fit-page`, `actual` ou un
+    /// pourcentage (`125`).
+    pub default_zoom: String,
+    /// Disposition des pages à l'ouverture (index dans `PageLayout`).
+    pub default_layout: usize,
+    /// Auteur par défaut des annotations.
+    pub author: String,
+    /// Enregistrement automatique, en minutes. Zéro : désactivé.
+    pub autosave_minutes: u32,
+    /// Unité par défaut des outils de mesure.
+    pub measure_unit: String,
+    /// Écran affiché au démarrage : `home` ou `blank`.
+    pub startup: String,
 }
 
 impl Default for AppSettings {
@@ -98,6 +111,12 @@ impl Default for AppSettings {
             ],
             active_provider: None,
             active_model: None,
+            default_zoom: "fit-width".to_string(),
+            default_layout: 1,
+            author: "YouPDF".to_string(),
+            autosave_minutes: 0,
+            measure_unit: "in".to_string(),
+            startup: "home".to_string(),
         }
     }
 }
