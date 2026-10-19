@@ -210,3 +210,83 @@ fn extensions() {
         assert_eq!(format.extension(), ext, "extension de {format:?}");
     }
 }
+
+/// La mise en page exacte écrit un cadre positionné par fragment.
+#[test]
+fn word_exact_layout_uses_frames() {
+    use youpdf_core::office::OfficeLayout;
+
+    let bytes = document_avec(&["Bonjour"]);
+    let doc = Document::from_bytes(&bytes).expect("ouverture");
+    let out_path = std::env::temp_dir().join("youpdf-exact-layout.docx");
+    doc.export_office_layout(&out_path, OfficeFormat::Word, OfficeLayout::Exact)
+        .expect("export");
+
+    let mut archive = ZipArchive::new(std::fs::File::open(&out_path).expect("archive")).expect("zip");
+    let mut xml = String::new();
+    archive
+        .by_name("word/document.xml")
+        .expect("document.xml")
+        .read_to_string(&mut xml)
+        .expect("lecture");
+
+    assert!(xml.contains("w:framePr"), "aucun cadre positionné : {xml}");
+    assert!(xml.contains("w:hAnchor=\"page\""), "ancrage manquant");
+    assert!(xml.contains("Bonjour"), "texte absent");
+    let _ = std::fs::remove_file(out_path);
+}
+
+/// La détection de table place deux colonnes séparées sur la même ligne.
+#[test]
+fn excel_exact_layout_detects_columns() {
+    use lopdf::{dictionary, Document as LopdfDoc, Object, Stream};
+    use youpdf_core::office::OfficeLayout;
+
+    let mut doc = LopdfDoc::with_version("1.7");
+    let font = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Font".to_vec()),
+        "Subtype" => Object::Name(b"Type1".to_vec()),
+        "BaseFont" => Object::Name(b"Helvetica".to_vec()),
+    });
+    let content = doc.add_object(Stream::new(
+        dictionary! {},
+        b"BT /F1 12 Tf 50 700 Td (Nom) Tj ET BT /F1 12 Tf 250 700 Td (Prix) Tj ET".to_vec(),
+    ));
+    let pages_id = doc.new_object_id();
+    let page = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "Parent" => pages_id,
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+        "Contents" => content,
+        "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+    });
+    doc.objects.insert(pages_id, Object::Dictionary(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![page.into()]),
+        "Count" => 1,
+    }));
+    let catalog = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => pages_id,
+    });
+    doc.trailer.set("Root", Object::Reference(catalog));
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).expect("écriture");
+
+    let doc = Document::from_bytes(&bytes).expect("ouverture");
+    let out_path = std::env::temp_dir().join("youpdf-exact-table.xlsx");
+    doc.export_office_layout(&out_path, OfficeFormat::Excel, OfficeLayout::Exact)
+        .expect("export");
+
+    let mut archive = ZipArchive::new(std::fs::File::open(&out_path).expect("archive")).expect("zip");
+    let mut sheet = String::new();
+    archive
+        .by_name("xl/worksheets/sheet1.xml")
+        .expect("sheet1.xml")
+        .read_to_string(&mut sheet)
+        .expect("lecture");
+
+    assert!(sheet.contains(r#"r="A1""#), "colonne A absente : {sheet}");
+    assert!(sheet.contains(r#"r="B1""#), "colonne B absente : {sheet}");
+    let _ = std::fs::remove_file(out_path);
+}

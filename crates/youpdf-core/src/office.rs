@@ -63,6 +63,16 @@ impl OfficeFormat {
     ];
 }
 
+/// Mode de reconstruction de la page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OfficeLayout {
+    /// Paragraphes fluides, un par ligne (texte éditable).
+    #[default]
+    Flow,
+    /// Chaque fragment est placé à ses coordonnées PDF (Word uniquement).
+    Exact,
+}
+
 /// Une partie du paquet OOXML : chemin dans l'archive et contenu XML.
 type Part = (String, String);
 
@@ -73,14 +83,65 @@ impl Document {
     /// section vide plutôt qu'une erreur : un document mixte s'exporte
     /// quand même.
     pub fn export_office(&self, path: impl AsRef<Path>, format: OfficeFormat) -> Result<()> {
+        self.export_office_layout(path, format, OfficeLayout::Flow)
+    }
+
+    /// Exporte vers Office en choisissant la mise en page.
+    ///
+    /// `Exact` ne change que Word : les autres formats placent déjà leur
+    /// contenu à des coordonnées mesurées.
+    pub fn export_office_layout(
+        &self,
+        path: impl AsRef<Path>,
+        format: OfficeFormat,
+        layout: OfficeLayout,
+    ) -> Result<()> {
         let path = path.as_ref();
         let pages = self.office_pages();
         let parts = match format {
-            OfficeFormat::Word => word_parts(&pages),
-            OfficeFormat::Excel => excel_parts(&pages),
+            OfficeFormat::Word => match layout {
+                OfficeLayout::Flow => word_parts(&pages),
+                OfficeLayout::Exact => word_parts_exact(&self.office_placed()),
+            },
+            OfficeFormat::Excel => match layout {
+                OfficeLayout::Flow => excel_parts(&pages),
+                OfficeLayout::Exact => excel_parts_positioned(&self.office_placed()),
+            },
             OfficeFormat::PowerPoint => powerpoint_parts(&pages),
         };
         write_zip(path, &parts)
+    }
+
+    /// Fragments positionnés de chaque page, pour la mise en page exacte.
+    fn office_placed(&self) -> Vec<(f32, f32, Vec<(String, f32, f32, f32)>)> {
+        let total = self.page_count() as u32;
+        let mut pages = Vec::new();
+        for number in 1..=total {
+            let (width, height) = self.page_size(number);
+            let mut runs = Vec::new();
+            if let Ok(fragments) = self.extract_text_fragments(number) {
+                for fragment in fragments {
+                    let text = fragment.text.trim();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    runs.push((
+                        text.to_string(),
+                        fragment.rect[0],
+                        // Haut du cadre, depuis le haut de la page.
+                        height - fragment.rect[3],
+                        fragment.font_size.max(4.0),
+                    ));
+                }
+            }
+            runs.sort_by(|a, b| {
+                a.2.partial_cmp(&b.2)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            });
+            pages.push((width, height, runs));
+        }
+        pages
     }
 
     /// Lignes de texte par page, `\u{c}` normalisé en `\n` et caractères
@@ -131,6 +192,51 @@ fn word_parts(pages: &[Vec<String>]) -> Vec<Part> {
             document_rels(),
         ),
     ]
+}
+
+/// Variante « mise en page exacte » : chaque fragment devient un cadre
+/// positionné en twips (1 pt = 20 twips) depuis le coin haut-gauche.
+fn word_parts_exact(pages: &[(f32, f32, Vec<(String, f32, f32, f32)>)]) -> Vec<Part> {
+    vec![
+        ("[Content_Types].xml".to_string(), word_content_types()),
+        ("_rels/.rels".to_string(), root_rels("word/document.xml")),
+        ("word/document.xml".to_string(), word_document_exact(pages)),
+        ("word/styles.xml".to_string(), word_styles()),
+        (
+            "word/_rels/document.xml.rels".to_string(),
+            document_rels(),
+        ),
+    ]
+}
+
+fn word_document_exact(pages: &[(f32, f32, Vec<(String, f32, f32, f32)>)]) -> String {
+    let mut body = String::new();
+    for (width, _height, runs) in pages {
+        for (text, x, y, size) in runs {
+            let x_twips = (*x * 20.0).round().max(0.0) as i64;
+            let y_twips = (*y * 20.0).round().max(0.0) as i64;
+            let w_twips = ((text.chars().count() as f32 * size * 0.5) * 20.0)
+                .round()
+                .max(200.0) as i64;
+            let h_twips = (*size * 1.4 * 20.0).round().max(200.0) as i64;
+            let half_points = (*size * 2.0).round() as i64;
+            body.push_str(&format!(
+                r#"<w:p><w:pPr><w:framePr w:w="{w_twips}" w:h="{h_twips}" w:hAnchor="page" w:vAnchor="page" w:x="{x_twips}" w:y="{y_twips}" w:wrap="none"/></w:pPr><w:r><w:rPr><w:sz w:val="{half_points}"/></w:rPr><w:t xml:space="preserve">{}</w:t></w:r></w:p>"#,
+                escape_xml(text)
+            ));
+        }
+        body.push_str(r#"<w:p><w:r><w:br w:type="page"/></w:r></w:p>"#);
+    }
+    let (width, height) = pages
+        .first()
+        .map(|(w, h, _)| (*w, *h))
+        .unwrap_or((595.0, 842.0));
+    let page_w = (width * 20.0).round() as i64;
+    let page_h = (height * 20.0).round() as i64;
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}<w:sectPr><w:pgSz w:w="{page_w}" w:h="{page_h}"/><w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0"/></w:sectPr></w:body></w:document>"#
+    )
 }
 
 /// `[Content_Types].xml` d'un document Word.
@@ -226,6 +332,95 @@ fn excel_parts(pages: &[Vec<String>]) -> Vec<Part> {
         ("xl/worksheets/sheet1.xml".to_string(), sheet),
         ("xl/sharedStrings.xml".to_string(), strings),
     ]
+}
+
+/// Détecte lignes et colonnes par alignement des fragments, puis écrit une
+/// cellule par intersection.
+fn excel_parts_positioned(pages: &[(f32, f32, Vec<(String, f32, f32, f32)>)]) -> Vec<Part> {
+    // Lignes : regroupées par ordonnée, à la tolérance d'une demi-hauteur.
+    let mut rows_out = String::new();
+    let mut shared = String::new();
+    let mut shared_count = 0usize;
+    let mut row_index = 0usize;
+
+    for (_, _, runs) in pages {
+        let mut lines: Vec<(f32, Vec<&(String, f32, f32, f32)>)> = Vec::new();
+        for run in runs {
+            let y = run.2;
+            match lines.iter_mut().find(|(line_y, _)| (line_y - y).abs() <= run.3 * 0.6) {
+                Some((_, bucket)) => bucket.push(run),
+                None => lines.push((y, vec![run])),
+            }
+        }
+        lines.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        for (_, bucket) in lines {
+            row_index += 1;
+            let mut cells: Vec<(f32, String)> = Vec::new();
+            let mut sorted = bucket;
+            sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            for run in sorted {
+                match cells.last_mut() {
+                    Some((x, text)) if (run.1 - *x).abs() <= 10.0 => {
+                        if !text.is_empty() {
+                            text.push(' ');
+                        }
+                        text.push_str(&run.0);
+                    }
+                    _ => cells.push((run.1, run.0.clone())),
+                }
+            }
+            if cells.is_empty() {
+                rows_out.push_str(&format!("<row r=\"{row_index}\"/>"));
+                continue;
+            }
+            rows_out.push_str(&format!("<row r=\"{row_index}\">"));
+            for (column, (_, text)) in cells.iter().enumerate() {
+                let reference = format!("{}{}", column_letters(column), row_index);
+                rows_out.push_str(&format!(
+                    "<c r=\"{reference}\" t=\"s\"><v>{shared_count}</v></c>"
+                ));
+                shared.push_str(r#"<si><t xml:space="preserve">"#);
+                shared.push_str(&escape_xml(text));
+                shared.push_str("</t></si>");
+                shared_count += 1;
+            }
+            rows_out.push_str("</row>");
+        }
+    }
+
+    let sheet = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{rows_out}</sheetData></worksheet>"#
+    );
+    let strings = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{shared_count}" uniqueCount="{shared_count}">{shared}</sst>"#
+    );
+    vec![
+        ("[Content_Types].xml".to_string(), excel_content_types()),
+        ("_rels/.rels".to_string(), root_rels("xl/workbook.xml")),
+        ("xl/workbook.xml".to_string(), excel_workbook()),
+        (
+            "xl/_rels/workbook.xml.rels".to_string(),
+            excel_workbook_rels(),
+        ),
+        ("xl/worksheets/sheet1.xml".to_string(), sheet),
+        ("xl/sharedStrings.xml".to_string(), strings),
+    ]
+}
+
+/// Lettres d'une colonne Excel (0 → A, 26 → AA).
+fn column_letters(mut column: usize) -> String {
+    let mut out = String::new();
+    loop {
+        out.insert(0, (b'A' + (column % 26) as u8) as char);
+        if column < 26 {
+            break;
+        }
+        column = column / 26 - 1;
+    }
+    out
 }
 
 /// `[Content_Types].xml` d'un classeur Excel.

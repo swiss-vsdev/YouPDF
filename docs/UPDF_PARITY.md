@@ -72,8 +72,7 @@ Unchecked below = still open. The plan document is the authoritative task list.
 *   **YouPDF:** Minimalist deflating.
 *   **Action:** Implement image resampling (Lanczos) for the three grades.
 *   **Protection:** UPDF supports 128/256 AES, owner/user passwords.
-*   **YouPDF:** AES implementation present.
-*   **Action:** Add UI for `EncryptionLevel` selector and permission toggles (Print, Copy, etc.).
+*   **YouPDF:** AES-256/R6 and RC4-128 writers, owner/user passwords, permission toggles, password prompt on open, encrypted-copy export, and a *Remove protection from a file…* entry point.
 
 ## 6. AI Integration
 *   **UPDF:** Integrated chat, summarize, translate, explain, legal/financial review.
@@ -85,5 +84,5 @@ Unchecked below = still open. The plan document is the authoritative task list.
 *   **Page operations:** crop with unit selector (pt/mm/cm/in), page range, CropBox/ArtBox/BleedBox/TrimBox targets, text-bounds auto-crop, reset; tile split (rows × columns) creating one page per tile; watermark anchoring (9 positions), offsets, tile gap and behind-content layering; header/footer `{page}`, `{pages}`, `{label}` macros.
 *   **Slideshow:** Needs implementing (F5 triggered).
 *   **Measure Tools:** Needs `Perimeter`/`Area` markup rendering.
-*   **Export Formats:** Needs DOCX/XLSX/PPTX writer implementations.
+*   **Export Formats:** DOCX/XLSX/PPTX writers implemented (text layer, one paragraph/row/slide per PDF line). Word also offers an *exact layout* mode that positions every text run with `w:framePr`, and Excel's exact mode detects table columns by run alignment.
 *   **Localization:** Needs complete i18n framework (replace all literals).

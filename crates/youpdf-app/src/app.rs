@@ -1090,6 +1090,8 @@ pub struct YouPdfApp {
     export_dpi: f32,
     /// Format bureautique choisi.
     export_office_format: OfficeFormat,
+    /// Word : placer chaque fragment à ses coordonnées d'origine.
+    export_office_exact: bool,
     /// Fenêtre « Compresser » : dernier bilan affiché.
     compress_open: bool,
     compress_report: Option<String>,
@@ -1430,6 +1432,7 @@ impl YouPdfApp {
             export_image_format: ImageFormat::Png,
             export_dpi: 150.0,
             export_office_format: OfficeFormat::Word,
+            export_office_exact: false,
             compress_open: false,
             compress_report: None,
             compress_level: CompressionLevel::Ebook,
@@ -2181,6 +2184,14 @@ impl YouPdfApp {
                     app.export_office_format = format;
                 }
             }
+            if app.export_mode == ExportMode::Office
+                && app.export_office_format == OfficeFormat::Word
+            {
+                ui.checkbox(
+                    &mut app.export_office_exact,
+                    "Exact layout (position each text run)",
+                );
+            }
             ui.add_space(8.0);
             ui.label(
                 RichText::new(match app.export_mode {
@@ -2272,10 +2283,15 @@ impl YouPdfApp {
             else {
                 return;
             };
+            let layout = if self.export_office_exact {
+                youpdf_core::office::OfficeLayout::Exact
+            } else {
+                youpdf_core::office::OfficeLayout::Flow
+            };
             let result = self
                 .tabs
                 .get(self.active)
-                .map(|tab| tab.doc.export_office(&path, format));
+                .map(|tab| tab.doc.export_office_layout(&path, format, layout));
             match result {
                 Some(Ok(())) => {
                     let name = path
@@ -7606,6 +7622,7 @@ impl YouPdfApp {
         }
         let mut open = true;
         let mut run = false;
+        let mut decrypt = false;
         self.show_modal(ctx, "modal-protect", "Protect", 420.0, &mut open, |app, ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Encryption").size(12.0).color(pal().muted));
@@ -7667,12 +7684,20 @@ impl YouPdfApp {
                 .color(pal().muted),
             );
             ui.add_space(6.0);
-            if ui.button("Save encrypted copy…").clicked() {
-                run = true;
-            }
+            ui.horizontal(|ui| {
+                if ui.button("Save encrypted copy…").clicked() {
+                    run = true;
+                }
+                if ui.button("Remove protection from a file…").clicked() {
+                    decrypt = true;
+                }
+            });
         });
         if run {
             self.protect_active(ctx);
+        }
+        if decrypt {
+            self.remove_protection(ctx);
         }
         if !open {
             self.protect_open = false;
