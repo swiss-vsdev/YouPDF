@@ -20,6 +20,10 @@ use egui_phosphor::regular as ph;
 use youpdf_shared::{pal, set_palette, Theme};
 use crate::ai::AiPanel;
 use crate::home::{self, HomeCategory, HomeView, ViewMode};
+use crate::inspector::{
+    arrow_x, paint_arrow, place_inspector, AnnotationId, InspectorTarget, TextBlockId,
+    INSPECTOR_HEIGHT, INSPECTOR_WIDTH,
+};
 use youpdf_core::compress::CompressionLevel;
 use youpdf_core::render::NullRenderer;
 use youpdf_core::ocr::{make_searchable, TesseractEngine};
@@ -868,6 +872,10 @@ pub struct YouPdfApp {
 
     panel: Option<Panel>,
     mode: Option<usize>,
+    /// Cible d'inspecteur flottant (texte, image, annotation, formulaire).
+    inspector_target: Option<InspectorTarget>,
+    /// Taille mesurée du dernier inspecteur affiché, pour le cadrer.
+    inspector_size: Option<egui::Vec2>,
     /// Liste déroulante `Outils` ouverte.
     tools_open: bool,
     /// Menu `…` (enregistrer, exporter, propriétés).
@@ -1169,6 +1177,8 @@ impl YouPdfApp {
             active: 0,
             panel: None,
             mode: None,
+            inspector_target: None,
+            inspector_size: None,
             tools_open: false,
             actions_open: false,
             props_open: false,
@@ -1656,6 +1666,8 @@ impl YouPdfApp {
         self.selected_annot = 0;
         self.has_annot_selection = false;
         self.text_sel = None;
+        self.inspector_target = None;
+        self.inspector_size = None;
         self.organize_selected.clear();
         // Les clés de chemin des signets sont les mêmes d'un document à
         // l'autre : sans ce nettoyage, le nouveau plan s'ouvrirait en édition
@@ -6370,6 +6382,103 @@ impl YouPdfApp {
 
     // -- Barre d'outils flottante ------------------------------------------
 
+    /// Inspecteur d'attributs flottant, posé au-dessus de la sélection.
+    ///
+    /// Le placement vient de [`place_inspector`] : jamais hors de la fenêtre,
+    /// flèche pointant vers l'élément. Le cadre suit la taille réelle de son
+    /// contenu : elle est mesurée à la trame et sert à la suivante, sinon un
+    /// texte long déborderait du fond.
+    fn inspector(&mut self, ctx: &egui::Context) {
+        let Some(target) = self.inspector_target.clone() else {
+            return;
+        };
+        if self.home_open || self.tabs.is_empty() {
+            return;
+        }
+        let annot = match &target {
+            InspectorTarget::AnnotationElement { id, .. } => self
+                .tabs
+                .get(self.active)
+                .and_then(|tab| tab.annots.get(id.0))
+                .cloned(),
+            _ => None,
+        };
+        let size = self.inspector_size.unwrap_or(vec2(INSPECTOR_WIDTH, INSPECTOR_HEIGHT));
+        let placement = place_inspector(target.bounds(), ctx.screen_rect(), size);
+        let mut measured: Option<egui::Vec2> = None;
+        let mut close = false;
+        let mut delete = false;
+        let mut delete_id = None;
+        Area::new(Id::new("inspector"))
+            .fixed_pos(placement.rect.min)
+            .order(Order::Foreground)
+            .show(ctx, |ui| {
+                let body = Frame::none()
+                    .fill(pal().widget_bg)
+                    .stroke(Stroke::new(1.0_f32, pal().separator))
+                    .rounding(Rounding::same(8.0))
+                    .inner_margin(Margin::symmetric(8.0, 6.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(target.headline())
+                                    .size(11.5)
+                                    .color(pal().icon_bright),
+                            );
+                            ui.label(
+                                RichText::new(format!("p. {}", target.page()))
+                                    .size(10.5)
+                                    .color(pal().muted),
+                            );
+                            if let Some(annot) = &annot {
+                                ui.label(
+                                    RichText::new(shorten(&annot.author, 10))
+                                        .size(10.5)
+                                        .color(pal().muted),
+                                );
+                                if ui.small_button("Delete").clicked() {
+                                    delete = true;
+                                    delete_id = Some(annot.id.clone());
+                                }
+                            }
+                            if ui.small_button("Close").clicked() {
+                                close = true;
+                            }
+                        });
+                    });
+                let rect = body.response.rect;
+                measured = Some(rect.size());
+                paint_arrow(
+                    ui.painter(),
+                    rect,
+                    arrow_x(target.bounds(), rect),
+                    placement.arrow_up,
+                    pal().widget_bg,
+                    pal().separator,
+                );
+            });
+        self.inspector_size = measured;
+        if delete {
+            // C'est bien l'annotation visée qui part, pas celle que la trame a
+            // sélectionnée entre-temps.
+            if let Some(id) = delete_id {
+                let idx = self
+                    .tabs
+                    .get(self.active)
+                    .and_then(|tab| tab.annots.iter().position(|a| a.id == id));
+                if let Some(idx) = idx {
+                    self.selected_annot = idx;
+                    self.remove_annot(idx);
+                }
+            }
+            close = true;
+        }
+        if close {
+            self.has_annot_selection = false;
+            self.inspector_target = None;
+        }
+    }
+
     fn toolbar(&mut self, ctx: &egui::Context) {
         // Sur l'accueil (aucun document, ou accueil affiché), pas de barres
         // flottantes : elles n'auraient aucun document sur quoi agir.
@@ -9139,6 +9248,10 @@ impl YouPdfApp {
         let tint_color = Color32::from_rgba_unmultiplied(tint[0], tint[1], tint[2], tint[3]);
         let tint_on = tint[3] > 0;
         let show_border = self.page_border;
+        // L'inspecteur suit la sélection : la trame du canevas le calcule, la
+        // barre d'outils (dessinée après) le pose.
+        let mode = self.mode;
+        let mut inspector_target: Option<InspectorTarget> = None;
 
         ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -9370,6 +9483,35 @@ impl YouPdfApp {
                         };
                         draw_annots(ui.painter(), tab, page, page_rect, scale, selected);
 
+                        // Annotation sélectionnée : l'inspecteur se pose
+                        // au-dessus d'elle (mode Commentaire).
+                        if mode == Some(0) {
+                            if let Some(idx) = selected {
+                                if let Some(annot) = tab.annots.get(idx) {
+                                    // Une réponse vit dans le fil, pas sur la
+                                    // page : elle n'est pas dessinée, donc pas
+                                    // d'inspecteur non plus.
+                                    if annot.page == page as usize && annot.reply_to.is_none() {
+                                        let screen = Rect::from_two_pos(
+                                            pos2(
+                                                page_rect.min.x + annot.rect[0] * scale,
+                                                page_rect.max.y - annot.rect[3] * scale,
+                                            ),
+                                            pos2(
+                                                page_rect.min.x + annot.rect[2] * scale,
+                                                page_rect.max.y - annot.rect[1] * scale,
+                                            ),
+                                        );
+                                        inspector_target = Some(InspectorTarget::AnnotationElement {
+                                            page: annot.page,
+                                            id: AnnotationId(idx),
+                                            bounds: screen,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+
                         // Réécriture sur place : le bloc touché devient un
                         // champ posé sur la page. Entrée valide, Échap annule,
                         // un clic à côté valide aussi.
@@ -9423,6 +9565,25 @@ impl YouPdfApp {
                                         ))
                                         .text_color(ink),
                                 );
+                                // Inspecteur du bloc en cours de réécriture.
+                                if mode == Some(1) {
+                                    let block_id = tab
+                                        .fragments
+                                        .get(&page)
+                                        .and_then(|frags| {
+                                            frags.iter().position(|frag| {
+                                                frag.rect == d.fragment.rect
+                                                    && frag.text == d.fragment.text
+                                            })
+                                        })
+                                        .unwrap_or(0);
+                                    inspector_target =
+                                        Some(InspectorTarget::TextElement {
+                                            page: d.fragment.page,
+                                            id: TextBlockId(block_id),
+                                            bounds: field,
+                                        });
+                                }
                                 if d.fresh {
                                     resp.request_focus();
                                     d.fresh = false;
@@ -9485,6 +9646,40 @@ impl YouPdfApp {
                             sel = None;
                         }
                         let on_page = sel.map(|s| s.page == page).unwrap_or(false);
+                        // Un glissé explicite ouvre l'inspecteur ; « tout
+                        // sélectionner » (sans ancre) couvrirait la page
+                        // entière et n'apprendrait rien.
+                        let explicit_sel = sel.map(|s| s.span.is_some()).unwrap_or(false);
+                        if on_page && explicit_sel {
+                            // Inspecteur de la sélection de texte : enveloppe
+                            // des blocs sélectionnés.
+                            if let Some(frags) = tab.fragments.get(&page) {
+                                let indices = selected_indices(frags, sel.and_then(|s| s.span));
+                                let mut union: Option<Rect> = None;
+                                for index in indices.iter().copied() {
+                                    let frag = &frags[index];
+                                    let rect = Rect::from_two_pos(
+                                        to_screen([frag.rect[0], frag.rect[1]]),
+                                        to_screen([frag.rect[2], frag.rect[3]]),
+                                    );
+                                    union = Some(match union {
+                                        Some(previous) => previous.union(rect),
+                                        None => rect,
+                                    });
+                                }
+                                if let Some(bounds) = union {
+                                    let range = (
+                                        indices.first().copied().unwrap_or(0),
+                                        indices.last().copied().unwrap_or(0),
+                                    );
+                                    inspector_target = Some(InspectorTarget::TextSelection {
+                                        page: page as usize,
+                                        range,
+                                        bounds,
+                                    });
+                                }
+                            }
+                        }
                         if on_page {
                             resp.context_menu(|ui| {
                                 if ui.button("Copy").clicked() {
@@ -9741,6 +9936,7 @@ impl YouPdfApp {
 
         self.edit_text = draft;
         self.text_sel = sel;
+        self.inspector_target = inspector_target;
         if edit_cancel {
             self.edit_text = None;
         } else if edit_commit {
@@ -10939,6 +11135,7 @@ impl eframe::App for YouPdfApp {
                 }
             });
         self.toolbar(ctx);
+        self.inspector(ctx);
         self.properties_window(ctx);
         self.close_confirm_window(ctx);
         self.export_window(ctx);

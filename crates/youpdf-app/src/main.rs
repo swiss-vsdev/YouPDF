@@ -3,6 +3,7 @@
 mod ai;
 mod app;
 mod home;
+mod inspector;
 
 use app::YouPdfApp;
 
