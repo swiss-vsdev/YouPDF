@@ -807,6 +807,10 @@ enum ToolAction {
     Click(AnnotationKind),
     Erase,
     Select,
+    Highlight,
+    Underline,
+    StrikeOut,
+    Squiggly,
     /// Glissé d'une zone à caviarder.
     RedactRect,
     /// Clic sur un bloc de texte à réécrire (mode Édition).
@@ -3498,6 +3502,10 @@ impl YouPdfApp {
             Some(8) => ToolAction::Click(AnnotationKind::Stamp),
             Some(9) => ToolAction::Click(AnnotationKind::FreeText),
             Some(10) => ToolAction::Erase,
+            Some(11) => ToolAction::Highlight,
+            Some(12) => ToolAction::Underline,
+            Some(13) => ToolAction::StrikeOut,
+            Some(14) => ToolAction::Squiggly,
             _ => ToolAction::None,
         }
     }
@@ -10416,6 +10424,7 @@ impl YouPdfApp {
                                     );
                                 }
                             }
+                            _ => {}
                             ToolAction::Ink => {
                                 if resp.dragged() {
                                     if let Some(p) = resp.interact_pointer_pos() {
