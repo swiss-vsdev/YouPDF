@@ -13637,6 +13637,37 @@ fn draw_annots(
                     Stroke::new(width, color),
                 ));
             }
+            AnnotationKind::Polygon => {
+                // Dessine le polygone à partir des points d'encre.
+                let pts: Vec<egui::Pos2> = annot
+                    .ink_points
+                    .first()
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|p| to_screen(p[0], p[1]))
+                    .collect();
+                if pts.len() >= 3 {
+                    // Ferme le polygone en reliant le dernier au premier.
+                    let mut pts_closed = pts.clone();
+                    pts_closed.push(pts[0]);
+                    painter.add(Shape::convex_polygon(pts_closed, color, Stroke::NONE));
+                }
+            }
+            // AnnotationKind::PolyLine => {
+            //     // Dessine la polyligne ouverte.
+            //     let pts: Vec<egui::Pos2> = annot
+            //         .ink_points
+            //         .first()
+            //         .cloned()
+            //         .unwrap_or_default()
+            //         .iter()
+            //         .map(|p| to_screen(p[0], p[1]))
+            //         .collect();
+            //     if pts.len() >= 2 {
+            //         painter.add(Shape::line_strip(pts, Stroke::new(width, color)));
+            //     }
+            // }
             AnnotationKind::Line | AnnotationKind::Arrow => {
                 let pts = annot.ink_points.first().cloned().unwrap_or_default();
                 let (a, b) = match (pts.first(), pts.get(1)) {
