@@ -64,6 +64,130 @@ impl Document {
         self.touch();
         Ok(doomed.len())
     }
+    /// Découpe chaque page visée en `rows × cols` tuiles, chacune devenant
+    /// une page du document à la taille de la tuile.
+    ///
+    /// Chaque tuile garde les ressources de la page d'origine et reçoit un
+    /// flux de contenu translaté pour que son coin bas-gauche tombe en (0, 0).
+    /// Les pages d'origine sont retirées. Renvoie le nombre de pages créées.
+    pub fn split_tiles(&mut self, pages: &[usize], rows: usize, cols: usize) -> Result<usize> {
+        let rows = rows.clamp(1, 20);
+        let cols = cols.clamp(1, 20);
+        if rows == 1 && cols == 1 {
+            return Ok(0);
+        }
+        let total = self.page_count();
+        let mut targets: Vec<usize> = pages
+            .iter()
+            .copied()
+            .filter(|page| *page >= 1 && *page <= total)
+            .collect();
+        targets.sort_unstable();
+        targets.dedup();
+        if targets.is_empty() {
+            return Err(Error::InvalidInput("aucune page à découper".to_string()));
+        }
+
+        // Collecte avant toute mutation : la suppression décalerait les
+        // numéros de page.
+        struct Source {
+            number: usize,
+            id: ObjectId,
+            view: crate::document::PageView,
+            resources: Object,
+            content: Vec<u8>,
+            rotate: Option<Object>,
+        }
+        let mut sources = Vec::new();
+        for number in &targets {
+            let page_id = self.page_id(*number as u32)?;
+            let view = self.page_view(*number as u32);
+            let dict = self
+                .inner
+                .get_dictionary(page_id)
+                .map_err(|e| Error::Pdf(format!("page {number} : {e}")))?;
+            let resources = dict
+                .get(b"Resources")
+                .ok()
+                .cloned()
+                .unwrap_or_else(|| Object::Dictionary(lopdf::Dictionary::new()));
+            let rotate = dict.get(b"Rotate").ok().cloned();
+            let content = self
+                .inner
+                .get_page_content(page_id)
+                .map_err(|e| Error::Pdf(format!("page {number} : {e}")))?;
+            sources.push(Source {
+                number: *number,
+                id: page_id,
+                view,
+                resources,
+                content,
+                rotate,
+            });
+        }
+
+        let first = targets[0];
+        let mut created = Vec::new();
+        for source in &sources {
+            let view = source.view;
+            let (tw, th) = (view.width / cols as f32, view.height / rows as f32);
+            for row in 0..rows {
+                for col in 0..cols {
+                    let x0 = view.x + col as f32 * tw;
+                    // `row` se lit de haut en bas, comme l'aperçu.
+                    let y0 = view.y + (rows - 1 - row) as f32 * th;
+                    let mut page = lopdf::Dictionary::new();
+                    page.set("Type", Object::Name(b"Page".to_vec()));
+                    page.set(
+                        "MediaBox",
+                        Object::Array(vec![
+                            Object::Integer(0),
+                            Object::Integer(0),
+                            Object::Real(tw),
+                            Object::Real(th),
+                        ]),
+                    );
+                    page.set("Resources", source.resources.clone());
+                    if let Some(rotate) = &source.rotate {
+                        page.set("Rotate", rotate.clone());
+                    }
+                    let mut stream = Vec::new();
+                    stream.extend_from_slice(
+                        format!("q 1 0 0 1 {:.4} {:.4} cm\n", -x0, -y0).as_bytes(),
+                    );
+                    stream.extend_from_slice(&source.content);
+                    stream.extend_from_slice(b"\nQ");
+                    page.set(
+                        "Contents",
+                        Object::Stream(lopdf::Stream::new(
+                            lopdf::Dictionary::new(),
+                            stream,
+                        )),
+                    );
+                    created.push(self.inner.add_object(Object::Dictionary(page)));
+                }
+            }
+        }
+
+        // Les tuiles prennent la place du premier page visée, puis les
+        // originaux disparaissent.
+        let root = self.pages_root_id()?;
+        let anchor = if first == 1 {
+            None
+        } else {
+            self.inner.get_pages().get(&((first - 1) as u32)).copied()
+        };
+        self.insert_kids(root, anchor, &created)?;
+        let doomed: HashSet<ObjectId> = sources.iter().map(|source| source.id).collect();
+        self.prune_node(root, &doomed)?;
+        for id in &doomed {
+            self.inner.objects.remove(id);
+        }
+        self.refresh_page_tree()?;
+        self.touch();
+        Ok(created.len())
+    }
+
     /// Insère une page blanche juste après la page `after`
     /// (`after == 0` place la page en tête).
     ///

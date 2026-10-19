@@ -285,3 +285,21 @@ fn trame_bornee_sur_page_demesuree() {
         "la trame n'est pas bornée : {stamps} motifs"
     );
 }
+
+/// Les macros d'en-tête sont remplacées par la page et le total.
+#[test]
+fn macros_entete_remplacees() {
+    let mut doc = Document::from_bytes(&pages_blanches(3)).expect("ouverture");
+    let hf = HeaderFooter {
+        header: BandSlots {
+            left: "p. {page}/{pages}".to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    doc.add_header_footer(&hf).expect("en-tête");
+
+    let bytes = doc.to_bytes().expect("écriture");
+    let text = text_of(&bytes, 2);
+    assert!(text.contains("p. 2/3"), "macros non remplacées : {text}");
+}

@@ -82,6 +82,7 @@ Unchecked below = still open. The plan document is the authoritative task list.
 
 ## 7. Missing UI Parity
 *   **Organize pages:** full-window grid with select all/odd/even, rotate, delete, extract, insert, replace, split, duplicate, shift/Cmd multi-select and drag reorder with insertion bar; Extract/Insert/Replace/Split dialogs cover the planned options.
+*   **Page operations:** crop with unit selector (pt/mm/cm/in), page range, CropBox/ArtBox/BleedBox/TrimBox targets, text-bounds auto-crop, reset; tile split (rows × columns) creating one page per tile; watermark anchoring (9 positions), offsets, tile gap and behind-content layering; header/footer `{page}`, `{pages}`, `{label}` macros.
 *   **Slideshow:** Needs implementing (F5 triggered).
 *   **Measure Tools:** Needs `Perimeter`/`Area` markup rendering.
 *   **Export Formats:** Needs DOCX/XLSX/PPTX writer implementations.
