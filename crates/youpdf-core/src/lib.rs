@@ -57,8 +57,8 @@ pub use crop::CropMargins;
 pub use compress::CompressionReport;
 pub use document::{Document, PageBoxes, PageView};
 pub use edit::{
-    encode_pdf_literal, estimate_text_width, patch_font_name, ImageInfo, PatchFont, TextAlign,
-    TextFragment, TextSpan, TextStyle,
+    encode_pdf_literal, estimate_text_width, patch_font_name, ImageCrop, ImageInfo, ImageTransform,
+    PatchFont, TextAlign, TextFragment, TextSpan, TextStyle,
 };
 pub use extract::{ExtractedTable, KeyValue};
 pub use forms::{FieldProperties, FormDataFormat, FormField, FormFieldKind, NewFormField};

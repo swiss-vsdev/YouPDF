@@ -521,6 +521,715 @@ impl Document {
 }
 
 // ────────────────────────────────────────────────────────────────────────
+// Édition d'images posées sur une page
+// ────────────────────────────────────────────────────────────────────────
+
+/// Transformation géométrique appliquée aux pixels d'une image.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ImageTransform {
+    /// Quart de tour dans le sens horaire.
+    RotateCw,
+    /// Quart de tour dans le sens antihoraire.
+    RotateCcw,
+    /// Miroir horizontal.
+    FlipHorizontal,
+    /// Miroir vertical.
+    FlipVertical,
+}
+
+impl ImageTransform {
+    /// Les quatre transformations, dans l'ordre de l'interface.
+    pub const ALL: [ImageTransform; 4] = [
+        ImageTransform::RotateCw,
+        ImageTransform::RotateCcw,
+        ImageTransform::FlipHorizontal,
+        ImageTransform::FlipVertical,
+    ];
+
+    /// Libellé affiché dans l'interface.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            ImageTransform::RotateCw => "Rotate 90° CW",
+            ImageTransform::RotateCcw => "Rotate 90° CCW",
+            ImageTransform::FlipHorizontal => "Flip Horizontal",
+            ImageTransform::FlipVertical => "Flip Vertical",
+        }
+    }
+
+    /// Vrai pour les rotations, qui échangent largeur et hauteur.
+    pub fn swaps_axes(self) -> bool {
+        matches!(self, ImageTransform::RotateCw | ImageTransform::RotateCcw)
+    }
+}
+
+/// Fractions retirées de chaque bord d'une image, entre 0 et 1.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ImageCrop {
+    /// Bord gauche.
+    pub left: f32,
+    /// Bord haut.
+    pub top: f32,
+    /// Bord droit.
+    pub right: f32,
+    /// Bord bas.
+    pub bottom: f32,
+}
+
+impl ImageCrop {
+    /// Ramène les fractions dans `[0, 1)` sans jamais vider l'image : les
+    /// quatre bords sont réduits proportionnellement si leur somme atteint
+    /// l'image entière.
+    pub fn sanitised(mut self) -> Self {
+        let clamp = |value: f32| {
+            if value.is_finite() {
+                value.clamp(0.0, 0.98)
+            } else {
+                0.0
+            }
+        };
+        self.left = clamp(self.left);
+        self.right = clamp(self.right);
+        self.top = clamp(self.top);
+        self.bottom = clamp(self.bottom);
+        let width = self.left + self.right;
+        if width >= 1.0 {
+            self.left /= width;
+            self.right /= width;
+        }
+        let height = self.top + self.bottom;
+        if height >= 1.0 {
+            self.top /= height;
+            self.bottom /= height;
+        }
+        self
+    }
+
+    /// Vrai quand aucun bord n'est rogné.
+    pub fn is_empty(&self) -> bool {
+        self.left <= f32::EPSILON
+            && self.top <= f32::EPSILON
+            && self.right <= f32::EPSILON
+            && self.bottom <= f32::EPSILON
+    }
+}
+
+impl Document {
+    /// Pixels RGB 8 bits d'une image embarquée, et ses dimensions.
+    ///
+    /// Passe par le décodeur commun : le flux peut être du JPEG (`DCTDecode`),
+    /// du PNG ou des échantillons bruts en zlib.
+    pub fn image_pixels(&self, info: &ImageInfo) -> Result<(Vec<u8>, u32, u32)> {
+        let png = self.extract_image_png(info)?;
+        let decoded = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+            .map_err(|e| Error::Pdf(format!("décodage image : {e}")))?;
+        let rgb = decoded.to_rgb8();
+        let (width, height) = rgb.dimensions();
+        Ok((rgb.into_raw(), width, height))
+    }
+
+    /// Remplace les pixels d'une image en place.
+    ///
+    /// L'objet image garde son identifiant : le nom de ressource et la
+    /// matrice posés dans le flux de la page restent valables, donc l'image
+    /// ne bouge pas. Si les proportions changent, elle est étirée dans la
+    /// même boîte, comme le fait un remplacement d'image dans un traitement
+    /// de texte.
+    pub fn replace_image_pixels(
+        &mut self,
+        info: &ImageInfo,
+        pixels_rgb: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        let mut stream = Self::build_image_stream(pixels_rgb, width, height)?;
+        // Le masque de transparence et la table de décodage appartiennent à
+        // l'image : les perdre rendrait un logo transparent opaque. `Decode` et
+        // une `Mask` par plage de couleurs dépendent en revanche du nombre de
+        // composantes : recopiés d'une image CMJN sur notre RGB, ils
+        // décaleraient les couleurs.
+        if let Ok(Object::Stream(previous)) = self.inner().get_object(info.object_id) {
+            if let Ok(value) = previous.dict.get(b"SMask") {
+                stream.dict.set("SMask", value.clone());
+            }
+            let was_rgb = previous
+                .dict
+                .get(b"ColorSpace")
+                .ok()
+                .and_then(|space| space.as_name().ok())
+                .is_some_and(|name| name == b"DeviceRGB");
+            if was_rgb {
+                for key in [b"Mask".as_slice(), b"Decode"] {
+                    if let Ok(value) = previous.dict.get(key) {
+                        stream.dict.set(key, value.clone());
+                    }
+                }
+            }
+        }
+        self.inner_mut()
+            .set_object(info.object_id, Object::Stream(stream));
+        Ok(())
+    }
+
+    /// Tourne ou retourne une image en place.
+    ///
+    /// Seule la matrice qui dessine l'image change, autour du centre de sa
+    /// boîte : les pixels ne sont jamais réencodés, donc l'opération est sans
+    /// perte et instantanée. Une rotation échange les côtés de la boîte si
+    /// l'image n'est pas carrée, comme dans les autres lecteurs.
+    pub fn transform_image(&mut self, info: &ImageInfo, transform: ImageTransform) -> Result<()> {
+        let found = self.transform_image_matrix(info.page, &info.resource_name, transform)?;
+        if !found {
+            return Err(Error::NotFound(format!(
+                "matrice de l'image {}",
+                info.resource_name
+            )));
+        }
+        Ok(())
+    }
+
+    /// Règle l'opacité d'une image, de 0 (invisible) à 1 (opaque).
+    ///
+    /// L'opacité passe par un `/ExtGState` : elle est donc réellement
+    /// transparente sur la page, sans retouche des pixels.
+    pub fn set_image_opacity(&mut self, info: &ImageInfo, alpha: f32) -> Result<()> {
+        let alpha = if alpha.is_finite() {
+            alpha.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let page_id = self
+            .page_id(info.page as u32)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        // Un état graphique par image : deux images de la même page peuvent
+        // avoir deux opacités différentes.
+        let name = format!("YouPdfImAlpha{}", info.resource_name.replace('/', ""));
+        use lopdf::dictionary;
+        let mut resources = self.page_resources(page_id)?;
+        let mut states = self
+            .resolve_dict(resources.get(b"ExtGState").ok())
+            .unwrap_or_default();
+        // Un seul objet par image : régler l'opacité au curseur ne doit pas
+        // semer un dictionnaire orphelin à chaque pas.
+        let existing = states
+            .get(name.as_bytes())
+            .ok()
+            .and_then(|object| object.as_reference().ok());
+        let state = dictionary! {
+            "Type" => Object::Name(b"ExtGState".to_vec()),
+            "ca" => Object::Real(alpha),
+            "CA" => Object::Real(alpha),
+        };
+        let state_id = match existing {
+            Some(id) => {
+                self.inner_mut().set_object(id, Object::Dictionary(state));
+                id
+            }
+            None => self.inner_mut().add_object(Object::Dictionary(state)),
+        };
+        states.set(name.as_str(), Object::Reference(state_id));
+        resources.set("ExtGState", Object::Dictionary(states));
+        self.set_page_resources(page_id, resources)?;
+
+        let resource_name = info.resource_name.clone();
+        self.edit_image_draw(page_id, &resource_name, |operations, index| {
+            // Un seul `/gs` par image : régler l'opacité au curseur ne doit pas
+            // empiler un opérateur à chaque pas. On retire ceux déjà posés
+            // juste avant le dessin (`cm` et `gs` forment le préambule).
+            let mut stale = Vec::new();
+            for candidate in (0..index).rev() {
+                let operation = &operations[candidate];
+                match operation.operator.as_str() {
+                    "gs" => {
+                        // Seulement nos états : un `/gs` posé par la page pour
+                        // elle-même ne nous appartient pas.
+                        let ours = operation
+                            .operands
+                            .first()
+                            .and_then(|object| object.as_name().ok())
+                            == Some(name.as_bytes());
+                        if ours {
+                            stale.push(candidate);
+                        }
+                    }
+                    "cm" => continue,
+                    _ => break,
+                }
+            }
+            // Les indices sont décroissants : retirer du plus grand au plus
+            // petit est le seul ordre qui ne décale pas les suivants.
+            for position in &stale {
+                operations.remove(*position);
+            }
+            // Le `/gs` doit précéder le `Do` : `cm` puis `gs` puis `Do`.
+            operations.insert(
+                index - stale.len(),
+                lopdf::content::Operation::new(
+                    "gs",
+                    vec![Object::Name(name.as_bytes().to_vec())],
+                ),
+            );
+        })?;
+        Ok(())
+    }
+
+    /// Rogne une image : les pixels sont découpés et la boîte de dessin
+    /// rétrécit d'autant, du côté rogné.
+    ///
+    /// C'est un vrai rognage : l'image ne bouge pas sur la page, elle perd
+    /// seulement sa bordure. L'appelant peut rogner plusieurs fois de suite.
+    pub fn crop_image(&mut self, info: &ImageInfo, crop: ImageCrop) -> Result<()> {
+        let crop = crop.sanitised();
+        if crop.is_empty() {
+            return Ok(());
+        }
+        let (pixels, width, height) = self.image_pixels(info)?;
+        // Les bords sont arrondis au pixel : la matrice reprend ces fractions
+        // effectives, sinon la boîte et l'image découpée divergent d'un pixel.
+        let bounds = crop_bounds(width, height, crop);
+        if bounds.2 <= bounds.0 || bounds.3 <= bounds.1 {
+            return Ok(());
+        }
+        let effective = ImageCrop {
+            left: bounds.0 as f32 / width as f32,
+            right: 1.0 - bounds.2 as f32 / width as f32,
+            top: bounds.1 as f32 / height as f32,
+            bottom: 1.0 - bounds.3 as f32 / height as f32,
+        };
+        let found = self.crop_image_matrix(info.page, &info.resource_name, effective)?;
+        if !found {
+            return Err(Error::NotFound(format!(
+                "matrice de l'image {}",
+                info.resource_name
+            )));
+        }
+        let (pixels, width, height) = crop_pixels(&pixels, width, height, bounds);
+        self.replace_image_pixels(info, &pixels, width, height)
+    }
+
+    /// Retire une image de la page : le `Do` disparaît du flux et la
+    /// ressource est déliée. L'objet image reste dans le fichier jusqu'au
+    /// prochain [`Document::purge_unreachable`].
+    pub fn delete_image(&mut self, info: &ImageInfo) -> Result<()> {
+        let page_id = self
+            .page_id(info.page as u32)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let resource_name = info.resource_name.clone();
+        let found = self.edit_image_draw(page_id, &resource_name, |operations, index| {
+            // Le préambule de l'image (`q` … `cm`) ne sert qu'à elle : il part
+            // avec le dessin, et le `Q` qui le ferme aussi, sinon le flux
+            // laisserait des opérateurs déséquilibrés.
+            let mut remove_from = index;
+            let mut balanced = false;
+            for candidate in (0..index).rev() {
+                match operations[candidate].operator.as_str() {
+                    "cm" | "gs" => remove_from = candidate,
+                    "q" => {
+                        remove_from = candidate;
+                        balanced = true;
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+            let mut remove_to = index;
+            // Le `Q` ne part qu'avec le `q` de l'image : sinon il fermerait le
+            // groupe graphique de la page et la suite du flux serait peinte
+            // avec le mauvais état.
+            if balanced
+                && operations
+                    .get(index + 1)
+                    .is_some_and(|operation| operation.operator == "Q")
+            {
+                remove_to = index + 1;
+            }
+            operations.drain(remove_from..=remove_to);
+        })?;
+        if !found {
+            return Err(Error::NotFound(format!(
+                "dessin de l'image {resource_name}"
+            )));
+        }
+
+        let mut resources = self.page_resources(page_id)?;
+        if let Some(mut xobjects) = self.resolve_dict(resources.get(b"XObject").ok()) {
+            xobjects.remove(resource_name.as_bytes());
+            resources.set("XObject", Object::Dictionary(xobjects));
+        }
+        self.set_page_resources(page_id, resources)?;
+        Ok(())
+    }
+
+    /// Ressources d'une page, héritées de ses parents s'il n'y en a pas,
+    /// références résolues.
+    ///
+    /// Une page sans `/Resources` emprunte ceux de l'arbre : la copie rendue
+    /// doit donc remonter la chaîne, sinon l'écriture d'un état graphique
+    /// ferait disparaître les polices du document.
+    pub(crate) fn page_resources(&self, page_id: (u32, u16)) -> Result<lopdf::Dictionary> {
+        let mut current = page_id;
+        // Garde-fou : un arbre corrompu ne doit pas boucler.
+        for _ in 0..64 {
+            let page = self
+                .inner()
+                .get_dictionary(current)
+                .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+            match page.get(b"Resources") {
+                Ok(Object::Dictionary(dict)) => return Ok(dict.clone()),
+                Ok(Object::Reference(id)) => {
+                    return self
+                        .inner()
+                        .get_dictionary(*id)
+                        .cloned()
+                        .map_err(|e| Error::Pdf(format!("ressources : {e}")));
+                }
+                _ => {}
+            }
+            match page.get(b"Parent").ok().and_then(|parent| parent.as_reference().ok()) {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+        Err(Error::Pdf(
+            "arbre de pages cyclique : ressources introuvables".to_owned(),
+        ))
+    }
+
+    /// Dictionnaire d'une entrée de ressources, en résolvant une éventuelle
+    /// référence indirecte.
+    pub(crate) fn resolve_dict(&self, value: Option<&Object>) -> Option<lopdf::Dictionary> {
+        match value? {
+            Object::Dictionary(dict) => Some(dict.clone()),
+            Object::Reference(id) => self.inner().get_dictionary(*id).ok().cloned(),
+            _ => None,
+        }
+    }
+
+    /// Écrit les ressources d'une page.
+    fn set_page_resources(
+        &mut self,
+        page_id: (u32, u16),
+        resources: lopdf::Dictionary,
+    ) -> Result<()> {
+        let page = self
+            .inner_mut()
+            .get_object_mut(page_id)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let dict = page
+            .as_dict_mut()
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        dict.set("Resources", Object::Dictionary(resources));
+        Ok(())
+    }
+
+    /// Boîte occupée par une image sur la page, en coordonnées page.
+    ///
+    /// La boîte rendue est le rectangle englobant du carré unité transformé
+    /// par la matrice qui précède le `Do` : une image tournée donne donc une
+    /// boîte droite.
+    pub fn image_rect(&self, info: &ImageInfo) -> Result<Option<[f32; 4]>> {
+        let Some([a, b, c, d, e, f]) = self.image_matrix(info)? else {
+            return Ok(None);
+        };
+        let corners = [(e, f), (e + a, f + b), (e + c, f + d), (e + a + c, f + b + d)];
+        let x1 = corners.iter().map(|p| p.0).fold(f32::INFINITY, f32::min);
+        let y1 = corners.iter().map(|p| p.1).fold(f32::INFINITY, f32::min);
+        let x2 = corners.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max);
+        let y2 = corners.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max);
+        Ok(Some([x1, y1, x2, y2]))
+    }
+
+    /// Matrice `cm` qui dessine une image sur sa page.
+    ///
+    /// `(a, b)` va de la gauche vers la droite de l'image, `(c, d)` du bas vers
+    /// le haut, `(e, f)` est son coin bas-gauche. `None` quand l'image est
+    /// dessinée sans matrice propre (héritée d'un `q` extérieur), cas que ce
+    /// module ne sait pas situer.
+    pub fn image_matrix(&self, info: &ImageInfo) -> Result<Option<[f32; 6]>> {
+        let page_id = self
+            .page_id(info.page as u32)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let name = info.resource_name.trim_start_matches('/').as_bytes().to_vec();
+        for content_id in self.page_content_ids(page_id)? {
+            let Ok(Object::Stream(stream)) = self.inner().get_object(content_id) else {
+                continue;
+            };
+            let Ok(bytes) = stream.get_plain_content() else {
+                continue;
+            };
+            let Ok(content) = lopdf::content::Content::decode(&bytes) else {
+                continue;
+            };
+            for (index, operation) in content.operations.iter().enumerate() {
+                if operation.operator != "Do" {
+                    continue;
+                }
+                if operation
+                    .operands
+                    .first()
+                    .and_then(|object| object.as_name().ok())
+                    != Some(name.as_slice())
+                {
+                    continue;
+                }
+                let Some(position) = preceding_cm(&content.operations, index) else {
+                    continue;
+                };
+                if let Some(matrix) = matrix_of(&content.operations[position].operands) {
+                    return Ok(Some(matrix));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Construit le flux d'une image RGB 8 bits non compressée.
+    fn build_image_stream(pixels_rgb: &[u8], width: u32, height: u32) -> Result<Stream> {
+        let expected = width as usize * height as usize * 3;
+        if pixels_rgb.len() < expected {
+            return Err(Error::InvalidInput(format!(
+                "bitmap trop court : {} octets, attendu {expected}",
+                pixels_rgb.len()
+            )));
+        }
+        use lopdf::dictionary;
+        let dict = dictionary! {
+            "Type" => Object::Name(b"XObject".to_vec()),
+            "Subtype" => Object::Name(b"Image".to_vec()),
+            "Width" => Object::Integer(width as i64),
+            "Height" => Object::Integer(height as i64),
+            "ColorSpace" => Object::Name(b"DeviceRGB".to_vec()),
+            "BitsPerComponent" => Object::Integer(8),
+        };
+        Ok(Stream::new(dict, pixels_rgb[..expected].to_vec()))
+    }
+
+    /// Identifiants des flux de contenu d'une page.
+    fn page_content_ids(&self, page_id: (u32, u16)) -> Result<Vec<(u32, u16)>> {
+        let page = self
+            .inner()
+            .get_dictionary(page_id)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let mut ids = Vec::new();
+        match page.get(b"Contents").map_err(|e| Error::Pdf(format!("contenu : {e}")))? {
+            Object::Reference(id) => ids.push(*id),
+            Object::Array(items) => {
+                for item in items {
+                    if let Ok(id) = item.as_reference() {
+                        ids.push(id);
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(ids)
+    }
+
+    /// Applique `edit` aux opérateurs qui dessinent l'image `resource_name`.
+    ///
+    /// Le flux de contenu est décodé, les `Do` de l'image sont passés à
+    /// `edit` dans l'ordre inverse (pour que les indices restent valables),
+    /// puis le flux est réécrit en clair. Rend vrai si un dessin a été
+    /// trouvé.
+    fn edit_image_draw(
+        &mut self,
+        page_id: (u32, u16),
+        resource_name: &str,
+        mut edit: impl FnMut(&mut Vec<lopdf::content::Operation>, usize),
+    ) -> Result<bool> {
+        let targets = self.page_content_ids(page_id)?;
+        let name = resource_name.trim_start_matches('/').as_bytes().to_vec();
+        let mut found = false;
+        for content_id in targets {
+            let Ok(Object::Stream(stream)) = self.inner().get_object(content_id) else {
+                continue;
+            };
+            // `decompressed_content` rend un flux vide quand il n'y a pas de
+            // filtre : `get_plain_content` gère les deux cas.
+            let Ok(bytes) = stream.get_plain_content() else {
+                continue;
+            };
+            let Ok(mut content) = lopdf::content::Content::decode(&bytes) else {
+                continue;
+            };
+            let mut indices: Vec<usize> = content
+                .operations
+                .iter()
+                .enumerate()
+                .filter(|(_, operation)| {
+                    operation.operator == "Do"
+                        && operation
+                            .operands
+                            .first()
+                            .and_then(|object| object.as_name().ok())
+                            == Some(name.as_slice())
+                })
+                .map(|(index, _)| index)
+                .collect();
+            if indices.is_empty() {
+                continue;
+            }
+            // De la fin vers le début : insérer ou retirer un opérateur ne
+            // décale pas les indices encore à traiter.
+            indices.reverse();
+            for index in indices {
+                edit(&mut content.operations, index);
+                found = true;
+            }
+            let encoded = content
+                .encode()
+                .map_err(|e| Error::Pdf(format!("flux de page : {e}")))?;
+            let stream = self
+                .inner_mut()
+                .get_object_mut(content_id)
+                .map_err(|e| Error::Pdf(format!("flux de page : {e}")))?
+                .as_stream_mut()
+                .map_err(|e| Error::Pdf(format!("flux de page : {e}")))?;
+            stream.set_plain_content(encoded);
+        }
+        Ok(found)
+    }
+
+    /// Réécrit la matrice qui dessine une image pour la tourner ou la
+    /// retourner.
+    ///
+    /// La transformation est appliquée au *repère* : les vecteurs de base
+    /// tournent autour du centre de la boîte, l'origine se replace pour que le
+    /// centre ne bouge pas. Les pixels ne changent jamais, donc l'opération est
+    /// réversible et sans perte.
+    fn transform_image_matrix(
+        &mut self,
+        page: usize,
+        resource_name: &str,
+        transform: ImageTransform,
+    ) -> Result<bool> {
+        let page_id = self
+            .page_id(page as u32)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let name = resource_name.to_owned();
+        self.edit_image_draw(page_id, &name, |operations, index| {
+            let Some(position) = preceding_cm(operations, index) else {
+                return;
+            };
+            let Some([a, b, c, d, e, f]) = matrix_of(&operations[position].operands) else {
+                return;
+            };
+            // Le repère du dessin : `(a, b)` va de gauche à droite de l'image,
+            // `(c, d)` du bas vers le haut. `e, f` est le coin bas-gauche.
+            let (xa, xb, ya, yb) = match transform {
+                // Quart de tour horaire à l'écran : (x, y) devient (y, -x).
+                ImageTransform::RotateCw => (b, -a, d, -c),
+                ImageTransform::RotateCcw => (-b, a, -d, c),
+                // Miroirs : on inverse le vecteur de l'axe concerné.
+                ImageTransform::FlipHorizontal => (-a, -b, c, d),
+                ImageTransform::FlipVertical => (a, b, -c, -d),
+            };
+            // Centre conservé : l'origine se déplace de la moitié de l'écart.
+            let ne = e + 0.5 * (a + c - xa - ya);
+            let nf = f + 0.5 * (b + d - xb - yb);
+            operations[position].operands = matrix_operands([xa, xb, ya, yb, ne, nf]);
+        })
+    }
+
+    /// Rétrécit la boîte de dessin d'une image du côté rogné, sans la
+    /// déplacer : le coin bas-gauche local part de `left` / `bottom` et les
+    /// vecteurs gardent la part conservée.
+    fn crop_image_matrix(
+        &mut self,
+        page: usize,
+        resource_name: &str,
+        crop: ImageCrop,
+    ) -> Result<bool> {
+        let page_id = self
+            .page_id(page as u32)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let name = resource_name.to_owned();
+        self.edit_image_draw(page_id, &name, |operations, index| {
+            let Some(position) = preceding_cm(operations, index) else {
+                return;
+            };
+            let Some([a, b, c, d, e, f]) = matrix_of(&operations[position].operands) else {
+                return;
+            };
+            let keep_x = (1.0 - crop.left - crop.right).max(0.01);
+            let keep_y = (1.0 - crop.top - crop.bottom).max(0.01);
+            let ne = e + a * crop.left + c * crop.bottom;
+            let nf = f + b * crop.left + d * crop.bottom;
+            operations[position].operands =
+                matrix_operands([a * keep_x, b * keep_x, c * keep_y, d * keep_y, ne, nf]);
+        })
+    }
+}
+
+/// Opérateurs `cm` de la matrice `[a b c d e f]`.
+fn matrix_operands(values: [f32; 6]) -> Vec<Object> {
+    values
+        .iter()
+        .map(|value| Object::Real(*value))
+        .collect()
+}
+
+/// Lit les six nombres d'un `cm`, ou rien si les opérandes sont inattendus.
+fn matrix_of(operands: &[Object]) -> Option<[f32; 6]> {
+    if operands.len() != 6 {
+        return None;
+    }
+    let mut values = [0.0f32; 6];
+    for (slot, operand) in values.iter_mut().zip(operands) {
+        *slot = operand.as_float().ok()?;
+    }
+    Some(values)
+}
+
+/// Position du dernier `cm` avant un `Do`, sans remonter au-delà de la
+/// dernière image ou du dernier `q`.
+fn preceding_cm(operations: &[lopdf::content::Operation], index: usize) -> Option<usize> {
+    for candidate in (0..index).rev() {
+        match operations[candidate].operator.as_str() {
+            "cm" => return Some(candidate),
+            "q" | "Q" | "Do" => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Bords conservés d'un rognage, en **pixels** : `(x0, y0, x1, y1)`.
+///
+/// Les pixels et la matrice du flux de page sont calculés à partir de ces
+/// mêmes bornes, sinon ils divergeraient d'une fraction de pixel.
+fn crop_bounds(width: u32, height: u32, crop: ImageCrop) -> (u32, u32, u32, u32) {
+    let x0 = ((crop.left * width as f32).floor() as u32).min(width.saturating_sub(1));
+    let x1 = ((width as f32 * (1.0 - crop.right)).ceil() as u32).clamp(x0 + 1, width);
+    let y0 = ((crop.top * height as f32).floor() as u32).min(height.saturating_sub(1));
+    let y1 = ((height as f32 * (1.0 - crop.bottom)).ceil() as u32).clamp(y0 + 1, height);
+    (x0, y0, x1, y1)
+}
+
+/// Découpe les pixels selon des bornes en pixels.
+fn crop_pixels(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    (x0, y0, x1, y1): (u32, u32, u32, u32),
+) -> (Vec<u8>, u32, u32) {
+    let out_width = x1.saturating_sub(x0).max(1).min(width);
+    let out_height = y1.saturating_sub(y0).max(1).min(height);
+    let mut out = vec![0u8; out_width as usize * out_height as usize * 3];
+    for y in 0..out_height {
+        for x in 0..out_width {
+            let sx = (x0 + x).min(width - 1);
+            let sy = (y0 + y).min(height - 1);
+            let source = (sy as usize * width as usize + sx as usize) * 3;
+            let target = (y as usize * out_width as usize + x as usize) * 3;
+            if source + 3 <= pixels.len() {
+                out[target..target + 3].copy_from_slice(&pixels[source..source + 3]);
+            }
+        }
+    }
+    (out, out_width, out_height)
+}
+
+// ────────────────────────────────────────────────────────────────────────
 // Aides internes
 // ────────────────────────────────────────────────────────────────────────
 

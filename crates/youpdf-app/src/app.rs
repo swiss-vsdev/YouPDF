@@ -21,9 +21,9 @@ use youpdf_shared::{pal, set_palette, Theme};
 use crate::ai::AiPanel;
 use crate::home::{self, HomeCategory, HomeView, ViewMode};
 use crate::inspector::{
-    arrow_x, paint_arrow, place_inspector, text_style_row, AnnotationId, InspectorTarget,
-    TextBlockId, TextStyleUi, INSPECTOR_HEIGHT, INSPECTOR_WIDTH, PALETTE_HEIGHT,
-    TEXT_INSPECTOR_HEIGHT,
+    arrow_x, image_controls, paint_arrow, place_inspector, text_style_row, AnnotationId,
+    ImageAction, ImageId, InspectorTarget, TextBlockId, TextStyleUi, INSPECTOR_HEIGHT,
+    INSPECTOR_WIDTH, PALETTE_HEIGHT, TEXT_INSPECTOR_HEIGHT,
 };
 use youpdf_core::compress::CompressionLevel;
 use youpdf_core::render::NullRenderer;
@@ -35,7 +35,7 @@ use youpdf_core::{
     EncryptionOptions, EncryptionStrength, ExtractedTable, FieldProperties, FormDataFormat,
     FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, MeasureKind, Measurement,
     NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem, OutlineStyle,
-    OutlineTarget, PageRange, PageBitmap, PatchFont, PdfiumRenderer, RedactionRegion,
+    ImageCrop, OutlineTarget, PageRange, PageBitmap, PatchFont, PdfiumRenderer, RedactionRegion,
     RenderOptions, Renderer, SearchIndex, SearchOptions, SearchResult, TextFormat, TextFragment,
     TextStyle, Watermark, STAMP_NAMES,
 };
@@ -377,6 +377,68 @@ struct CachedPage {
     texture: TextureHandle,
     /// Échelle réellement employée pour la rastérisation (`logical_scale * ppp`).
     scale: f32,
+}
+
+/// Fractions de rognage d'un rectangle, exprimées dans le repère de l'image.
+///
+/// La matrice `[a b c d e f]` envoie le carré unité de l'image sur la page :
+/// `(a, b)` est son axe horizontal, `(c, d)` son axe vertical, `(e, f)` son
+/// coin bas-gauche. On inverse cette matrice sur les quatre coins du rectangle
+/// à conserver, ce qui reste exact pour une image tournée par quarts de tour,
+/// et approché pour une image au dessin incliné.
+fn crop_fractions_in_image(matrix: [f32; 6], rect: [f32; 4]) -> ImageCrop {
+    let [a, b, c, d, e, f] = matrix;
+    let determinant = a * d - b * c;
+    if determinant.abs() < 1e-6 {
+        return ImageCrop::default();
+    }
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for corner_x in [rect[0], rect[2]] {
+        for corner_y in [rect[1], rect[3]] {
+            let dx = corner_x - e;
+            let dy = corner_y - f;
+            let u = (d * dx - c * dy) / determinant;
+            let v = (a * dy - b * dx) / determinant;
+            min_x = min_x.min(u);
+            max_x = max_x.max(u);
+            min_y = min_y.min(v);
+            max_y = max_y.max(v);
+        }
+    }
+    ImageCrop {
+        left: min_x.clamp(0.0, 1.0),
+        right: (1.0 - max_x).clamp(0.0, 1.0),
+        bottom: min_y.clamp(0.0, 1.0),
+        top: (1.0 - max_y).clamp(0.0, 1.0),
+    }
+}
+
+/// Deux rognages diffèrent-ils de plus d'un millième ?
+///
+/// Une poignée survolée est replacée sous le pointeur : sans ce seuil, la
+/// simple approche du curseur déclencherait une écriture.
+fn response_changed(previous: ImageCrop, next: ImageCrop) -> bool {
+    let near = |a: f32, b: f32| (a - b).abs() > 0.001;
+    near(previous.left, next.left)
+        || near(previous.top, next.top)
+        || near(previous.right, next.right)
+        || near(previous.bottom, next.bottom)
+}
+
+/// Image sélectionnée en mode Édition, avec sa boîte en repère page.
+#[derive(Clone, Debug, PartialEq)]
+struct SelectedImage {
+    /// Page (1-indexée).
+    page: usize,
+    /// Rang dans la liste `extract_images` de la page.
+    index: usize,
+    /// Nom de ressource (`SigIm0`…).
+    name: String,
+    /// Boîte occupée sur la page, repère page.
+    rect: [f32; 4],
 }
 
 /// Sélection de texte sur une page, en repère affiché.
@@ -882,6 +944,12 @@ pub struct YouPdfApp {
     inspector_size: Option<egui::Vec2>,
     /// État des contrôles de texte (palette ouverte, saisie hexa).
     inspector_text_ui: TextStyleUi,
+    /// Image sélectionnée en mode Édition.
+    selected_image: Option<SelectedImage>,
+    /// Rognage en cours sur l'image sélectionnée.
+    image_crop: Option<ImageCrop>,
+    /// Opacité affichée par le curseur de l'inspecteur d'image.
+    image_alpha: f32,
     /// Liste déroulante `Outils` ouverte.
     tools_open: bool,
     /// Menu `…` (enregistrer, exporter, propriétés).
@@ -1186,6 +1254,9 @@ impl YouPdfApp {
             inspector_target: None,
             inspector_size: None,
             inspector_text_ui: TextStyleUi::default(),
+            selected_image: None,
+            image_crop: None,
+            image_alpha: 1.0,
             tools_open: false,
             actions_open: false,
             props_open: false,
@@ -1676,6 +1747,9 @@ impl YouPdfApp {
         self.inspector_target = None;
         self.inspector_size = None;
         self.inspector_text_ui = TextStyleUi::default();
+        self.selected_image = None;
+        self.image_crop = None;
+        self.image_alpha = 1.0;
         self.organize_selected.clear();
         // Les clés de chemin des signets sont les mêmes d'un document à
         // l'autre : sans ce nettoyage, le nouveau plan s'ouvrirait en édition
@@ -3335,6 +3409,9 @@ impl YouPdfApp {
             // Mode Édition : on touche au contenu de la page, pas aux
             // annotations.
             return match self.annot_tool {
+                // L'outil Sélection choisit le contenu à éditer : un bloc de
+                // texte, une image.
+                Some(0) => ToolAction::Select,
                 Some(1) => ToolAction::EditText,
                 Some(2) => ToolAction::InsertImage,
                 Some(3) => ToolAction::Click(AnnotationKind::Link),
@@ -6393,6 +6470,219 @@ impl YouPdfApp {
 
     // -- Barre d'outils flottante ------------------------------------------
 
+    /// Sélectionne l'image posée sous le point, s'il y en a une.
+    ///
+    /// L'image est retenue par son nom de ressource et sa boîte en repère
+    /// page : le canevas la replace à l'écran à chaque trame, sans relire le
+    /// flux de contenu.
+    fn select_image_at(&mut self, page: usize, point: [f32; 2]) {
+        let found = self.tabs.get(self.active).and_then(|tab| {
+            let images = tab.doc.extract_images(page as u32).ok()?;
+            // `image_rect` est en repère page ; le clic arrive en repère
+            // affiché. Sur une page tournée les deux ne coïncident pas.
+            let view = tab.doc.page_view(page as u32);
+            images.iter().enumerate().find_map(|(index, info)| {
+                let rect = view.display_rect(tab.doc.image_rect(info).ok().flatten()?);
+                let [x1, y1, x2, y2] = rect;
+                let inside = point[0] >= x1 && point[0] <= x2 && point[1] >= y1 && point[1] <= y2;
+                inside.then(|| SelectedImage {
+                    page,
+                    index,
+                    name: info.resource_name.clone(),
+                    rect,
+                })
+            })
+        });
+        if found.is_some() {
+            self.image_alpha = 1.0;
+        }
+        self.image_crop = None;
+        self.selected_image = found;
+    }
+
+    /// Relit la boîte de l'image sélectionnée après une modification.
+    fn refresh_selected_image(&mut self) {
+        let Some(selected) = self.selected_image.clone() else {
+            return;
+        };
+        let info = self.tabs.get(self.active).and_then(|tab| {
+            let view = tab.doc.page_view(selected.page as u32);
+            tab.doc
+                .extract_images(selected.page as u32)
+                .ok()
+                .and_then(|list| {
+                    list.into_iter()
+                        .find(|info| info.resource_name == selected.name)
+                })
+                .map(|info| tab.doc.image_rect(&info).ok().flatten().map(|rect| view.display_rect(rect)))
+        });
+        match info {
+            Some(Some(rect)) => {
+                if let Some(current) = self.selected_image.as_mut() {
+                    current.rect = rect;
+                }
+            }
+            Some(None) => {}
+            None => {
+                // L'image n'est plus sur la page : la cible n'a plus d'objet.
+                self.selected_image = None;
+                self.image_crop = None;
+                self.inspector_target = None;
+            }
+        }
+    }
+
+    /// Applique une action de l'inspecteur d'image.
+    fn image_action(&mut self, action: ImageAction, ctx: &egui::Context) {
+        let Some(selected) = self.selected_image.clone() else {
+            return;
+        };
+        let info = self.tabs.get(self.active).and_then(|tab| {
+            tab.doc
+                .extract_images(selected.page as u32)
+                .ok()
+                .and_then(|list| {
+                    list.into_iter()
+                        .find(|info| info.resource_name == selected.name)
+                })
+        });
+        let Some(info) = info else {
+            self.selected_image = None;
+            self.inspector_target = None;
+            return;
+        };
+        match action {
+            ImageAction::Replace => {
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Image", &["png", "jpg", "jpeg"])
+                    .pick_file()
+                else {
+                    return;
+                };
+                let (pixels, width, height) = match youpdf_core::edit::load_image_rgb(&path) {
+                    Ok(decoded) => decoded,
+                    Err(err) => {
+                        self.toast(ctx, format!("Image failed: {err}"));
+                        return;
+                    }
+                };
+                let replaced = self
+                    .tabs
+                    .get_mut(self.active)
+                    .map(|tab| tab.doc.replace_image_pixels(&info, &pixels, width, height));
+                match replaced {
+                    Some(Ok(())) => {
+                        self.mark_document_changed();
+                        self.toast(ctx, "Image replaced");
+                    }
+                    Some(Err(err)) => self.toast(ctx, format!("Replace failed: {err}")),
+                    None => {}
+                }
+            }
+            ImageAction::Extract => {
+                let Some(path) = rfd::FileDialog::new()
+                    .set_file_name("image.png")
+                    .save_file()
+                else {
+                    return;
+                };
+                let png = self
+                    .tabs
+                    .get(self.active)
+                    .map(|tab| tab.doc.extract_image_png(&info));
+                match png {
+                    Some(Ok(bytes)) => match std::fs::write(&path, &bytes) {
+                        Ok(()) => self.toast(ctx, "Image exported"),
+                        Err(err) => self.toast(ctx, format!("Export failed: {err}")),
+                    },
+                    Some(Err(err)) => self.toast(ctx, format!("Export failed: {err}")),
+                    None => {}
+                }
+            }
+            ImageAction::Transform(transform) => {
+                let done = self
+                    .tabs
+                    .get_mut(self.active)
+                    .map(|tab| tab.doc.transform_image(&info, transform));
+                match done {
+                    Some(Ok(())) => self.mark_document_changed(),
+                    Some(Err(err)) => self.toast(ctx, format!("Image failed: {err}")),
+                    None => {}
+                }
+            }
+            ImageAction::StartCrop => {
+                self.image_crop = Some(ImageCrop::default());
+            }
+            ImageAction::ApplyCrop => {
+                let crop = self.image_crop.take().unwrap_or_default();
+                if crop.is_empty() {
+                    return;
+                }
+                // Les poignées vivent sur la boîte **affichée** ; le cœur
+                // rogne selon les axes de l'image. Les deux repères diffèrent
+                // sur une page tournée, et plus encore après une rotation de
+                // l'image : on passe par la matrice de dessin.
+                let crop = self
+                    .tabs
+                    .get(self.active)
+                    .and_then(|tab| {
+                        let matrix = tab.doc.image_matrix(&info).ok().flatten()?;
+                        let page_box = tab.doc.image_rect(&info).ok().flatten()?;
+                        let view = tab.doc.page_view(selected.page as u32);
+                        let [dx1, dy1, dx2, dy2] = view.display_rect(page_box);
+                        let (dw, dh) = ((dx2 - dx1).max(1.0), (dy2 - dy1).max(1.0));
+                        let kept = [
+                            dx1 + crop.left * dw,
+                            dy1 + crop.bottom * dh,
+                            dx2 - crop.right * dw,
+                            dy2 - crop.top * dh,
+                        ];
+                        let [kx1, ky1, kx2, ky2] = view.page_rect(kept);
+                        Some(crop_fractions_in_image(matrix, [kx1, ky1, kx2, ky2]))
+                    })
+                    .unwrap_or(crop);
+                let done = self
+                    .tabs
+                    .get_mut(self.active)
+                    .map(|tab| tab.doc.crop_image(&info, crop));
+                match done {
+                    Some(Ok(())) => self.mark_document_changed(),
+                    Some(Err(err)) => self.toast(ctx, format!("Crop failed: {err}")),
+                    None => {}
+                }
+            }
+            ImageAction::CancelCrop => {
+                self.image_crop = None;
+            }
+            ImageAction::Opacity(alpha) => {
+                let done = self
+                    .tabs
+                    .get_mut(self.active)
+                    .map(|tab| tab.doc.set_image_opacity(&info, alpha));
+                match done {
+                    Some(Ok(())) => self.mark_document_changed(),
+                    Some(Err(err)) => self.toast(ctx, format!("Opacity failed: {err}")),
+                    None => {}
+                }
+            }
+            ImageAction::Delete => {
+                let done = self
+                    .tabs
+                    .get_mut(self.active)
+                    .map(|tab| tab.doc.delete_image(&info));
+                match done {
+                    Some(Ok(())) => {
+                        self.mark_document_changed();
+                        self.toast(ctx, "Image deleted");
+                    }
+                    Some(Err(err)) => self.toast(ctx, format!("Delete failed: {err}")),
+                    None => {}
+                }
+            }
+        }
+        self.refresh_selected_image();
+    }
+
     /// Inspecteur d'attributs flottant, posé au-dessus de la sélection.
     ///
     /// Le placement vient de [`place_inspector`] : jamais hors de la fenêtre,
@@ -6434,6 +6724,7 @@ impl YouPdfApp {
         let mut close = false;
         let mut delete = false;
         let mut delete_id = None;
+        let mut image_action = None;
         Area::new(Id::new("inspector"))
             .fixed_pos(placement.rect.min)
             .order(Order::Foreground)
@@ -6481,6 +6772,14 @@ impl YouPdfApp {
                                 );
                             }
                         }
+                        // Contrôles de l'image sélectionnée.
+                        if matches!(target, InspectorTarget::ImageElement { .. }) {
+                            image_action = image_controls(
+                                ui,
+                                &mut self.image_alpha,
+                                self.image_crop.is_some(),
+                            );
+                        }
                     });
                 let rect = body.response.rect;
                 measured = Some(rect.size());
@@ -6494,6 +6793,9 @@ impl YouPdfApp {
                 );
             });
         self.inspector_size = measured;
+        if let Some(action) = image_action {
+            self.image_action(action, ctx);
+        }
         if style_changed {
             // L'aperçu sur la page suit le style : un repaint immédiat évite
             // de croire que le réglage n'a rien fait.
@@ -9305,6 +9607,12 @@ impl YouPdfApp {
         // barre d'outils (dessinée après) le pose.
         let mode = self.mode;
         let mut inspector_target: Option<InspectorTarget> = None;
+        // L'image sélectionnée et le rognage en cours sont lus une fois : la
+        // trame du canevas emprunte les onglets, elle ne peut pas toucher à
+        // `self` en même temps.
+        let selected_image = self.selected_image.clone();
+        let crop_draft = self.image_crop;
+        let mut crop_next: Option<ImageCrop> = None;
 
         ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -9682,6 +9990,138 @@ impl YouPdfApp {
                         }
                     }
 
+                    // Image sélectionnée : cadre, poignées de rognage, et
+                    // inspecteur posé au-dessus.
+                    if let Some(image) = &selected_image {
+                        if image.page == page as usize {
+                            let [x1, y1, x2, y2] = image.rect;
+                            let box_screen = Rect::from_two_pos(
+                                pos2(
+                                    page_rect.min.x + x1 * scale,
+                                    page_rect.max.y - y2 * scale,
+                                ),
+                                pos2(
+                                    page_rect.min.x + x2 * scale,
+                                    page_rect.max.y - y1 * scale,
+                                ),
+                            );
+                            ui.painter().rect_stroke(
+                                box_screen,
+                                Rounding::same(2.0),
+                                Stroke::new(1.5_f32, pal().accent),
+                            );
+                            inspector_target = Some(InspectorTarget::ImageElement {
+                                page: image.page,
+                                id: ImageId(image.index),
+                                bounds: box_screen,
+                            });
+                            if let Some(crop) = crop_draft {
+                                // Zone conservée : les poignées vivent sur ses
+                                // coins, le reste de l'image est assombri.
+                                let kept = Rect::from_two_pos(
+                                    pos2(
+                                        box_screen.min.x + crop.left * box_screen.width(),
+                                        box_screen.min.y + crop.top * box_screen.height(),
+                                    ),
+                                    pos2(
+                                        box_screen.max.x - crop.right * box_screen.width(),
+                                        box_screen.max.y - crop.bottom * box_screen.height(),
+                                    ),
+                                );
+                                let shade = Color32::from_black_alpha(110);
+                                for outside in [
+                                    Rect::from_min_max(box_screen.min, pos2(box_screen.max.x, kept.min.y)),
+                                    Rect::from_min_max(pos2(box_screen.min.x, kept.max.y), box_screen.max),
+                                    Rect::from_min_max(pos2(box_screen.min.x, kept.min.y), pos2(kept.min.x, kept.max.y)),
+                                    Rect::from_min_max(pos2(kept.max.x, kept.min.y), pos2(box_screen.max.x, kept.max.y)),
+                                ] {
+                                    ui.painter().rect_filled(outside, Rounding::ZERO, shade);
+                                }
+                                ui.painter().rect_stroke(
+                                    kept,
+                                    Rounding::ZERO,
+                                    Stroke::new(1.0_f32, pal().accent),
+                                );
+                                let mut dragged = crop;
+                                for (handle, corner) in [
+                                    ("YouPDF crop tl", kept.left_top()),
+                                    ("YouPDF crop tr", kept.right_top()),
+                                    ("YouPDF crop bl", kept.left_bottom()),
+                                    ("YouPDF crop br", kept.right_bottom()),
+                                ] {
+                                    let centre = ui.painter().round_pos_to_pixels(corner);
+                                    let response = ui.interact(
+                                        Rect::from_center_size(centre, vec2(12.0, 12.0)),
+                                        Id::new(handle),
+                                        Sense::drag(),
+                                    );
+                                    ui.painter().rect_filled(
+                                        Rect::from_center_size(centre, vec2(8.0, 8.0)),
+                                        Rounding::same(2.0),
+                                        if response.hovered() || response.dragged() {
+                                            pal().accent
+                                        } else {
+                                            pal().icon_bright
+                                        },
+                                    );
+                                    // Seul un glissé déplace la poignée : un
+                                    // simple survol ne doit pas écrire dans
+                                    // le document.
+                                    if !response.dragged() {
+                                        continue;
+                                    }
+                                    let Some(pointer) = response.interact_pointer_pos() else {
+                                        continue;
+                                    };
+                                    let fx = ((pointer.x - box_screen.min.x)
+                                        / box_screen.width())
+                                    .clamp(0.0, 1.0);
+                                    let fy = ((pointer.y - box_screen.min.y)
+                                        / box_screen.height())
+                                    .clamp(0.0, 1.0);
+                                    match handle {
+                                        "YouPDF crop tl" => {
+                                            dragged.left = fx;
+                                            dragged.top = fy;
+                                        }
+                                        "YouPDF crop tr" => {
+                                            dragged.right = 1.0 - fx;
+                                            dragged.top = fy;
+                                        }
+                                        "YouPDF crop bl" => {
+                                            dragged.left = fx;
+                                            dragged.bottom = 1.0 - fy;
+                                        }
+                                        _ => {
+                                            dragged.right = 1.0 - fx;
+                                            dragged.bottom = 1.0 - fy;
+                                        }
+                                    }
+                                }
+                                // Les bords opposés ne doivent pas se croiser.
+                                if dragged.left + dragged.right > 0.9 {
+                                    let excess = dragged.left + dragged.right - 0.9;
+                                    if dragged.left > dragged.right {
+                                        dragged.left -= excess;
+                                    } else {
+                                        dragged.right -= excess;
+                                    }
+                                }
+                                if dragged.top + dragged.bottom > 0.9 {
+                                    let excess = dragged.top + dragged.bottom - 0.9;
+                                    if dragged.top > dragged.bottom {
+                                        dragged.top -= excess;
+                                    } else {
+                                        dragged.bottom -= excess;
+                                    }
+                                }
+                                if response_changed(crop, dragged) {
+                                    crop_next = Some(dragged);
+                                }
+                            }
+                        }
+                    }
+
                     // Repères de la page : le même calcul sert aux outils
                     // d'annotation et à la sélection de texte.
                     let to_pdf = |pos: egui::Pos2| -> [f32; 2] {
@@ -10020,6 +10460,9 @@ impl YouPdfApp {
         self.edit_text = draft;
         self.text_sel = sel;
         self.inspector_target = inspector_target;
+        if let Some(crop) = crop_next {
+            self.image_crop = Some(crop);
+        }
         if edit_cancel {
             self.edit_text = None;
         } else if edit_commit {
@@ -10111,8 +10554,16 @@ impl YouPdfApp {
                     if let Some(idx) = self.hit_test(page, point) {
                         self.selected_annot = idx;
                         self.has_annot_selection = true;
+                        self.selected_image = None;
                     } else {
                         self.has_annot_selection = false;
+                        // En mode Édition, le clic à vide cherche une image :
+                        // c'est ainsi qu'on ouvre l'inspecteur d'image.
+                        if self.mode == Some(1) {
+                            self.select_image_at(page, point);
+                        } else {
+                            self.selected_image = None;
+                        }
                     }
                 }
                 _ => {}
@@ -13296,6 +13747,41 @@ mod tests {
         assert_eq!(author_initial("alice"), "A");
         assert_eq!(author_initial("Bob"), "B");
         assert_eq!(author_initial(""), "?");
+    }
+
+    /// Une image droite : le rognage affiché est aussi le rognage de l'image.
+    #[test]
+    fn crop_fractions_follow_an_upright_image() {
+        // Boîte de 200×200 posée en (150, 300), pixels vers le haut.
+        let crop = crop_fractions_in_image(
+            [200.0, 0.0, 0.0, 200.0, 150.0, 300.0],
+            [200.0, 400.0, 350.0, 500.0],
+        );
+        // Le rectangle gardé va de x=200 à 350 : 25 % de la largeur part à
+        // gauche, rien à droite. Il va de y=400 à 500 : la moitié basse de
+        // l'image s'en va.
+        assert!((crop.left - 0.25).abs() < 1e-4, "{crop:?}");
+        assert!(crop.right.abs() < 1e-4, "{crop:?}");
+        assert!((crop.bottom - 0.5).abs() < 1e-4, "{crop:?}");
+        assert!(crop.top.abs() < 1e-4, "{crop:?}");
+    }
+
+    /// Image tournée d'un quart de tour horaire : l'axe horizontal affiché est
+    /// l'axe vertical de l'image, dans l'autre sens.
+    #[test]
+    fn crop_fractions_follow_a_quarter_turned_image() {
+        // Matrice produite par `RotateCw` : `(a, b) = (0, -200)` descend,
+        // `(c, d) = (200, 0)` va vers la droite.
+        let matrix = [0.0, -200.0, 200.0, 0.0, 150.0, 500.0];
+        // On garde la moitié haute de l'affichage.
+        let crop = crop_fractions_in_image(matrix, [150.0, 400.0, 350.0, 500.0]);
+        assert!(crop.left.abs() < 1e-4, "{crop:?}");
+        assert!((crop.right - 0.5).abs() < 1e-4, "{crop:?}");
+        assert!(crop.top.abs() < 1e-4 && crop.bottom.abs() < 1e-4, "{crop:?}");
+        // Et la moitié basse donne l'autre moitié de l'image.
+        let crop = crop_fractions_in_image(matrix, [150.0, 300.0, 350.0, 400.0]);
+        assert!((crop.left - 0.5).abs() < 1e-4, "{crop:?}");
+        assert!(crop.right.abs() < 1e-4, "{crop:?}");
     }
 
 }
