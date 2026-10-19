@@ -229,10 +229,16 @@ fn reinitialiser_le_formulaire() {
     check.value = Some("Yes".to_string());
     doc.create_form_field(&check).expect("création case");
 
+    // Une valeur par défaut (`/DV`) revient à la réinitialisation.
+    let champ = doc.read_form_fields().into_iter().find(|f| f.name == "Nom").unwrap();
+    let mut props = doc.read_field_properties(&champ);
+    props.default_value = "Anonyme".to_string();
+    doc.update_form_field(&champ, &props).expect("valeur par défaut");
+
     doc.reset_form_fields().expect("réinitialisation");
     let fields = doc.read_form_fields();
     let nom = fields.iter().find(|f| f.name == "Nom").expect("champ Nom");
-    assert_eq!(nom.value.as_deref(), Some(""));
+    assert_eq!(nom.value.as_deref(), Some("Anonyme"));
     let case = fields.iter().find(|f| f.name == "Case").expect("champ Case");
     assert_eq!(case.value.as_deref(), Some("Off"));
 }
