@@ -714,6 +714,8 @@ enum ToolsEntry {
     Mode(usize),
     /// Surface « Organiser les pages » (contient aussi le découpage).
     Organize,
+    /// Découpage d'une page en tuiles.
+    TileSplit,
     /// Fenêtre de recadrage.
     Crop,
     /// Fenêtre de filigrane.
@@ -753,7 +755,7 @@ const TOOLS_MENU: &[(&str, &str, ToolsEntry)] = &[
     ("Redact", "^4", ToolsEntry::Mode(3)),
     ("Organize pages", "^5", ToolsEntry::Organize),
     ("Crop pages", "^6", ToolsEntry::Crop),
-    ("Split pages", "^7", ToolsEntry::Organize),
+    ("Split pages", "^7", ToolsEntry::TileSplit),
     ("Watermark", "^8", ToolsEntry::Watermark),
     ("Background", "^9", ToolsEntry::Background),
     ("Header & footer", "^0", ToolsEntry::HeaderFooter),
@@ -1099,6 +1101,16 @@ pub struct YouPdfApp {
     /// Fenêtre « Recadrage » et ses marges.
     crop_open: bool,
     crop: CropMargins,
+    /// Unité d'affichage des marges : 0 pt, 1 mm, 2 cm, 3 in.
+    crop_unit: u8,
+    /// Pages visées : 0 toutes, 1 courante, 2 impaires, 3 paires.
+    crop_range: u8,
+    /// Boîte écrite : 0 CropBox, 1 ArtBox, 2 BleedBox, 3 TrimBox.
+    crop_target: u8,
+    /// Fenêtre de découpage en tuiles.
+    tile_split_open: bool,
+    tile_rows: usize,
+    tile_cols: usize,
     /// Fenêtre « Arrière-plan » et son brouillon.
     background_open: bool,
     background: Background,
@@ -1425,6 +1437,12 @@ impl YouPdfApp {
             protect: EncryptionOptions::default(),
             crop_open: false,
             crop: CropMargins::default(),
+            crop_unit: 0,
+            crop_range: 0,
+            crop_target: 0,
+            tile_split_open: false,
+            tile_rows: 2,
+            tile_cols: 2,
             background_open: false,
             background: Background::default(),
             background_from: None,
@@ -6696,6 +6714,7 @@ impl YouPdfApp {
                         self.text_sel = None;
                     }
                     ToolsEntry::Organize => self.organize_open = true,
+                    ToolsEntry::TileSplit => self.tile_split_open = true,
                     ToolsEntry::Crop => self.crop_open = true,
                     ToolsEntry::Watermark => self.watermark_open = true,
                     ToolsEntry::Background => self.background_open = true,
@@ -7205,6 +7224,54 @@ impl YouPdfApp {
                 ui.checkbox(&mut app.watermark.tiled, "Tiled");
             });
             ui.horizontal(|ui| {
+                ui.label(RichText::new("Position").size(12.0).color(pal().muted));
+                use youpdf_core::watermark::WatermarkPosition as Pos;
+                let current = app.watermark.position;
+                egui::ComboBox::from_id_salt("wm-position")
+                    .width(104.0)
+                    .selected_text(format!("{current:?}"))
+                    .show_ui(ui, |ui| {
+                        for value in [
+                            Pos::TopLeft,
+                            Pos::TopCenter,
+                            Pos::TopRight,
+                            Pos::MiddleLeft,
+                            Pos::Center,
+                            Pos::MiddleRight,
+                            Pos::BottomLeft,
+                            Pos::BottomCenter,
+                            Pos::BottomRight,
+                        ] {
+                            if ui
+                                .selectable_label(app.watermark.position == value, format!("{value:?}"))
+                                .clicked()
+                            {
+                                app.watermark.position = value;
+                            }
+                        }
+                    });
+                ui.label(RichText::new("Offset").size(12.0).color(pal().muted));
+                ui.add(
+                    egui::DragValue::new(&mut app.watermark.offset_x)
+                        .range(-400.0..=400.0)
+                        .prefix("x "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut app.watermark.offset_y)
+                        .range(-400.0..=400.0)
+                        .prefix("y "),
+                );
+            });
+            if app.watermark.tiled {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Tile gap").size(12.0).color(pal().muted));
+                    ui.add(
+                        egui::DragValue::new(&mut app.watermark.tile_gap).range(0.0..=400.0),
+                    );
+                });
+            }
+            ui.checkbox(&mut app.watermark.behind, "Behind page content");
+            ui.horizontal(|ui| {
                 ui.label(RichText::new("Opacity").size(12.0).color(pal().muted));
                 ui.add(
                     egui::Slider::new(&mut app.watermark.opacity, 0.05..=1.0).show_value(false),
@@ -7648,6 +7715,124 @@ impl YouPdfApp {
 
     // -- Fonctionnalités de document ---------------------------------------
 
+    /// Pages visées par la fenêtre de recadrage.
+    fn crop_pages(&self) -> Vec<usize> {
+        let total = self.active_total() as usize;
+        match self.crop_range {
+            1 => vec![self.tabs.get(self.active).map_or(1, |tab| tab.page)],
+            2 => (1..=total).filter(|page| page % 2 == 1).collect(),
+            3 => (1..=total).filter(|page| page % 2 == 0).collect(),
+            _ => (1..=total).collect(),
+        }
+    }
+
+    /// Recadre chaque page sur la boîte englobante de son texte, avec 12 pt
+    /// de marge. Les pages sans texte sont laissées telles quelles.
+    fn auto_crop_pages(&mut self, ctx: &egui::Context, pages: &[usize]) {
+        let mut cropped = 0usize;
+        for page in pages.iter().copied() {
+            let page_u32 = page as u32;
+            let Some(tab) = self.tabs.get_mut(self.active) else {
+                return;
+            };
+            if !tab.fragments.contains_key(&page_u32) {
+                extract_page_fragments(&*self.renderer, tab, page_u32);
+            }
+            let Some(frags) = tab.fragments.get(&page_u32) else {
+                continue;
+            };
+            if frags.is_empty() {
+                continue;
+            }
+            let mut bounds = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+            for frag in frags {
+                bounds[0] = bounds[0].min(frag.rect[0]);
+                bounds[1] = bounds[1].min(frag.rect[1]);
+                bounds[2] = bounds[2].max(frag.rect[2]);
+                bounds[3] = bounds[3].max(frag.rect[3]);
+            }
+            let view = tab.doc.page_view(page_u32);
+            const PAD: f32 = 12.0;
+            let margins = CropMargins {
+                left: (bounds[0] - view.x - PAD).max(0.0),
+                bottom: (bounds[1] - view.y - PAD).max(0.0),
+                right: (view.x + view.width - bounds[2] - PAD).max(0.0),
+                top: (view.y + view.height - bounds[3] - PAD).max(0.0),
+            };
+            if tab.doc.crop_pages(&[page], margins).is_ok() {
+                cropped += 1;
+            }
+        }
+        if cropped > 0 {
+            self.mark_document_changed();
+            self.toast(ctx, format!("{cropped} page(s) auto-cropped"));
+        }
+    }
+
+    /// Fenêtre « Découper en tuiles » : lignes × colonnes sur les pages visées.
+    fn tile_split_window(&mut self, ctx: &egui::Context) {
+        if !self.tile_split_open {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        let mut rows = self.tile_rows;
+        let mut cols = self.tile_cols;
+        self.show_modal(ctx, "modal-tile-split", "Split pages", 360.0, &mut open, |app, ui| {
+            ui.label(
+                RichText::new(
+                    "Each page becomes a grid of pages, one per tile. \
+                     Useful for posters printed across several sheets.",
+                )
+                .size(11.0)
+                .color(pal().muted),
+            );
+            ui.add_space(6.0);
+            ui.add(egui::Slider::new(&mut rows, 1..=8).text("Rows"));
+            ui.add(egui::Slider::new(&mut cols, 1..=8).text("Columns"));
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(format!(
+                    "{} page(s) selected → {} page(s) per page",
+                    app.crop_pages().len(),
+                    rows * cols
+                ))
+                .size(10.5)
+                .color(pal().muted),
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Split").clicked() {
+                    apply = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    app.tile_split_open = false;
+                }
+            });
+        });
+        self.tile_rows = rows;
+        self.tile_cols = cols;
+        if !open {
+            self.tile_split_open = false;
+        }
+        if apply {
+            let pages = self.crop_pages();
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.split_tiles(&pages, rows, cols));
+            match result {
+                Some(Ok(count)) => {
+                    self.mark_document_changed();
+                    self.tile_split_open = false;
+                    self.toast(ctx, format!("{count} tile page(s) created"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Split failed: {err}")),
+                None => {}
+            }
+        }
+    }
+
     /// Fenêtre « Recadrage » : marges retirées des quatre bords.
     fn crop_window(&mut self, ctx: &egui::Context) {
         if !self.crop_open {
@@ -7656,15 +7841,80 @@ impl YouPdfApp {
         let mut open = true;
         let mut apply = false;
         let mut reset = false;
-        self.show_modal(ctx, "modal-crop", "Crop pages", 340.0, &mut open, |app, ui| {
+        let mut auto = false;
+        // Facteur d'affichage : les marges vivent en points.
+        let factor = [1.0_f32, 72.0 / 25.4, 72.0 / 2.54, 72.0][self.crop_unit.min(3) as usize];
+        self.show_modal(ctx, "modal-crop", "Crop pages", 380.0, &mut open, |app, ui| {
             ui.label(
                 RichText::new(
-                    "Margins removed from every edge, in points (72 pt = 1 inch). \
-                     Negative values grow the page.",
+                    "Margins removed from every edge. Negative values grow the page.",
                 )
                 .size(11.0)
                 .color(pal().muted),
             );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Unit").size(11.0).color(pal().muted));
+                egui::ComboBox::from_id_salt("crop-unit")
+                    .width(64.0)
+                    .selected_text(["pt", "mm", "cm", "in"][app.crop_unit.min(3) as usize])
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [(0u8, "pt"), (1, "mm"), (2, "cm"), (3, "in")] {
+                            if ui
+                                .selectable_label(app.crop_unit == value, label)
+                                .clicked()
+                            {
+                                app.crop_unit = value;
+                            }
+                        }
+                    });
+                ui.label(RichText::new("Pages").size(11.0).color(pal().muted));
+                egui::ComboBox::from_id_salt("crop-range")
+                    .width(96.0)
+                    .selected_text(
+                        ["All pages", "Current page", "Odd pages", "Even pages"]
+                            [app.crop_range.min(3) as usize],
+                    )
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [
+                            (0u8, "All pages"),
+                            (1, "Current page"),
+                            (2, "Odd pages"),
+                            (3, "Even pages"),
+                        ] {
+                            if ui
+                                .selectable_label(app.crop_range == value, label)
+                                .clicked()
+                            {
+                                app.crop_range = value;
+                            }
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Box").size(11.0).color(pal().muted));
+                egui::ComboBox::from_id_salt("crop-box")
+                    .width(120.0)
+                    .selected_text(
+                        ["CropBox", "ArtBox", "BleedBox", "TrimBox"]
+                            [app.crop_target.min(3) as usize],
+                    )
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [
+                            (0u8, "CropBox"),
+                            (1, "ArtBox"),
+                            (2, "BleedBox"),
+                            (3, "TrimBox"),
+                        ] {
+                            if ui
+                                .selectable_label(app.crop_target == value, label)
+                                .clicked()
+                            {
+                                app.crop_target = value;
+                            }
+                        }
+                    });
+            });
             ui.add_space(6.0);
             egui::Grid::new("crop-grid")
                 .num_columns(2)
@@ -7677,16 +7927,28 @@ impl YouPdfApp {
                         ("Bottom", &mut app.crop.bottom),
                     ] {
                         ui.label(RichText::new(label).size(12.0).color(pal().muted));
-                        ui.add(
-                            egui::DragValue::new(value).range(-500.0..=500.0).speed(0.5),
-                        );
+                        let mut shown = *value / factor;
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut shown)
+                                    .range(-200.0..=200.0)
+                                    .speed(0.1)
+                                    .suffix([" pt", " mm", " cm", " in"][app.crop_unit.min(3) as usize]),
+                            )
+                            .changed()
+                        {
+                            *value = shown * factor;
+                        }
                         ui.end_row();
                     }
                 });
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui.button("Apply").clicked() {
                     apply = true;
+                }
+                if ui.button("Auto-crop margins").clicked() {
+                    auto = true;
                 }
                 if ui.button("Reset crop").clicked() {
                     reset = true;
@@ -7694,13 +7956,22 @@ impl YouPdfApp {
             });
         });
 
-        let pages: Vec<usize> = (1..=self.active_total() as usize).collect();
+        let pages = self.crop_pages();
+        if auto {
+            self.auto_crop_pages(ctx, &pages);
+        }
         if apply {
             let margins = self.crop;
-            let result = self
-                .tabs
-                .get_mut(self.active)
-                .map(|tab| tab.doc.crop_pages(&pages, margins));
+            let target = self.crop_target;
+            let result = self.tabs.get_mut(self.active).map(|tab| {
+                let target = match target {
+                    1 => youpdf_core::crop::PageBox::Art,
+                    2 => youpdf_core::crop::PageBox::Bleed,
+                    3 => youpdf_core::crop::PageBox::Trim,
+                    _ => youpdf_core::crop::PageBox::Crop,
+                };
+                tab.doc.crop_pages_to(&pages, margins, target)
+            });
             match result {
                 Some(Ok(count)) => {
                     self.mark_document_changed();
@@ -11789,6 +12060,7 @@ impl eframe::App for YouPdfApp {
         self.compress_window(ctx);
         self.protect_window(ctx);
         self.crop_window(ctx);
+        self.tile_split_window(ctx);
         self.background_window(ctx);
         self.bates_window(ctx);
         self.compare_window(ctx);

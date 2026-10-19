@@ -992,3 +992,17 @@ fn split_by_size_respects_the_limit() {
         let _ = std::fs::remove_file(path);
     }
 }
+
+/// Découper une page en 2 × 2 crée quatre pages à la taille de la tuile.
+#[test]
+fn split_tiles_makes_four_pages() {
+    let bytes = multipage_pdf(3).expect("PDF de test");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+    let created = doc.split_tiles(&[2], 2, 2).expect("découpage");
+    assert_eq!(created, 4);
+    assert_eq!(doc.page_count(), 6, "3 - 1 + 4");
+    // La première tuile remplace la page visée : 612 × 792 devient 306 × 396.
+    let (width, height) = doc.page_size(2);
+    assert!((width - 306.0).abs() < 0.01, "{width}");
+    assert!((height - 396.0).abs() < 0.01, "{height}");
+}

@@ -10,6 +10,31 @@ use youpdf_shared::Result;
 
 use crate::document::Document;
 
+/// Boîte de page écrite par le recadrage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageBox {
+    /// Zone visible (`/CropBox`).
+    Crop,
+    /// Zone d'art (`/ArtBox`).
+    Art,
+    /// Zone de fond perdu (`/BleedBox`).
+    Bleed,
+    /// Zone de rognage (`/TrimBox`).
+    Trim,
+}
+
+impl PageBox {
+    /// Clé PDF de la boîte.
+    pub fn key(self) -> &'static [u8] {
+        match self {
+            PageBox::Crop => b"CropBox",
+            PageBox::Art => b"ArtBox",
+            PageBox::Bleed => b"BleedBox",
+            PageBox::Trim => b"TrimBox",
+        }
+    }
+}
+
 /// Marges de recadrage, en points, retirées de chaque bord de la page.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CropMargins {
@@ -71,6 +96,17 @@ impl Document {
     /// Une marge négative agrandit la boîte. Renvoie le nombre de pages
     /// effectivement modifiées.
     pub fn crop_pages(&mut self, pages: &[usize], margins: CropMargins) -> Result<usize> {
+        self.crop_pages_to(pages, margins, PageBox::Crop)
+    }
+
+    /// Recadre vers la boîte choisie (`/CropBox`, `/ArtBox`, `/BleedBox` ou
+    /// `/TrimBox`).
+    pub fn crop_pages_to(
+        &mut self,
+        pages: &[usize],
+        margins: CropMargins,
+        target: PageBox,
+    ) -> Result<usize> {
         let mut changed = 0usize;
         for number in pages {
             let page = *number as u32;
@@ -84,7 +120,7 @@ impl Document {
                 continue;
             };
             dict.set(
-                "CropBox",
+                target.key(),
                 Object::Array(vec![
                     Object::Real(view.x + left),
                     Object::Real(view.y + bottom),

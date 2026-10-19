@@ -106,6 +106,22 @@ impl NumberStyle {
     }
 }
 
+/// Ancrage du filigrane sur la page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WatermarkPosition {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    MiddleLeft,
+    /// Centre de la page (défaut).
+    #[default]
+    Center,
+    MiddleRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
 /// Description d'un filigrane texte.
 #[derive(Debug, Clone)]
 pub struct Watermark {
@@ -123,6 +139,15 @@ pub struct Watermark {
     pub tiled: bool,
     /// Pages concernées.
     pub pages: PageRange,
+    /// Ancrage du texte (ignoré quand le filigrane est carrelé).
+    pub position: WatermarkPosition,
+    /// Décalage appliqué à l'ancre, en points.
+    pub offset_x: f32,
+    pub offset_y: f32,
+    /// Espace entre deux répétitions d'un filigrane carrelé, en points.
+    pub tile_gap: f32,
+    /// Poser le filigrane derrière le contenu de la page.
+    pub behind: bool,
 }
 
 impl Default for Watermark {
@@ -135,6 +160,11 @@ impl Default for Watermark {
             rotation_deg: 45.0,
             tiled: false,
             pages: PageRange::All,
+            position: WatermarkPosition::Center,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            tile_gap: 120.0,
+            behind: false,
         }
     }
 }
@@ -378,8 +408,9 @@ fn watermark_ops(wm: &Watermark, width: f32, height: f32) -> Vec<u8> {
     }
 
     if wm.tiled {
-        let mut step_x = text_width(&wm.text, size) + 120.0;
-        let mut step_y = size + 120.0;
+        let gap = wm.tile_gap.clamp(0.0, 600.0);
+        let mut step_x = text_width(&wm.text, size) + gap;
+        let mut step_y = size + gap;
         // Une page démesurée — affiche, plan de ville, ou boîte héritée d'un
         // fichier hostile — demanderait des centaines de milliers
         // d'opérations. L'espacement s'élargit plutôt que d'abandonner la
@@ -401,9 +432,39 @@ fn watermark_ops(wm: &Watermark, width: f32, height: f32) -> Vec<u8> {
             y += step_y;
         }
     } else {
-        let x = ((width - text_width(&wm.text, size)) / 2.0).max(2.0);
-        let y = height / 2.0 - size * 0.35;
-        paint_watermark_text(&mut out, wm, size, cos, sin, x, y);
+        let text_w = text_width(&wm.text, size);
+        const MARGIN: f32 = 24.0;
+        let x = match wm.position {
+            WatermarkPosition::TopLeft
+            | WatermarkPosition::MiddleLeft
+            | WatermarkPosition::BottomLeft => MARGIN,
+            WatermarkPosition::TopCenter
+            | WatermarkPosition::Center
+            | WatermarkPosition::BottomCenter => ((width - text_w) / 2.0).max(2.0),
+            WatermarkPosition::TopRight
+            | WatermarkPosition::MiddleRight
+            | WatermarkPosition::BottomRight => (width - text_w - MARGIN).max(2.0),
+        };
+        let y = match wm.position {
+            WatermarkPosition::TopLeft
+            | WatermarkPosition::TopCenter
+            | WatermarkPosition::TopRight => (height - size - MARGIN).max(2.0),
+            WatermarkPosition::MiddleLeft
+            | WatermarkPosition::Center
+            | WatermarkPosition::MiddleRight => height / 2.0 - size * 0.35,
+            WatermarkPosition::BottomLeft
+            | WatermarkPosition::BottomCenter
+            | WatermarkPosition::BottomRight => MARGIN,
+        };
+        paint_watermark_text(
+            &mut out,
+            wm,
+            size,
+            cos,
+            sin,
+            x + wm.offset_x,
+            y + wm.offset_y,
+        );
     }
 
     out.extend_from_slice(b"Q\n");
@@ -431,15 +492,38 @@ fn header_footer_ops(
         _ => None,
     };
 
-    // Le numéro rejoint le centre du pied de page.
-    let footer_center = match (&number, hf.footer.center.trim()) {
-        (Some(n), "") => n.clone(),
-        (Some(n), c) => format!("{c} {n}"),
-        (None, _) => hf.footer.center.clone(),
+    // Macros : {page}, {pages} (total) et {label} (numéro courant).
+    let label = page
+        .saturating_sub(hf.start_page.max(1))
+        .saturating_add(1)
+        .to_string();
+    let expand = |text: &str| {
+        text.replace("{page}", &page.to_string())
+            .replace("{pages}", &total.to_string())
+            .replace("{total}", &total.to_string())
+            .replace("{label}", &label)
     };
 
-    let header_band = !hf.header.is_empty();
-    let footer_band = !hf.footer.is_empty() || number.is_some();
+    // Le numéro rejoint le centre du pied de page.
+    let footer_center = expand(&hf.footer.center);
+    let footer_center = match (&number, footer_center.trim()) {
+        (Some(n), "") => n.clone(),
+        (Some(n), c) => format!("{c} {n}"),
+        (None, _) => footer_center.trim().to_string(),
+    };
+    let header_left = expand(&hf.header.left);
+    let header_center = expand(&hf.header.center);
+    let header_right = expand(&hf.header.right);
+    let footer_left = expand(&hf.footer.left);
+    let footer_right = expand(&hf.footer.right);
+
+    let header_band = !header_left.trim().is_empty()
+        || !header_center.trim().is_empty()
+        || !header_right.trim().is_empty();
+    let footer_band = !footer_left.trim().is_empty()
+        || !footer_center.trim().is_empty()
+        || !footer_right.trim().is_empty()
+        || number.is_some();
     if !header_band && !footer_band {
         return None;
     }
@@ -456,9 +540,9 @@ fn header_footer_ops(
             margin,
             height - margin - size,
             width,
-            &hf.header.left,
-            &hf.header.center,
-            &hf.header.right,
+            &header_left,
+            &header_center,
+            &header_right,
         );
     }
     if footer_band {
@@ -468,9 +552,9 @@ fn header_footer_ops(
             margin,
             margin,
             width,
-            &hf.footer.left,
+            &footer_left,
             &footer_center,
-            &hf.footer.right,
+            &footer_right,
         );
     }
     out.extend_from_slice(b"Q\n");
@@ -659,7 +743,11 @@ impl Document {
             if wm.opacity < 1.0 {
                 self.wm_ensure_extgstate(page_id, wm.opacity.clamp(0.05, 1.0))?;
             }
-            self.wm_append_content(page_id, stream_id)?;
+            if wm.behind {
+                self.wm_prepend_content(page_id, stream_id)?;
+            } else {
+                self.wm_append_content(page_id, stream_id)?;
+            }
         }
 
         tracing::debug!(pages = pages.len(), "filigrane ajouté");
