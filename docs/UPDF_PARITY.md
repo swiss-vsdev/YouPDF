@@ -31,6 +31,8 @@ Unchecked below = still open. The plan document is the authoritative task list.
 
 - **Phase 4.2** — Content element selection, movement and resizing in Edit mode: `ContentElement`/`ContentDrag`/`ContentKind` types, `content_selection`/`content_drag` state vars in `YouPdfApp`, basic hover highlight for selected images (solid blue stroke in Edit mode), `hit_test_content` added to `hit_test` dispatch; `selected_image`/`image_crop` reset in `reset_document_session`; `TEXT_CURSOR` constant added; `caret_at`/`single_line` on `TextDraft` initialized.
 
+- **Bugfixes (text and tools)** — The canvas action `match` carried a `_ => {}` arm ahead of the annotation arms, making every annotation, text-edit, image-insert, redact, measure and form tool unreachable; the catch-all and the four dead markup `ToolAction` variants are gone. `tokenize_content` re-read the `[` and `]` array delimiters forever, so the first text-selection drag hung the UI with a beachball; the delimiters are now tokens (regression test in `tests/extract.rs`). Text fragments now come from pdfium through `Renderer::page_fragments`: it decodes CID/hex-encoded fonts that the flow decoder cannot resolve, so selection, copy, search highlighting, redaction marking and the in-place text tool work on those documents too. The internal decoder stays as the fallback and now also reads `TJ` arrays.
+
 ## 1. Window Chrome & Layout
 *   **UPDF:** Tabbed interface with `+` new tab, Home house button, traffic lights, avatar, notifications.
 *   **YouPDF:** Basic tab support, no Home/start screen, no notifications, no cloud/account/avatar integration.
