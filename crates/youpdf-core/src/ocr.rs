@@ -628,3 +628,66 @@ fn is_executable(path: &std::path::Path) -> bool {
         true
     }
 }
+
+impl Document {
+    /// Part de la page couverte par la plus grande image posée par son
+    /// contenu, entre 0 et 1.
+    ///
+    /// Heuristique volontairement simple : seuls les `cm ... Do` de premier
+    /// niveau sont lus. Les images imbriquées dans un formulaire XObject ou
+    /// dans un `q/Q` transformé ne sont pas mesurées ; elles restent détectées
+    /// par [`Document::looks_scanned`] via la présence d'un texte vide.
+    pub fn page_image_coverage(&self, page: u32) -> f32 {
+        let Ok(page_id) = self.page_id(page) else {
+            return 0.0;
+        };
+        let Ok(content) = self.inner().get_page_content(page_id) else {
+            return 0.0;
+        };
+        let (width, height) = self.page_size(page);
+        let surface = (width * height).max(1.0);
+        let mut operands: Vec<f32> = Vec::new();
+        let mut last_matrix: Option<[f32; 6]> = None;
+        let mut best = 0.0_f32;
+        for token in content.split(|byte| byte.is_ascii_whitespace()) {
+            match token {
+                b"cm" => {
+                    if operands.len() >= 6 {
+                        let start = operands.len() - 6;
+                        last_matrix = Some([
+                            operands[start],
+                            operands[start + 1],
+                            operands[start + 2],
+                            operands[start + 3],
+                            operands[start + 4],
+                            operands[start + 5],
+                        ]);
+                    }
+                    operands.clear();
+                }
+                b"Do" => {
+                    if let Some(matrix) = last_matrix {
+                        let area = (matrix[0] * matrix[3] - matrix[1] * matrix[2]).abs();
+                        best = best.max((area / surface).min(1.0));
+                    }
+                    operands.clear();
+                }
+                other => match std::str::from_utf8(other).ok().and_then(|text| text.parse::<f32>().ok()) {
+                    Some(value) => operands.push(value),
+                    None => operands.clear(),
+                },
+            }
+        }
+        best
+    }
+
+    /// Vrai si la page ressemble à un scan : pas de texte extractible et une
+    /// image couvrant au moins 80 % de la surface.
+    pub fn looks_scanned(&self, page: u32) -> bool {
+        let has_text = self
+            .extract_text_fragments(page)
+            .map(|fragments| fragments.iter().any(|f| !f.text.trim().is_empty()))
+            .unwrap_or(true);
+        !has_text && self.page_image_coverage(page) >= 0.8
+    }
+}
