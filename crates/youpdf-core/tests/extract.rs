@@ -154,12 +154,15 @@ fn page_sans_texte_resultats_vides() {
 /// Un flux contenant un tableau `[ … ]` (opérateur `TJ`) doit être
 /// tokenisé. Sans la prise en charge des délimiteurs, le tokenizer les
 /// relisait sans fin : le premier glissé de sélection de texte figeait
-/// l'interface.
+/// l'interface. Les chaînes du tableau sont du texte, les nombres non.
 #[test]
 fn flux_avec_tableau_tj_ne_boucle_pas() {
-    let content = "BT /F1 11 Tf 1 0 0 1 100 700 Tm [(Hello)] TJ (World) Tj ET\n";
+    let content = "BT /F1 11 Tf 1 0 0 1 100 700 Tm [(Hello) -250 (World)] TJ ET\n";
     let doc = Document::from_bytes(&pdf_with(content)).expect("ouverture");
     let frags = doc.extract_text_fragments(1).expect("extraction");
     let text: String = frags.iter().map(|f| f.text.as_str()).collect();
-    assert!(text.contains("World"), "texte extrait : {text:?}");
+    assert!(
+        text.contains("HelloWorld"),
+        "chaînes du tableau TJ attendues, texte extrait : {text:?}"
+    );
 }
