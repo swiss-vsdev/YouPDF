@@ -136,6 +136,8 @@ enum ExportMode {
 
 /// Entrée choisie dans le menu `…`.
 enum MenuAction {
+    /// Ouvre la fenêtre des préférences.
+    Preferences,
     Save,
     SaveAs,
     /// Ouvre la fenêtre d'export.
@@ -709,6 +711,16 @@ fn render_step(scale: f32, ppp: f32) -> i32 {
     ((scale * ppp).max(0.01).log2() * 2.0).round() as i32 + 20
 }
 
+/// Libellé d'une disposition de pages, pour les menus et les préférences.
+fn layout_label(layout: PageLayout) -> &'static str {
+    match layout {
+        PageLayout::Single => "Single page",
+        PageLayout::Continuous => "Continuous scroll",
+        PageLayout::TwoPages => "Two pages",
+        PageLayout::Cover => "Cover (book)",
+    }
+}
+
 /// Entrée du menu `Outils`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ToolsEntry {
@@ -1119,6 +1131,10 @@ pub struct YouPdfApp {
     scan_banner: bool,
     /// L'utilisateur ne veut plus voir le bandeau pendant cette session.
     scan_banner_off: bool,
+    /// Fenêtre « Préférences » (⌘,).
+    prefs_open: bool,
+    /// Instant du dernier enregistrement automatique, en secondes egui.
+    autosave_at: f64,
     /// Fenêtre de découpage en tuiles.
     tile_split_open: bool,
     tile_rows: usize,
@@ -1473,6 +1489,8 @@ impl YouPdfApp {
             crop_unit: 0,
             crop_range: 0,
             crop_target: 0,
+            prefs_open: false,
+            autosave_at: 0.0,
             scan_banner: false,
             scan_banner_off: false,
             tile_split_open: false,
@@ -1630,6 +1648,27 @@ impl YouPdfApp {
             zoom_moved_at: 0.0,
         };
 
+        // Les préférences vivent dans le panneau IA, qui tient déjà la
+        // configuration chargée : une seule lecture du fichier.
+        let prefs = app.ai.settings.clone();
+        app.page_layout = PageLayout::ALL
+            .get(prefs.default_layout)
+            .copied()
+            .unwrap_or_default();
+        if !prefs.author.trim().is_empty() {
+            app.comment_author = Some(prefs.author.clone());
+        }
+        if !prefs.measure_unit.trim().is_empty() {
+            app.measure_unit = prefs.measure_unit.clone();
+        }
+        if initial.is_none() && prefs.startup == "blank" {
+            // Démarrage sur une page vierge : le document est créé ici pour
+            // que l'application n'ouvre pas l'écran d'accueil.
+            if let Ok(doc) = youpdf_core::blank_document(1, 595.0, 842.0) {
+                app.push_document(doc, None);
+            }
+        }
+
         if let Some(path) = initial {
             app.open_path(path);
         }
@@ -1762,6 +1801,15 @@ impl YouPdfApp {
     /// deux fois.
     fn push_document(&mut self, mut doc: Document, path: Option<PathBuf>) {
         let title = doc.display_name();
+        let (initial_zoom, fit_page) = match self.ai.settings.default_zoom.as_str() {
+            "fit-page" => (None, true),
+            "actual" => (Some(1.0), false),
+            "fit-width" => (None, false),
+            other => match other.trim_end_matches('%').parse::<f32>() {
+                Ok(percent) if percent > 0.0 => (Some(percent / 100.0), false),
+                _ => (None, false),
+            },
+        };
         let protected = path
             .as_deref()
             .map(Document::file_is_encrypted)
@@ -1778,8 +1826,8 @@ impl YouPdfApp {
             path: path.clone(),
             title: title.clone(),
             page: 1,
-            zoom: None,
-            zoom_fit_page: false,
+            zoom: initial_zoom,
+            zoom_fit_page: fit_page,
             cache: HashMap::new(),
             last_bitmap: None,
             dirty: false,
@@ -7067,6 +7115,9 @@ impl YouPdfApp {
                                 }
                             }
                             ui.add_space(4.0);
+                            if menu_row(ui, "Preferences…", "\u{2318},") {
+                                action = Some(MenuAction::Preferences);
+                            }
                             if menu_row_checked(ui, "AI features…", self.ai.enabled()) {
                                 action = Some(MenuAction::AiEnabled);
                             }
@@ -7140,6 +7191,7 @@ impl YouPdfApp {
                     MenuAction::Slideshow => self.enter_slideshow(ctx),
                     MenuAction::Batch => self.batch_open = true,
                     MenuAction::Extract => self.extract_open = true,
+                    MenuAction::Preferences => self.prefs_open = true,
                     MenuAction::AiEnabled => self.ai.open = true,
                     MenuAction::Conformance(level) => self.conformance_save(ctx, level),
                     MenuAction::ImagePdf => self.image_pdf_save(ctx),
@@ -7982,6 +8034,194 @@ impl YouPdfApp {
                 Some(Err(err)) => self.toast(ctx, format!("Split failed: {err}")),
                 None => {}
             }
+        }
+    }
+
+    /// Fenêtre « Préférences » : réglages persistants appliqués aux nouveaux
+    /// onglets et au démarrage suivant.
+    fn prefs_window(&mut self, ctx: &egui::Context) {
+        if !self.prefs_open {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        self.show_modal(ctx, "modal-prefs", "Preferences", 420.0, &mut open, |app, ui| {
+            let mut settings = app.ai.settings.clone();
+            ui.label(RichText::new("General").size(12.0).color(pal().muted));
+            egui::Grid::new("prefs-general")
+                .num_columns(2)
+                .spacing([8.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label(RichText::new("On startup").size(11.0));
+                    egui::ComboBox::from_id_salt("prefs-startup")
+                        .selected_text(match settings.startup.as_str() {
+                            "blank" => "Blank document",
+                            _ => "Home screen",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut settings.startup,
+                                "home".to_string(),
+                                "Home screen",
+                            );
+                            ui.selectable_value(
+                                &mut settings.startup,
+                                "blank".to_string(),
+                                "Blank document",
+                            );
+                        });
+                    ui.end_row();
+
+                    ui.label(RichText::new("Default zoom").size(11.0));
+                    egui::ComboBox::from_id_salt("prefs-zoom")
+                        .selected_text(settings.default_zoom.clone())
+                        .show_ui(ui, |ui| {
+                            for option in ["fit-width", "fit-page", "actual"] {
+                                ui.selectable_value(
+                                    &mut settings.default_zoom,
+                                    option.to_string(),
+                                    option,
+                                );
+                            }
+                        });
+                    ui.end_row();
+
+                    ui.label(RichText::new("Default layout").size(11.0));
+                    let mut layout = settings.default_layout.min(PageLayout::ALL.len() - 1);
+                    egui::ComboBox::from_id_salt("prefs-layout")
+                        .selected_text(layout_label(PageLayout::ALL[layout]))
+                        .show_ui(ui, |ui| {
+                            for (index, candidate) in PageLayout::ALL.iter().enumerate() {
+                                if ui
+                                    .selectable_label(layout == index, layout_label(*candidate))
+                                    .clicked()
+                                {
+                                    layout = index;
+                                }
+                            }
+                        });
+                    settings.default_layout = layout;
+                    ui.end_row();
+
+                    ui.label(RichText::new("Author").size(11.0));
+                    ui.add(TextEdit::singleline(&mut settings.author).desired_width(180.0));
+                    ui.end_row();
+
+                    ui.label(RichText::new("Measure unit").size(11.0));
+                    egui::ComboBox::from_id_salt("prefs-unit")
+                        .selected_text(settings.measure_unit.clone())
+                        .show_ui(ui, |ui| {
+                            for option in ["pt", "mm", "cm", "in", "ft", "m", "yd"] {
+                                ui.selectable_value(
+                                    &mut settings.measure_unit,
+                                    option.to_string(),
+                                    option,
+                                );
+                            }
+                        });
+                    ui.end_row();
+
+                    ui.label(RichText::new("Auto-save").size(11.0));
+                    egui::ComboBox::from_id_salt("prefs-autosave")
+                        .selected_text(match settings.autosave_minutes {
+                            0 => "Disabled".to_string(),
+                            minutes => format!("{minutes} min"),
+                        })
+                        .show_ui(ui, |ui| {
+                            for minutes in [0u32, 1, 5, 10] {
+                                ui.selectable_value(
+                                    &mut settings.autosave_minutes,
+                                    minutes,
+                                    match minutes {
+                                        0 => "Disabled".to_string(),
+                                        other => format!("{other} min"),
+                                    },
+                                );
+                            }
+                        });
+                    ui.end_row();
+                });
+            ui.add_space(6.0);
+            ui.label(RichText::new("Appearance").size(12.0).color(pal().muted));
+            ui.horizontal(|ui| {
+                for theme in Theme::ALL {
+                    let index = Theme::ALL
+                        .iter()
+                        .position(|candidate| *candidate == theme)
+                        .unwrap_or(0);
+                    if ui
+                        .selectable_label(settings.theme_index == index, theme.label())
+                        .clicked()
+                    {
+                        settings.theme_index = index;
+                        app.theme = theme;
+                        app.applied_theme = theme;
+                        apply_theme(ctx, theme);
+                    }
+                }
+            });
+            ui.add_space(6.0);
+            ui.label(RichText::new("AI").size(12.0).color(pal().muted));
+            ui.checkbox(&mut settings.ai_enabled, "Enable the AI layer");
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Save").clicked() {
+                    app.ai.settings = settings.clone();
+                    let _ = app.ai.settings.save();
+                    apply = true;
+                }
+                if ui.button("Close").clicked() {
+                    app.prefs_open = false;
+                }
+            });
+        });
+        if apply {
+            // Les réglages qui touchent l'onglet courant s'appliquent tout de
+            // suite, sans attendre une réouverture.
+            self.page_layout = PageLayout::ALL
+                .get(self.ai.settings.default_layout)
+                .copied()
+                .unwrap_or_default();
+            if !self.ai.settings.author.trim().is_empty() {
+                self.comment_author = Some(self.ai.settings.author.clone());
+            }
+            self.measure_unit = self.ai.settings.measure_unit.clone();
+            self.prefs_open = false;
+        }
+        if !open {
+            self.prefs_open = false;
+        }
+    }
+
+    /// Enregistre les onglets modifiés à intervalle régulier.
+    fn autosave_tick(&mut self, ctx: &egui::Context) {
+        let minutes = self.ai.settings.autosave_minutes;
+        if minutes == 0 {
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        if now - self.autosave_at < minutes as f64 * 60.0 {
+            return;
+        }
+        self.autosave_at = now;
+        let mut saved = 0usize;
+        for tab in &mut self.tabs {
+            if !tab.dirty || tab.protected {
+                continue;
+            }
+            let Some(path) = tab.path.clone() else {
+                continue;
+            };
+            let annots = annots_to_page(&tab.doc, &tab.annots);
+            if tab.doc.save_with_annotations(&path, &annots).is_ok() {
+                tab.dirty = false;
+                tab.structural_dirty = false;
+                tab.baseline_annots = tab.annots.clone();
+                saved += 1;
+            }
+        }
+        if saved > 0 {
+            self.toast(ctx, format!("Auto-saved {saved} document(s)"));
         }
     }
 
@@ -12196,6 +12436,10 @@ impl YouPdfApp {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Comma)) {
+            self.prefs_open = true;
+            return;
+        }
         // Une saisie en cours (recherche, nom de champ, remplacement) a la
         // priorité : sinon Retour arrière efface l'annotation sélectionnée au
         // lieu d'un caractère.
@@ -12329,6 +12573,7 @@ impl eframe::App for YouPdfApp {
             return;
         }
         self.shortcuts(ctx);
+        self.autosave_tick(ctx);
         self.title_bar(ctx);
         self.rail(ctx);
         self.side_panel(ctx);
@@ -12354,6 +12599,7 @@ impl eframe::App for YouPdfApp {
         self.header_footer_window(ctx);
         self.compress_window(ctx);
         self.protect_window(ctx);
+        self.prefs_window(ctx);
         self.crop_window(ctx);
         self.tile_split_window(ctx);
         self.background_window(ctx);
