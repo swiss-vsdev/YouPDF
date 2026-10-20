@@ -601,23 +601,27 @@ impl YouPdfApp {
         ui.add_space(6.0);
 
         if apply {
-            let Some(tab) = self.tabs.get_mut(self.active) else {
-                return;
-            };
-            let Some(field) = tab.forms.get(idx).cloned() else {
-                return;
-            };
-            let result = tab.doc.fill_form_field(&field, &buffer);
-            match result {
-                Ok(()) => {
-                    if let Some(entry) = tab.forms.get_mut(idx) {
-                        entry.value = Some(buffer.clone());
+            let outcome = {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return;
+                };
+                let Some(field) = tab.forms.get(idx).cloned() else {
+                    return;
+                };
+                match tab.doc.fill_form_field(&field, &buffer) {
+                    Ok(()) => {
+                        tab.forms = tab.doc.read_form_fields();
+                        Ok(field.name)
                     }
-                    tab.dirty = true;
-                    tab.structural_dirty = true;
-                    // La page est déjà rendue avec l'ancienne valeur.
-                    tab.invalidate_render();
-                    self.toast(ctx, format!("Field {} updated", field.name));
+                    Err(err) => Err(format!("{err}")),
+                }
+            };
+            match outcome {
+                Ok(name) => {
+                    // Une édition de champ passe par l'historique comme les
+                    // autres modifications structurelles.
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("Field {name} updated"));
                 }
                 Err(err) => self.toast(ctx, format!("Field update failed: {err}")),
             }
@@ -646,39 +650,35 @@ impl YouPdfApp {
             return;
         };
         self.form_editing = None;
-        let Some(tab) = self.tabs.get_mut(self.active) else {
-            return;
-        };
-        let Some(field) = tab.forms.get(idx).cloned() else {
-            return;
-        };
-        let value = if field.kind == FormFieldKind::Radio {
-            if buffer.is_empty() {
-                "Off"
-            } else {
-                "Yes"
-            }
-        } else {
-            buffer.as_str()
-        };
-        if tab.doc.fill_form_field(&field, value).is_ok() {
-            // Un bouton radio sélectionné désélectionne ses frères.
-            if field.kind == FormFieldKind::Radio && value != "Off" {
-                let siblings: Vec<FormField> = tab
-                    .forms
-                    .iter()
-                    .filter(|other| {
-                        other.kind == FormFieldKind::Radio
-                            && other.name == field.name
-                            && other.object_id != field.object_id
-                    })
-                    .cloned()
-                    .collect();
-                for other in siblings {
-                    let _ = tab.doc.fill_form_field(&other, "Off");
+        let mut fields_changed = false;
+        {
+            let Some(tab) = self.tabs.get_mut(self.active) else {
+                return;
+            };
+            let Some(field) = tab.forms.get(idx).cloned() else {
+                return;
+            };
+            let value = if field.kind == FormFieldKind::Radio {
+                if buffer.is_empty() {
+                    "Off".to_string()
+                } else {
+                    field
+                        .states
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "Yes".to_string())
                 }
+            } else {
+                buffer
+            };
+            if tab.doc.fill_form_field(&field, &value).is_ok() {
+                // Le groupe radio partage `/V` : relire remet les `/AS` d'aplomb.
+                tab.forms = tab.doc.read_form_fields();
+                fields_changed = true;
             }
-            tab.forms = tab.doc.read_form_fields();
+        }
+        if fields_changed {
+            self.mark_document_changed();
         }
     }
 }

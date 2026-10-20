@@ -3,9 +3,13 @@
 //! ## Support
 //!
 //! - **Lecture** : liste des champs avec nom, type, valeur actuelle,
-//!   options (pour les listes et boutons radio).
+//!   options (pour les listes et boutons radio). `/FT`, `/Ff`, `/V`, `/Opt`
+//!   et `/TU` sont hérités du parent quand le widget ne les porte pas, et un
+//!   champ à plusieurs widgets (groupe radio) donne une entrée par widget
+//!   avec son rectangle et sa page.
 //! - **Remplissage** : modification de la valeur `/V` d'un champ,
-//!   plus `/AS` (appearance state) pour les cases à cocher.
+//!   plus `/AS` (appearance state) sur chaque widget pour les cases et les
+//!   boutons radio, et régénération du flux `/AP` pour le texte.
 //! - **Aplatissement** : transformation des champs en contenu de page
 //!   non modifiable (prévu phase 5).
 //!
@@ -108,11 +112,90 @@ fn number_f32(object: &Object) -> Option<f32> {
     }
 }
 
+/// Attributs qu'un champ transmet à ses sous-champs.
+#[derive(Debug, Clone, Default)]
+struct Inherited {
+    ft: Option<Vec<u8>>,
+    flags: i64,
+    value: Option<String>,
+    options: Option<Vec<String>>,
+    tooltip: Option<String>,
+    page: Option<usize>,
+    rect: Option<[f32; 4]>,
+}
+
+/// Valeur d'un `/V` ou `/DV` : chaîne ou nom.
+fn field_value(object: Option<&Object>) -> Option<String> {
+    match object? {
+        Object::String(bytes, _) => Some(crate::structure::decode_pdf_text(bytes)),
+        Object::Name(name) => Some(crate::structure::decode_pdf_text(name)),
+        _ => None,
+    }
+}
+
+/// Options d'un `/Opt`. Une entrée peut être une chaîne, ou un tableau
+/// `[valeur exportée, libellé]`.
+fn field_options(object: Option<&Object>) -> Option<Vec<String>> {
+    let items = object?.as_array().ok()?;
+    Some(
+        items
+            .iter()
+            .filter_map(|item| match item {
+                Object::String(bytes, _) => Some(crate::structure::decode_pdf_text(bytes)),
+                Object::Array(pair) => pair.last().and_then(|value| field_value(Some(value))),
+                Object::Name(name) => Some(crate::structure::decode_pdf_text(name)),
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
+/// Rectangle d'un dictionnaire, s'il est complet.
+fn field_rect(dict: &Dictionary) -> Option<[f32; 4]> {
+    let values: Vec<f32> = dict
+        .get(b"Rect")
+        .ok()?
+        .as_array()
+        .ok()?
+        .iter()
+        .filter_map(number_f32)
+        .collect();
+    (values.len() >= 4).then(|| {
+        [
+            values[0].min(values[2]),
+            values[1].min(values[3]),
+            values[0].max(values[2]),
+            values[1].max(values[3]),
+        ]
+    })
+}
+
+/// États d'apparence d'un widget (`/AP /N`), hors `Off`.
+fn appearance_states(dict: &Dictionary) -> Vec<String> {
+    let Ok(states) = dict
+        .get(b"AP")
+        .and_then(|o| o.as_dict())
+        .and_then(|ap| ap.get(b"N"))
+        .and_then(|o| o.as_dict())
+    else {
+        return Vec::new();
+    };
+    states
+        .iter()
+        .filter_map(|(key, _)| {
+            let name = crate::structure::decode_pdf_text(key);
+            (name != "Off").then_some(name)
+        })
+        .collect()
+}
+
 /// Un champ de formulaire lu depuis un PDF.
 #[derive(Debug, Clone)]
 pub struct FormField {
-    /// Référence de l'objet PDF (pour la mise à jour).
+    /// Référence du dictionnaire de champ (pour `/V`, `/T`, les propriétés).
     pub object_id: (u32, u16),
+    /// Objet du widget qui porte ce rectangle et cet état.
+    pub widget_id: (u32, u16),
     /// Nom complet (peut être hiérarchique : `parent.enfant`).
     pub name: String,
     /// Type.
@@ -131,8 +214,12 @@ pub struct FormField {
     pub multiline: bool,
     /// Numéro de page (1-indexé), si le champ en a une.
     pub page: Option<usize>,
-    /// Rectangle du champ en repère page : `[x1, y1, x2, y2]`.
+    /// Rectangle du widget en repère page : `[x1, y1, x2, y2]`.
     pub rect: [f32; 4],
+    /// États d'apparence du widget (cases à cocher et boutons radio).
+    pub states: Vec<String>,
+    /// État courant du widget (`/AS`).
+    pub state: Option<String>,
 }
 
 /// Description d'un champ de formulaire à créer.
@@ -205,10 +292,13 @@ impl NewFormField {
 
 impl Document {
     /// Lit tous les champs de formulaire du document.
+    ///
+    /// Un champ peut hériter de `/FT`, `/Ff`, `/V`, `/Opt` et `/TU` de son
+    /// parent, et ses widgets peuvent être des objets séparés sans `/T` :
+    /// chaque widget devient une entrée avec son propre rectangle et sa page.
     pub fn read_form_fields(&self) -> Vec<FormField> {
         let mut out = Vec::new();
 
-        // 1. Récupérer le catalogue → /AcroForm.
         let Some(acroform) = self.acroform_dict() else {
             return out;
         };
@@ -227,22 +317,22 @@ impl Document {
             _ => return out,
         };
 
-        // 2. Parcourir récursivement (les champs peuvent être hiérarchiques).
         for field_ref in &fields {
             let Ok(field_id) = field_ref.as_reference() else {
                 continue;
             };
-            self.walk_field(field_id, None, &mut out);
+            self.walk_field(field_id, None, &Inherited::default(), &mut out);
         }
 
         out
     }
 
-    /// Parcourt un champ et ses enfants.
+    /// Parcourt un champ, ses sous-champs et ses widgets.
     fn walk_field(
         &self,
         field_id: (u32, u16),
         parent_name: Option<&str>,
+        inherited: &Inherited,
         out: &mut Vec<FormField>,
     ) {
         let Ok(obj) = self.inner().get_object(field_id) else {
@@ -267,137 +357,156 @@ impl Document {
             (None, None) => String::new(),
         };
 
-        // Un champ feuille a un /FT (ou hérite de son parent — simplification :
-        // on considère qu'il a un /FT direct).
-        if let Ok(ft) = dict.get(b"FT").and_then(|o| o.as_name()) {
-            let mut kind = FormFieldKind::from_ft(ft);
+        // Attributs hérités : le dictionnaire le plus proche gagne.
+        let ft = dict
+            .get(b"FT")
+            .ok()
+            .and_then(|o| o.as_name().ok())
+            .map(<[u8]>::to_vec)
+            .or_else(|| inherited.ft.clone());
+        let flags = dict
+            .get(b"Ff")
+            .ok()
+            .and_then(|o| o.as_i64().ok())
+            .unwrap_or(inherited.flags);
+        let value = field_value(dict.get(b"V").ok()).or_else(|| inherited.value.clone());
+        let options = field_options(dict.get(b"Opt").ok())
+            .or_else(|| inherited.options.clone())
+            .unwrap_or_default();
+        let tooltip = dict
+            .get(b"TU")
+            .ok()
+            .and_then(|o| o.as_str().ok())
+            .map(crate::structure::decode_pdf_text)
+            .or_else(|| inherited.tooltip.clone())
+            .unwrap_or_default();
+        let page = dict
+            .get(b"P")
+            .ok()
+            .and_then(|o| o.as_reference().ok())
+            .and_then(|page_id| self.page_number_of(page_id))
+            .or(inherited.page);
+        let rect = field_rect(dict).or(inherited.rect);
 
-            // Affiner pour /Btn : radio ou checkbox.
-            if matches!(kind, FormFieldKind::Checkbox) {
-                let flags = dict
-                    .get(b"Ff")
-                    .ok()
-                    .and_then(|o| o.as_i64().ok())
-                    .unwrap_or(0);
-                // Bit 15 (0x8000) : radio.
-                // Bit 16 (0x10000) : pushbutton (à ignorer).
-                if flags & 0x8000 != 0 {
-                    kind = FormFieldKind::Radio;
-                } else if flags & 0x10000 != 0 {
-                    kind = FormFieldKind::Button;
-                }
+        // Enfants : les vrais sous-champs portent un `/T` (ou ont leurs
+        // propres enfants) ; les autres sont des widgets.
+        let kids: Vec<(u32, u16)> = dict
+            .get(b"Kids")
+            .ok()
+            .and_then(|o| o.as_array().ok())
+            .map(|items| items.iter().filter_map(|item| item.as_reference().ok()).collect())
+            .unwrap_or_default();
+        let mut child_fields = Vec::new();
+        let mut widgets = Vec::new();
+        for kid in kids {
+            let Ok(kid_obj) = self.inner().get_object(kid) else {
+                continue;
+            };
+            let Ok(kid_dict) = kid_obj.as_dict() else {
+                continue;
+            };
+            if kid_dict.get(b"T").is_ok() || kid_dict.get(b"Kids").is_ok() {
+                child_fields.push(kid);
+            } else {
+                widgets.push(kid);
             }
+        }
 
-            // Affiner pour /Ch : multi-sélection ?
-            if matches!(kind, FormFieldKind::Choice) {
-                let flags = dict
-                    .get(b"Ff")
-                    .ok()
-                    .and_then(|o| o.as_i64().ok())
-                    .unwrap_or(0);
-                // Bit 21 : MultiSelect (le bit 22 est DoNotSpellCheck).
-                if flags & (1 << 20) != 0 {
-                    kind = FormFieldKind::MultiChoice;
-                }
+        if !child_fields.is_empty() {
+            let next = Inherited {
+                ft,
+                flags,
+                value,
+                options: Some(options),
+                tooltip: Some(tooltip),
+                page,
+                rect,
+            };
+            for kid in child_fields {
+                self.walk_field(kid, Some(&full_name), &next, out);
             }
+            return;
+        }
 
-            // Valeur actuelle. Les valeurs des champs sont encodées en
-            // **WinAnsi** (la page de codes de la police standard) : un
-            // `String::from_utf8_lossy` remplaçait chaque octet ≥ 0x80 par le
-            // caractère de remplacement, et un accent ressortait en point
-            // d'interrogation. On décode donc comme le reste du texte PDF :
-            // UTF-16BE, sinon UTF-8, sinon Latin-1.
-            let value = dict.get(b"V").ok().and_then(|o| match o {
-                Object::String(bytes, _) => Some(crate::structure::decode_pdf_text(bytes)),
-                Object::Name(n) => Some(crate::structure::decode_pdf_text(n)),
-                _ => None,
-            });
+        let Some(ft) = ft else {
+            return;
+        };
+        if full_name.is_empty() {
+            return;
+        }
+        let mut kind = FormFieldKind::from_ft(&ft);
+        if matches!(kind, FormFieldKind::Checkbox) {
+            // Bit 16 : bouton radio ; bit 17 : bouton poussoir.
+            if flags & 0x8000 != 0 {
+                kind = FormFieldKind::Radio;
+            } else if flags & 0x10000 != 0 {
+                kind = FormFieldKind::Button;
+            }
+        }
+        if matches!(kind, FormFieldKind::Choice) && flags & (1 << 20) != 0 {
+            kind = FormFieldKind::MultiChoice;
+        }
 
-            // Options (pour les listes).
-            let options = dict
-                .get(b"Opt")
+        let widgets = if widgets.is_empty() {
+            vec![field_id]
+        } else {
+            widgets
+        };
+        for widget_id in widgets {
+            let widget = self
+                .inner()
+                .get_object(widget_id)
                 .ok()
-                .and_then(|o| o.as_array().ok())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|opt| match opt {
-                            Object::String(bytes, _) => {
-                                Some(crate::structure::decode_pdf_text(bytes))
-                            }
-                            _ => None,
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            // Flags lecture seule (bit 1), obligatoire (bit 2), multiligne
-            // (bit 13).
-            let flags = dict
-                .get(b"Ff")
-                .ok()
-                .and_then(|o| o.as_i64().ok())
-                .unwrap_or(0);
-            let read_only = flags & 1 != 0;
-            let required = flags & 2 != 0;
-            let multiline = flags & 4096 != 0;
-
-            // Aide au survol.
-            let tooltip = dict
-                .get(b"TU")
-                .ok()
-                .and_then(|o| o.as_str().ok())
-                .map(crate::structure::decode_pdf_text)
-                .unwrap_or_default();
-
-            // Page du champ (via /P si présent).
-            let page = dict
+                .and_then(|obj| obj.as_dict().ok())
+                .unwrap_or(dict);
+            let rect = field_rect(widget).or(rect).unwrap_or([0.0, 0.0, 0.0, 0.0]);
+            let page = widget
                 .get(b"P")
                 .ok()
                 .and_then(|o| o.as_reference().ok())
-                .and_then(|page_id| self.page_number_of(page_id));
+                .and_then(|page_id| self.page_number_of(page_id))
+                .or_else(|| self.page_of_annotation(widget_id))
+                .or(page);
+            out.push(FormField {
+                object_id: field_id,
+                widget_id,
+                name: full_name.clone(),
+                kind: kind.clone(),
+                value: value.clone(),
+                options: options.clone(),
+                read_only: flags & 1 != 0,
+                tooltip: tooltip.clone(),
+                required: flags & 2 != 0,
+                multiline: flags & 4096 != 0,
+                page,
+                rect,
+                states: appearance_states(widget),
+                state: widget
+                    .get(b"AS")
+                    .ok()
+                    .and_then(|o| o.as_name().ok())
+                    .map(crate::structure::decode_pdf_text),
+            });
+        }
+    }
 
-            // Rectangle du champ.
-            let rect = {
-                dict.get(b"Rect")
-                    .and_then(|o| o.as_array())
-                    .and_then(|arr| {
-                        let vals: Vec<f32> = arr.iter().filter_map(number_f32).collect();
-                        if vals.len() >= 4 {
-                            Ok(Some([vals[0], vals[1], vals[2], vals[3]]))
-                        } else {
-                            Ok(None)
-                        }
-                    })
-                    .unwrap_or(None)
-                    .map(|r| r)
-                    .unwrap_or([0.0, 0.0, 0.0, 0.0])
+    /// Page qui référence cette annotation dans son `/Annots`.
+    fn page_of_annotation(&self, annot_id: (u32, u16)) -> Option<usize> {
+        for (number, page_id) in self.inner().get_pages() {
+            let Ok(page) = self.inner().get_object(page_id).and_then(|obj| obj.as_dict()) else {
+                continue;
             };
-
-            if !full_name.is_empty() {
-                out.push(FormField {
-                    object_id: field_id,
-                    name: full_name.clone(),
-                    kind,
-                    value,
-                    options,
-                    read_only,
-                    tooltip,
-                    required,
-                    multiline,
-                    page,
-                    rect,
-                });
+            let Ok(annots) = page.get(b"Annots").and_then(|o| o.as_array()) else {
+                continue;
+            };
+            if annots
+                .iter()
+                .any(|item| item.as_reference().ok() == Some(annot_id))
+            {
+                return Some(number as usize);
             }
         }
-
-        // Enfants éventuels.
-        if let Ok(kids) = dict.get(b"Kids").and_then(|o| o.as_array()) {
-            for kid in kids {
-                if let Ok(kid_id) = kid.as_reference() {
-                    self.walk_field(kid_id, Some(&full_name), out);
-                }
-            }
-        }
+        None
     }
 
     /// Remplit un champ de formulaire.
@@ -572,8 +681,13 @@ impl Document {
         self.register_acroform_field(widget_id, font)?;
         self.touch();
 
+        let states = match field.kind {
+            FormFieldKind::Checkbox | FormFieldKind::Radio => vec!["Yes".to_string()],
+            _ => Vec::new(),
+        };
         Ok(FormField {
             object_id: widget_id,
+            widget_id,
             name: field.name.clone(),
             kind: field.kind.clone(),
             value: field.value.clone(),
@@ -583,7 +697,12 @@ impl Document {
             required: false,
             multiline: false,
             page: Some(field.page as usize),
-            rect: [0.0, 0.0, 0.0, 0.0],
+            rect,
+            states,
+            state: field
+                .value
+                .clone()
+                .filter(|_| is_choice_state),
         })
     }
 
@@ -1064,7 +1183,7 @@ impl Document {
         ];
         let obj = self
             .inner_mut()
-            .get_object_mut(field.object_id)
+            .get_object_mut(field.widget_id)
             .map_err(|e| Error::Pdf(format!("champ « {} » : {e}", field.name)))?;
         let dict = obj
             .as_dict_mut()
@@ -1267,9 +1386,13 @@ impl Document {
     /// Le résultat est en octets : le FDF est un conteneur d'octets dont les
     /// littéraux sont en WinAnsi, une chaîne UTF-8 n'y suffit pas.
     pub fn export_form_data(&self, format: FormDataFormat) -> Result<Vec<u8>> {
+        // Un groupe radio apparaît une fois par widget : l'export ne garde
+        // qu'une ligne par champ.
+        let mut seen = std::collections::HashSet::new();
         let pairs: Vec<(String, String)> = self
             .read_form_fields()
             .into_iter()
+            .filter(|field| seen.insert(field.object_id))
             .map(|f| (f.name, f.value.unwrap_or_default()))
             .collect();
 
@@ -1313,28 +1436,165 @@ impl Document {
 
     /// Écrit `/V` (et `/AS` pour les cases) sans contrôle de lecture seule.
     fn set_field_value(&mut self, field: &FormField, value: &str) -> Result<()> {
-        let (v_obj, as_obj) = match field.kind {
-            FormFieldKind::Checkbox | FormFieldKind::Radio => (
-                Object::Name(value.as_bytes().to_vec()),
-                Object::Name(value.as_bytes().to_vec()),
-            ),
-            _ => (
-                Object::string_literal(crate::edit::encode_pdf_literal(value)),
-                Object::Null,
-            ),
-        };
+        let button = matches!(
+            field.kind,
+            FormFieldKind::Checkbox | FormFieldKind::Radio | FormFieldKind::Button
+        );
+        if button {
+            let selected = if value.is_empty() || value == "Off" {
+                "Off".to_string()
+            } else {
+                self.resolve_button_state(field, value)
+            };
+            self.set_dict_name(field.object_id, "V", &selected)?;
+            for widget_id in self.field_widget_ids(field) {
+                let state = if selected == "Off" {
+                    "Off".to_string()
+                } else if widget_id == field.widget_id {
+                    selected.clone()
+                } else {
+                    let states = self.widget_states(widget_id);
+                    if states.iter().any(|state| state == &selected) {
+                        selected.clone()
+                    } else {
+                        "Off".to_string()
+                    }
+                };
+                self.set_dict_name(widget_id, "AS", &state)?;
+            }
+            return Ok(());
+        }
 
+        self.set_dict_string(field.object_id, "V", value)?;
+        // Le texte doit rester lisible dans un lecteur qui ne régénère pas
+        // les apparences : on écrit un nouveau flux `/AP`.
+        let font = self.ensure_appearance_font()?;
+        for widget_id in self.field_widget_ids(field) {
+            let (w, h) = self.widget_size(widget_id, field.rect);
+            let ap = self.add_appearance(Object::Reference(font), w, h, Some(value), false)?;
+            self.set_widget_appearance(widget_id, ap)?;
+        }
+        Ok(())
+    }
+
+    /// Choisit l'état d'apparence réel d'un bouton.
+    ///
+    /// Les producteurs nomment rarement l'état `Yes` : `/On`, `/1`, `/Choice2`
+    /// sont courants. Une valeur inconnue retombe sur le premier état du
+    /// widget plutôt que d'écrire un `/AS` qui n'existe pas.
+    fn resolve_button_state(&self, field: &FormField, value: &str) -> String {
+        for widget_id in self.field_widget_ids(field) {
+            let states = self.widget_states(widget_id);
+            if let Some(state) = states.iter().find(|state| state.as_str() == value) {
+                return state.clone();
+            }
+        }
+        if let Some(state) = field
+            .states
+            .iter()
+            .find(|state| state.as_str() == value)
+        {
+            return state.clone();
+        }
+        for widget_id in self.field_widget_ids(field) {
+            if let Some(state) = self.widget_states(widget_id).into_iter().next() {
+                return state;
+            }
+        }
+        if let Some(state) = field.states.first() {
+            return state.clone();
+        }
+        value.to_string()
+    }
+
+    /// Widgets d'un champ : le sien, plus ses enfants qui n'ont pas de `/T`.
+    fn field_widget_ids(&self, field: &FormField) -> Vec<(u32, u16)> {
+        let mut ids = vec![field.widget_id];
+        if let Ok(dict) = self
+            .inner()
+            .get_object(field.object_id)
+            .and_then(|obj| obj.as_dict())
+        {
+            if let Ok(kids) = dict.get(b"Kids").and_then(|o| o.as_array()) {
+                for kid in kids {
+                    let Ok(id) = kid.as_reference() else {
+                        continue;
+                    };
+                    let Ok(kid_dict) = self.inner().get_object(id).and_then(|obj| obj.as_dict())
+                    else {
+                        continue;
+                    };
+                    if kid_dict.get(b"T").is_err() && !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+        }
+        ids
+    }
+
+    /// États d'apparence d'un widget, hors `Off`.
+    fn widget_states(&self, widget_id: (u32, u16)) -> Vec<String> {
+        self.inner()
+            .get_object(widget_id)
+            .ok()
+            .and_then(|obj| obj.as_dict().ok())
+            .map(appearance_states)
+            .unwrap_or_default()
+    }
+
+    fn widget_size(&self, widget_id: (u32, u16), fallback: [f32; 4]) -> (f32, f32) {
+        let rect = self
+            .inner()
+            .get_object(widget_id)
+            .ok()
+            .and_then(|obj| obj.as_dict().ok())
+            .and_then(field_rect)
+            .unwrap_or(fallback);
+        (
+            (rect[2] - rect[0]).max(4.0),
+            (rect[3] - rect[1]).max(4.0),
+        )
+    }
+
+    fn set_dict_name(&mut self, object_id: (u32, u16), key: &str, value: &str) -> Result<()> {
         let obj = self
             .inner_mut()
-            .get_object_mut(field.object_id)
-            .map_err(|e| Error::Pdf(format!("champ « {} » : {e}", field.name)))?;
+            .get_object_mut(object_id)
+            .map_err(|e| Error::Pdf(format!("champ : {e}")))?;
         let dict = obj
             .as_dict_mut()
-            .map_err(|e| Error::Pdf(format!("champ « {} » : {e}", field.name)))?;
-        dict.set("V", v_obj);
-        if !matches!(as_obj, Object::Null) {
-            dict.set("AS", as_obj);
-        }
+            .map_err(|e| Error::Pdf(format!("champ : {e}")))?;
+        dict.set(key, Object::Name(value.as_bytes().to_vec()));
+        Ok(())
+    }
+
+    fn set_dict_string(&mut self, object_id: (u32, u16), key: &str, value: &str) -> Result<()> {
+        let obj = self
+            .inner_mut()
+            .get_object_mut(object_id)
+            .map_err(|e| Error::Pdf(format!("champ : {e}")))?;
+        let dict = obj
+            .as_dict_mut()
+            .map_err(|e| Error::Pdf(format!("champ : {e}")))?;
+        dict.set(
+            key,
+            Object::string_literal(crate::edit::encode_pdf_literal(value)),
+        );
+        Ok(())
+    }
+
+    fn set_widget_appearance(&mut self, widget_id: (u32, u16), stream: ObjectId) -> Result<()> {
+        let obj = self
+            .inner_mut()
+            .get_object_mut(widget_id)
+            .map_err(|e| Error::Pdf(format!("widget : {e}")))?;
+        let dict = obj
+            .as_dict_mut()
+            .map_err(|e| Error::Pdf(format!("widget : {e}")))?;
+        let mut ap = Dictionary::new();
+        ap.set("N", Object::Reference(stream));
+        dict.set("AP", Object::Dictionary(ap));
         Ok(())
     }
 }
