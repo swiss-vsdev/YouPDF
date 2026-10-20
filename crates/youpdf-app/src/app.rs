@@ -890,6 +890,7 @@ enum EraseMode {
 }
 
 /// Saisie en cours pour une annotation textuelle.
+#[allow(dead_code)]
 struct TextDraft {
     kind: DraftKind,
     page: usize,
@@ -1181,6 +1182,7 @@ enum ContentDrag {
 }
 
 /// Le curseur couramment utilisé par l'éditeur de texte.
+#[allow(dead_code)]
 const TEXT_CURSOR: CursorIcon = CursorIcon::Text;
 
 pub struct YouPdfApp {
@@ -3537,6 +3539,7 @@ impl YouPdfApp {
 
     /// Indice du tracé de crayon réellement touché à `point`, en ignorant les
     /// boîtes englobantes vides.
+    #[allow(dead_code)]
     fn ink_hit_test(&self, page: usize, point: [f32; 2]) -> Option<usize> {
         let tab = self.tabs.get(self.active)?;
         tab.annots
