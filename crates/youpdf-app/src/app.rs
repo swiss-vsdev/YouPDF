@@ -86,6 +86,10 @@ const REMOVED_RED: Color32 = Color32::from_rgb(0xDC, 0x35, 0x45);
 const MODIFIED_AMBER: Color32 = Color32::from_rgb(0xFF, 0xC1, 0x07);
 
 const TITLE_H: f32 = 40.0;
+/// Nombre maximal d'états conservés dans une pile d'annulation.
+const HISTORY_LIMIT: usize = 20;
+/// Budget d'octets des états qui gardent une copie du document.
+const HISTORY_BYTES: usize = 256 * 1024 * 1024;
 const STATUS_H: f32 = 26.0;
 const RAIL_W: f32 = 52.0;
 const PANEL_W: f32 = 210.0;
@@ -937,6 +941,43 @@ struct PasswordPrompt {
     error: Option<String>,
 }
 
+/// État d'un onglet avant une modification.
+///
+/// Les octets du document ne sont copiés que pour les éditions structurelles
+/// (texte, pages, formulaires…). Une édition d'annotations vit uniquement en
+/// mémoire et laisse `doc` à `None`.
+struct HistoryEntry {
+    doc: Option<Vec<u8>>,
+    annots: Vec<Annotation>,
+}
+
+/// Empreinte rapide des octets d'un document, pour comparer à l'état enregistré.
+fn fingerprint(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Garde les états les plus récents dans les deux limites (nombre et octets).
+fn trim_history(stack: &mut Vec<HistoryEntry>) {
+    trim_history_to(stack, HISTORY_LIMIT, HISTORY_BYTES);
+}
+
+fn trim_history_to(stack: &mut Vec<HistoryEntry>, limit: usize, budget: usize) {
+    while stack.len() > limit {
+        stack.remove(0);
+    }
+    let mut total: usize = stack
+        .iter()
+        .filter_map(|entry| entry.doc.as_ref().map(Vec::len))
+        .sum();
+    while total > budget && stack.len() > 1 {
+        let dropped = stack.remove(0);
+        total -= dropped.doc.as_ref().map(Vec::len).unwrap_or(0);
+    }
+}
+
 struct Tab {
     doc: Document,
     path: Option<PathBuf>,
@@ -965,9 +1006,14 @@ struct Tab {
     /// retour arrière ramène bien à l'état enregistré.
     baseline_annots: Vec<Annotation>,
     annots_loaded: bool,
-    /// Piles d'annulation/rétablissement (instantanés des annotations).
-    undo: Vec<Vec<Annotation>>,
-    redo: Vec<Vec<Annotation>>,
+    /// Piles d'annulation/rétablissement. Une entrée sans octets ne touche
+    /// qu'aux annotations ; une entrée avec octets restaure aussi le document.
+    undo: Vec<HistoryEntry>,
+    redo: Vec<HistoryEntry>,
+    /// Octets du document au dernier point de restauration connu.
+    history_base: Option<Vec<u8>>,
+    /// Empreinte des octets enregistrés sur le disque.
+    saved_hash: u64,
     /// Plan du document (signets).
     outline: Vec<OutlineItem>,
     /// Champs de formulaire du document.
@@ -994,6 +1040,16 @@ impl Tab {
     fn invalidate_render(&mut self) {
         self.cache.clear();
         self.last_bitmap = None;
+    }
+
+    /// Empile un état d'annotations avant modification.
+    fn record_annots(&mut self, before: Vec<Annotation>) {
+        self.undo.push(HistoryEntry {
+            doc: None,
+            annots: before,
+        });
+        trim_history(&mut self.undo);
+        self.redo.clear();
     }
 
     /// Le palier demandé manque-t-il, ou est-il trop loin de l'échelle voulue ?
@@ -1840,6 +1896,8 @@ impl YouPdfApp {
             tracing::warn!("purge des annotations impossible");
         }
         let baseline_annots = annots.clone();
+        let history_base = doc.to_bytes().ok();
+        let saved_hash = history_base.as_deref().map(fingerprint).unwrap_or(0);
         self.tabs.push(Tab {
             doc,
             path: path.clone(),
@@ -1856,6 +1914,8 @@ impl YouPdfApp {
             annots_loaded: true,
             undo: Vec::new(),
             redo: Vec::new(),
+            history_base,
+            saved_hash,
             outline: Vec::new(),
             forms: Vec::new(),
             attachments: Vec::new(),
@@ -2108,6 +2168,12 @@ impl YouPdfApp {
                 tab.dirty = false;
                 tab.structural_dirty = false;
                 tab.baseline_annots = tab.annots.clone();
+                tab.history_base = tab.doc.to_bytes().ok();
+                tab.saved_hash = tab
+                    .history_base
+                    .as_deref()
+                    .map(fingerprint)
+                    .unwrap_or_default();
                 // L'écriture rétablit l'état réel du fichier : le cadenas
                 // suit, sans quoi il mentirait après une déprotection.
                 tab.protected = Document::file_is_encrypted(&path);
@@ -2140,6 +2206,12 @@ impl YouPdfApp {
                 tab.dirty = false;
                 tab.structural_dirty = false;
                 tab.baseline_annots = tab.annots.clone();
+                tab.history_base = tab.doc.to_bytes().ok();
+                tab.saved_hash = tab
+                    .history_base
+                    .as_deref()
+                    .map(fingerprint)
+                    .unwrap_or_default();
                 tab.path = Some(path.clone());
                 tab.protected = Document::file_is_encrypted(&path);
                 tab.title = path
@@ -2227,25 +2299,107 @@ impl YouPdfApp {
     }
 
     fn undo(&mut self, ctx: &egui::Context) {
-        let Some(tab) = self.tabs.get_mut(self.active) else {
-            return;
-        };
-        if let Some(previous) = tab.undo.pop() {
-            tab.redo.push(std::mem::replace(&mut tab.annots, previous));
-            // Revenir à l'état enregistré doit éteindre « non enregistré ».
-            tab.dirty = tab.structural_dirty || tab.annots != tab.baseline_annots;
-            self.toast(ctx, "Undone");
-        }
+        self.step_history(ctx, true);
     }
 
     fn redo(&mut self, ctx: &egui::Context) {
-        let Some(tab) = self.tabs.get_mut(self.active) else {
-            return;
+        self.step_history(ctx, false);
+    }
+
+    /// Dépile un état et le restaure, en poussant l'état courant sur la pile
+    /// opposée. Une entrée structurelle remplace le document entier ; une
+    /// entrée d'annotations ne touche que la liste en mémoire.
+    fn step_history(&mut self, ctx: &egui::Context, backward: bool) {
+        let message = {
+            let Some(tab) = self.tabs.get_mut(self.active) else {
+                return;
+            };
+            let entry = if backward {
+                tab.undo.pop()
+            } else {
+                tab.redo.pop()
+            };
+            let Some(HistoryEntry { doc, annots }) = entry else {
+                return;
+            };
+            let structural = doc.is_some();
+            let current = HistoryEntry {
+                // Les octets courants ne valent que si l'on quitte un état
+                // structurel : sinon le document n'a pas bougé.
+                doc: if structural {
+                    tab.history_base
+                        .take()
+                        .or_else(|| tab.doc.to_bytes().ok())
+                } else {
+                    None
+                },
+                annots: tab.annots.clone(),
+            };
+
+            let restored = match doc {
+                Some(bytes) => match Document::from_bytes(&bytes) {
+                    Ok(document) => {
+                        tab.doc = document;
+                        tab.annots = annots;
+                        tab.invalidate_render();
+                        tab.fragments.clear();
+                        tab.structure_loaded = false;
+                        tab.history_base = Some(bytes);
+                        true
+                    }
+                    Err(_) => {
+                        // Remettre l'entrée en place : sans cela un document
+                        // illisible ferait disparaître un pas d'historique.
+                        let back = HistoryEntry {
+                            doc: Some(bytes),
+                            annots,
+                        };
+                        if backward {
+                            tab.undo.push(back);
+                        } else {
+                            tab.redo.push(back);
+                        }
+                        if tab.history_base.is_none() {
+                            tab.history_base = current.doc.clone();
+                        }
+                        false
+                    }
+                },
+                None => {
+                    tab.annots = annots;
+                    true
+                }
+            };
+
+            if restored {
+                if backward {
+                    tab.redo.push(current);
+                    trim_history(&mut tab.redo);
+                } else {
+                    tab.undo.push(current);
+                    trim_history(&mut tab.undo);
+                }
+                if structural {
+                    let hash = tab
+                        .history_base
+                        .as_deref()
+                        .map(fingerprint)
+                        .unwrap_or_default();
+                    tab.structural_dirty = hash != tab.saved_hash;
+                }
+                tab.dirty = tab.structural_dirty || tab.annots != tab.baseline_annots;
+                tab.page = tab.page.clamp(1, tab.total().max(1));
+                Some(if backward { "Undone" } else { "Redone" })
+            } else {
+                Some(if backward {
+                    "Undo failed: document illisible"
+                } else {
+                    "Redo failed: document illisible"
+                })
+            }
         };
-        if let Some(next) = tab.redo.pop() {
-            tab.undo.push(std::mem::replace(&mut tab.annots, next));
-            tab.dirty = tab.structural_dirty || tab.annots != tab.baseline_annots;
-            self.toast(ctx, "Redone");
+        if let Some(message) = message {
+            self.toast(ctx, message);
         }
     }
 
@@ -2277,11 +2431,8 @@ impl YouPdfApp {
     /// Ajoute une annotation et l'inscrit dans l'historique.
     fn push_annot(&mut self, annot: Annotation) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
-            tab.undo.push(tab.annots.clone());
-            if tab.undo.len() > 60 {
-                tab.undo.remove(0);
-            }
-            tab.redo.clear();
+            let before = tab.annots.clone();
+            tab.record_annots(before);
             tab.annots.push(annot);
             tab.dirty = true;
         }
@@ -2291,8 +2442,8 @@ impl YouPdfApp {
     fn remove_annot(&mut self, index: usize) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             if index < tab.annots.len() {
-                tab.undo.push(tab.annots.clone());
-                tab.redo.clear();
+                let before = tab.annots.clone();
+                tab.record_annots(before);
                 tab.annots.remove(index);
                 tab.dirty = true;
             }
@@ -3342,8 +3493,7 @@ impl YouPdfApp {
         }
         tab.annots = kept;
         if changed {
-            tab.undo.push(before);
-            tab.redo.clear();
+            tab.record_annots(before);
             tab.dirty = true;
             self.toast(ctx, "Ink erased");
         }
@@ -3763,6 +3913,19 @@ impl YouPdfApp {
     /// recherche et instantanés d'annulation deviennent caducs.
     fn mark_document_changed(&mut self) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
+            // L'état d'avant l'édition est celui du dernier point de
+            // restauration connu. Une édition sans image (document trop gros
+            // ou lecture impossible) n'ajoute pas d'entrée : mieux vaut pas
+            // d'annulation qu'une annulation fausse.
+            let previous = tab.history_base.take();
+            if let Some(bytes) = previous {
+                tab.undo.push(HistoryEntry {
+                    doc: Some(bytes),
+                    annots: tab.annots.clone(),
+                });
+                trim_history(&mut tab.undo);
+                tab.redo.clear();
+            }
             tab.dirty = true;
             tab.structural_dirty = true;
             tab.invalidate_render();
@@ -3771,8 +3934,7 @@ impl YouPdfApp {
             // document, c'est-à-dire par rien.
             tab.fragments.clear();
             tab.structure_loaded = false;
-            tab.undo.clear();
-            tab.redo.clear();
+            tab.history_base = tab.doc.to_bytes().ok();
             tab.page = tab.page.clamp(1, tab.total().max(1));
         }
         self.search_index = None;
@@ -4931,11 +5093,8 @@ impl YouPdfApp {
             if before == doomed.len().min(before) && !tab.annots.iter().any(|a| a.id == id) {
                 return;
             }
-            tab.undo.push(tab.annots.clone());
-            if tab.undo.len() > 60 {
-                tab.undo.remove(0);
-            }
-            tab.redo.clear();
+            let before_state = tab.annots.clone();
+            tab.record_annots(before_state);
             tab.annots.retain(|annot| !doomed.contains(&annot.id));
             if tab.annots.len() != before {
                 tab.dirty = true;
@@ -4965,11 +5124,8 @@ impl YouPdfApp {
         if tab.annots[index].state == state {
             return;
         }
-        tab.undo.push(tab.annots.clone());
-        if tab.undo.len() > 60 {
-            tab.undo.remove(0);
-        }
-        tab.redo.clear();
+        let before = tab.annots.clone();
+        tab.record_annots(before);
         tab.annots[index].state = state;
         tab.dirty = true;
     }
@@ -6944,6 +7100,12 @@ impl YouPdfApp {
         if let Err(err) = self.flush_annots() {
             self.toast(ctx, format!("Flatten failed: {err}"));
             return;
+        }
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            // Le flush vient d'écrire les annotations dans les octets : une
+            // image d'avant ne saurait plus les retirer sans les réintroduire.
+            // Aplatir reste donc définitif pour l'historique.
+            tab.history_base = None;
         }
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
@@ -10636,6 +10798,16 @@ impl YouPdfApp {
         // priorité : sinon Retour arrière efface l'annotation sélectionnée au
         // lieu d'un caractère.
         let typing = ctx.wants_keyboard_input();
+        // ⌘Z / ⇧⌘Z : l'historique de l'onglet actif. Un champ de saisie au
+        // premier plan garde son propre annuler/refaire.
+        if !typing && ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Z)) {
+            if ctx.input(|i| i.modifiers.shift) {
+                self.redo(ctx);
+            } else {
+                self.undo(ctx);
+            }
+            return;
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::F5)) && !typing {
             self.enter_slideshow(ctx);
             return;
@@ -12504,6 +12676,32 @@ mod tests {
 
     fn cachet(rows: &[Vec<u32>]) -> HashSet<u32> {
         rows.iter().flatten().copied().collect()
+    }
+
+    fn history_entry(marker: u8, len: usize) -> HistoryEntry {
+        HistoryEntry {
+            doc: Some(vec![marker; len]),
+            annots: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn history_drops_oldest_beyond_count_and_bytes() {
+        let mut by_count: Vec<HistoryEntry> = (0..5).map(|n| history_entry(n, 1)).collect();
+        trim_history_to(&mut by_count, 3, usize::MAX);
+        assert_eq!(by_count.len(), 3);
+        // Les plus récents restent, dans l'ordre.
+        let markers: Vec<u8> = by_count
+            .iter()
+            .map(|entry| entry.doc.as_ref().unwrap()[0])
+            .collect();
+        assert_eq!(markers, vec![2, 3, 4]);
+
+        let mut by_bytes = vec![history_entry(0, 4), history_entry(1, 4), history_entry(2, 4)];
+        trim_history_to(&mut by_bytes, 10, 8);
+        assert_eq!(by_bytes.len(), 2);
+        assert_eq!(by_bytes[0].doc.as_ref().unwrap()[0], 1);
+        assert_eq!(by_bytes[1].doc.as_ref().unwrap()[0], 2);
     }
 
     /// L'aimant d'un champ prend le bord voisin et signale le guide.
