@@ -49,6 +49,15 @@ The bundle embeds the native `.icns` icon (declared via `CFBundleIconFile`).
 For plain `cargo run` builds eframe sets the dock icon from
 `crates/youpdf-app/src/assets/icon.png` instead.
 
+Regenerate the icon from `docs/youPDF-icon.svg` with:
+
+```sh
+scripts/build-macos-icon.sh
+```
+
+It insets the artwork by 6.25 % (Apple's margin) — without that inset the
+icon reads oversized in the Dock.
+
 ## Status
 
 Implemented: tabs, home/recents, thumbnails, search & replace, zoom,
