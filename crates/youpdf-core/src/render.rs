@@ -17,7 +17,7 @@ use pdfium_render::prelude::*;
 use youpdf_shared::{Error, Result};
 
 use crate::document::Document;
-use crate::edit::TextFragment;
+use crate::edit::{TextChar, TextFragment};
 
 /// Options de rendu d'une page.
 #[derive(Debug, Clone)]
@@ -311,8 +311,35 @@ impl PdfiumRenderer {
                 .and_then(|chars| chars.iter().next().map(|c| c.scaled_font_size().value))
                 .filter(|size| *size > 0.0)
                 .unwrap_or_else(|| bounds.height().value);
+            // Boîtes réelles des glyphes : la sélection peut alors s'arrêter
+            // au caractère au lieu de prendre le segment entier.
+            let chars: Vec<TextChar> = segment
+                .chars()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| {
+                            let ch = item.unicode_char()?;
+                            if ch == '\r' || ch == '\n' {
+                                return None;
+                            }
+                            let box_ = item.tight_bounds().ok()?;
+                            Some(TextChar {
+                                ch,
+                                rect: [
+                                    box_.left().value,
+                                    box_.bottom().value,
+                                    box_.right().value,
+                                    box_.top().value,
+                                ],
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             fragments.push(TextFragment {
                 page: page_number as usize,
+                chars,
                 text: content,
                 rect: [
                     bounds.left().value,

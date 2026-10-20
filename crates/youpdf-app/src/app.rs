@@ -45,8 +45,8 @@ use youpdf_core::{
     FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, MeasureKind, Measurement,
     NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem, OutlineStyle,
     ImageCrop, OutlineTarget, PageRange, PageBitmap, PatchFont, PdfiumRenderer, RedactionRegion,
-    RenderOptions, Renderer, SearchIndex, SearchOptions, SearchResult, TextFormat, TextFragment,
-    TextStyle, Watermark, STAMP_NAMES, smooth_polyline,
+    RenderOptions, Renderer, SearchIndex, SearchOptions, SearchResult, TextChar, TextFormat,
+    TextFragment, TextStyle, Watermark, STAMP_NAMES, smooth_polyline,
 };
 
 use youpdf_core::annotate::BorderDash;
@@ -480,51 +480,121 @@ struct SelectedImage {
     rect: [f32; 4],
 }
 
-/// Sélection de texte sur une page, en repère affiché.
+/// Position dans un fragment : caractère `offset`, entre `offset` et
+/// `offset + 1`. `offset == longueur` désigne la fin du fragment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TextHit {
+    fragment: usize,
+    offset: usize,
+}
+
+/// Sélection de texte sur une page, au caractère près.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TextSel {
     /// Page concernée.
     page: u32,
     /// Ancre et tête du glissé ; `None` sélectionne tout le texte de la page.
-    span: Option<([f32; 2], [f32; 2])>,
+    span: Option<(TextHit, TextHit)>,
 }
 
-/// Indices des blocs couverts par une sélection, dans l'ordre de lecture.
-///
-/// L'ordre est celui d'un lecteur : lignes de haut en bas, puis blocs de
-/// gauche à droite. La sélection prend tout ce qui se trouve entre le bloc de
-/// l'ancre et celui de la tête. Le découpage s'arrête au bloc, pas au
-/// caractère : l'extraction estime les rectangles (`0,5 × corps` par
-/// caractère), un découpage plus fin afficherait une précision trompeuse.
-fn selected_indices(frags: &[TextFragment], span: Option<([f32; 2], [f32; 2])>) -> Vec<usize> {
-    let order = reading_order(frags);
-    if order.is_empty() {
-        return order;
-    }
-    let Some((anchor, head)) = span else {
-        return order;
-    };
-    let start = nearest_fragment(frags, anchor);
-    let end = nearest_fragment(frags, head);
-    let start = order.iter().position(|i| *i == start).unwrap_or(0);
-    let end = order.iter().position(|i| *i == end).unwrap_or(start);
-    let (low, high) = if start <= end {
-        (start, end)
+/// Longueur d'un fragment en caractères sélectionnables.
+fn hit_len(frag: &TextFragment) -> usize {
+    if frag.chars.is_empty() {
+        frag.text.chars().count()
     } else {
-        (end, start)
-    };
-    order[low..=high].to_vec()
+        frag.chars.len()
+    }
 }
 
-/// Texte d'une sélection, blocs réunis dans l'ordre de lecture.
+/// Boîte d'un caractère. Sans boîtes du moteur, le caractère occupe une
+/// part proportionnelle du rectangle du fragment.
+fn char_box(frag: &TextFragment, index: usize) -> [f32; 4] {
+    if let Some(item) = frag.chars.get(index) {
+        return item.rect;
+    }
+    let count = frag.text.chars().count().max(1) as f32;
+    let [x1, y1, x2, y2] = frag.rect;
+    let width = (x2 - x1).max(0.1);
+    let start = index as f32 / count;
+    let end = (index + 1) as f32 / count;
+    [x1 + width * start, y1, x1 + width * end, y2]
+}
+
+/// Caractère le plus proche d'un point, à la frontière près.
 ///
-/// Deux blocs d'une même ligne sont séparés par une espace, deux lignes par un
-/// saut de ligne.
-fn selection_text(frags: &[TextFragment], span: Option<([f32; 2], [f32; 2])>) -> String {
+/// Une frontière est le bord gauche du premier caractère, le bord droit du
+/// dernier, et le milieu de l'interstice entre deux caractères. La sélection
+/// s'arrête donc au caractère sous le pointeur, sans prendre le bloc entier.
+fn text_hit(frags: &[TextFragment], point: [f32; 2]) -> Option<TextHit> {
+    let mut best: Option<(f32, TextHit)> = None;
+    for (fragment, frag) in frags.iter().enumerate() {
+        let len = hit_len(frag);
+        let line_y = (frag.rect[1] + frag.rect[3]) * 0.5;
+        for offset in 0..=len {
+            let x = if len == 0 {
+                frag.rect[0]
+            } else if offset == 0 {
+                char_box(frag, 0)[0]
+            } else if offset >= len {
+                char_box(frag, len - 1)[2]
+            } else {
+                let before = char_box(frag, offset - 1);
+                let after = char_box(frag, offset);
+                (before[2] + after[0]) * 0.5
+            };
+            let dx = point[0] - x;
+            let dy = point[1] - line_y;
+            let distance = dx * dx + dy * dy;
+            if best.is_none_or(|(current, _)| distance < current) {
+                best = Some((distance, TextHit { fragment, offset }));
+            }
+        }
+    }
+    best.map(|(_, hit)| hit)
+}
+
+/// Plages `(fragment, début, fin)` couvertes par une sélection, caractère
+/// exclu à la fin.
+fn hit_runs(
+    frags: &[TextFragment],
+    span: Option<(TextHit, TextHit)>,
+) -> Vec<(usize, usize, usize)> {
+    let order = reading_order(frags);
+    let full = |fragment: usize| (fragment, 0, hit_len(&frags[fragment]));
+    let Some((anchor, head)) = span else {
+        return order.iter().map(|index| full(*index)).collect();
+    };
+    let rank = |hit: TextHit| {
+        order
+            .iter()
+            .position(|index| *index == hit.fragment)
+            .unwrap_or(0)
+    };
+    let (mut start, mut end) = (anchor, head);
+    if rank(start) > rank(end) || (rank(start) == rank(end) && start.offset > end.offset) {
+        std::mem::swap(&mut start, &mut end);
+    }
+    let first = rank(start);
+    let last = rank(end);
+    let mut runs = Vec::new();
+    for position in first..=last {
+        let fragment = order[position];
+        let length = hit_len(&frags[fragment]);
+        let from = if position == first { start.offset } else { 0 }.min(length);
+        let to = if position == last { end.offset } else { length }.min(length);
+        if from < to {
+            runs.push((fragment, from, to));
+        }
+    }
+    runs
+}
+
+/// Texte d'une sélection au caractère près.
+fn hit_selection_text(frags: &[TextFragment], span: Option<(TextHit, TextHit)>) -> String {
     let mut out = String::new();
     let mut previous_line: Option<f32> = None;
-    for index in selected_indices(frags, span) {
-        let frag = &frags[index];
+    for (fragment, start, end) in hit_runs(frags, span) {
+        let frag = &frags[fragment];
         let line = (frag.rect[1] + frag.rect[3]) * 0.5;
         if let Some(previous) = previous_line {
             let height = frag.font_size.max(1.0);
@@ -534,45 +604,55 @@ fn selection_text(frags: &[TextFragment], span: Option<([f32; 2], [f32; 2])>) ->
                 ' '
             });
         }
-        out.push_str(&frag.text);
+        let text: String = frag.text.chars().skip(start).take(end - start).collect();
+        out.push_str(&text);
         previous_line = Some(line);
     }
     out
 }
 
-/// Quadrilatères d'une mise en évidence : un par ligne de texte, les blocs
-/// sélectionnés d'une même ligne étant réunis.
-fn markup_quads(frags: &[TextFragment], indices: &[usize]) -> Vec<[f32; 8]> {
+/// Rectangles d'une sélection, un par ligne. Les caractères d'une même ligne
+/// sont réunis, y compris quand la sélection traverse deux fragments.
+fn hit_rects(frags: &[TextFragment], span: Option<(TextHit, TextHit)>) -> Vec<[f32; 4]> {
     let mut lines: Vec<[f32; 4]> = Vec::new();
-    for &index in indices {
-        let Some(frag) = frags.get(index) else {
-            continue;
-        };
-        let rect = frag.rect;
+    for (fragment, start, end) in hit_runs(frags, span) {
+        let frag = &frags[fragment];
         let height = frag.font_size.max(1.0);
-        let center = (rect[1] + rect[3]) * 0.5;
-        match lines.iter_mut().find(|line| {
-            let line_center = (line[1] + line[3]) * 0.5;
-            (line_center - center).abs() <= height * 0.6
-        }) {
-            Some(line) => {
-                line[0] = line[0].min(rect[0]);
-                line[1] = line[1].min(rect[1]);
-                line[2] = line[2].max(rect[2]);
-                line[3] = line[3].max(rect[3]);
+        for index in start..end {
+            let rect = char_box(frag, index);
+            let center = (rect[1] + rect[3]) * 0.5;
+            match lines.iter_mut().find(|line| {
+                let line_center = (line[1] + line[3]) * 0.5;
+                (line_center - center).abs() <= height * 0.6
+            }) {
+                Some(line) => {
+                    line[0] = line[0].min(rect[0]);
+                    line[1] = line[1].min(rect[1]);
+                    line[2] = line[2].max(rect[2]);
+                    line[3] = line[3].max(rect[3]);
+                }
+                None => lines.push(rect),
             }
-            None => lines.push(rect),
         }
     }
     lines
+}
+
+/// Quadrilatères prêts pour `/QuadPoints` à partir de rectangles de lignes.
+fn quads_from_rects(lines: &[[f32; 4]]) -> Vec<[f32; 8]> {
+    lines
         .iter()
         .map(|line| {
-            // Coins : haut-gauche, haut-droit, bas-gauche, bas-droit.
             [
                 line[0], line[3], line[2], line[3], line[0], line[1], line[2], line[1],
             ]
         })
         .collect()
+}
+
+/// Quadrilatères d'une sélection au caractère près.
+fn hit_quads(frags: &[TextFragment], span: Option<(TextHit, TextHit)>) -> Vec<[f32; 8]> {
+    quads_from_rects(&hit_rects(frags, span))
 }
 
 /// Ordre de lecture des blocs d'une page.
@@ -676,27 +756,6 @@ fn mask_color_in(tab: &Tab, page: usize, rect: [f32; 4]) -> [u8; 3] {
     out
 }
 
-/// Index du bloc le plus proche d'un point (repère affiché).
-fn nearest_fragment(frags: &[TextFragment], point: [f32; 2]) -> usize {
-    let mut best = 0;
-    let mut best_d = f32::INFINITY;
-    for (index, frag) in frags.iter().enumerate() {
-        let d = rect_distance(frag.rect, point);
-        if d < best_d {
-            best_d = d;
-            best = index;
-        }
-    }
-    best
-}
-
-/// Distance d'un point à un rectangle ; zéro s'il est dedans.
-fn rect_distance(rect: [f32; 4], point: [f32; 2]) -> f32 {
-    let dx = (rect[0] - point[0]).max(0.0).max(point[0] - rect[2]);
-    let dy = (rect[1] - point[1]).max(0.0).max(point[1] - rect[3]);
-    (dx * dx + dy * dy).sqrt()
-}
-
 /// Extrait et met en cache les blocs de texte d'une page, en repère affiché.
 ///
 /// Répond `false` si le moteur n'a rien lu : l'appelant ne doit alors pas
@@ -706,6 +765,12 @@ fn extract_page_fragments(renderer: &dyn Renderer, tab: &mut Tab, page: u32) -> 
         Ok(mut frags) => {
             for frag in &mut frags {
                 frag.rect = rect_to_display(&tab.doc, page as usize, frag.rect);
+                // Les boîtes de glyphes vivent dans le même repère que le
+                // fragment : sans cette conversion, la sélection au caractère
+                // serait décalée sur une page tournée ou recadrée.
+                for item in &mut frag.chars {
+                    item.rect = rect_to_display(&tab.doc, page as usize, item.rect);
+                }
             }
             let usable = !frags.is_empty();
             tab.fragments.insert(page, frags);
@@ -3580,7 +3645,7 @@ impl YouPdfApp {
             .tabs
             .get(self.active)
             .and_then(|tab| tab.fragments.get(&sel.page))
-            .map(|frags| selection_text(frags, sel.span))
+            .map(|frags| hit_selection_text(frags, sel.span))
             .unwrap_or_default();
         if text.is_empty() {
             self.toast(ctx, "No text selected");
@@ -8665,8 +8730,7 @@ impl YouPdfApp {
                         if let Some(s) = sel.as_ref() {
                             if s.page == page {
                                 if let Some(frags) = tab.fragments.get(&page) {
-                                    for index in selected_indices(frags, s.span) {
-                                        let [x1, y1, x2, y2] = frags[index].rect;
+                                    for [x1, y1, x2, y2] in hit_rects(frags, s.span) {
                                         let r = Rect::from_min_max(
                                             pos2(
                                                 page_rect.min.x + x1 * scale,
@@ -9219,18 +9283,29 @@ impl YouPdfApp {
                             }
                             if let Some(point) = resp.interact_pointer_pos() {
                                 let point = to_pdf(point);
-                                sel = Some(TextSel {
-                                    page,
-                                    span: Some((point, point)),
-                                });
+                                let hit = tab
+                                    .fragments
+                                    .get(&page)
+                                    .and_then(|frags| text_hit(frags, point));
+                                if let Some(hit) = hit {
+                                    sel = Some(TextSel {
+                                        page,
+                                        span: Some((hit, hit)),
+                                    });
+                                }
                             }
                         } else if resp.dragged() {
-                            if let (Some(s), Some(point)) =
-                                (sel.as_mut(), resp.interact_pointer_pos())
-                            {
-                                if s.page == page {
-                                    if let Some((_, head)) = s.span.as_mut() {
-                                        *head = to_pdf(point);
+                            if let Some(point) = resp.interact_pointer_pos() {
+                                let point = to_pdf(point);
+                                let hit = tab
+                                    .fragments
+                                    .get(&page)
+                                    .and_then(|frags| text_hit(frags, point));
+                                if let (Some(s), Some(hit)) = (sel.as_mut(), hit) {
+                                    if s.page == page {
+                                        if let Some((_, head)) = s.span.as_mut() {
+                                            *head = hit;
+                                        }
                                     }
                                 }
                             }
@@ -9240,14 +9315,11 @@ impl YouPdfApp {
                             // lignes touchées.
                             if let Some(kind) = markup_kind {
                                 if let Some(frags) = tab.fragments.get(&page) {
-                                    let indices =
-                                        selected_indices(frags, sel.and_then(|s| s.span));
-                                    if !indices.is_empty() {
-                                        pending_markup = Some((
-                                            page as usize,
-                                            kind,
-                                            markup_quads(frags, &indices),
-                                        ));
+                                    let quads =
+                                        hit_quads(frags, sel.and_then(|s| s.span));
+                                    if !quads.is_empty() {
+                                        pending_markup =
+                                            Some((page as usize, kind, quads));
                                     }
                                 }
                                 sel = None;
@@ -9265,9 +9337,9 @@ impl YouPdfApp {
                             // Inspecteur de la sélection de texte : enveloppe
                             // des blocs sélectionnés.
                             if let Some(frags) = tab.fragments.get(&page) {
-                                let indices = selected_indices(frags, sel.and_then(|s| s.span));
+                                let runs = hit_runs(frags, sel.and_then(|s| s.span));
                                 let mut union: Option<Rect> = None;
-                                for index in indices.iter().copied() {
+                                for (index, _, _) in runs.iter().copied() {
                                     let frag = &frags[index];
                                     let rect = Rect::from_two_pos(
                                         to_screen([frag.rect[0], frag.rect[1]]),
@@ -9280,8 +9352,8 @@ impl YouPdfApp {
                                 }
                                 if let Some(bounds) = union {
                                     let range = (
-                                        indices.first().copied().unwrap_or(0),
-                                        indices.last().copied().unwrap_or(0),
+                                        runs.first().map(|run| run.0).unwrap_or(0),
+                                        runs.last().map(|run| run.0).unwrap_or(0),
                                     );
                                     inspector_target = Some(InspectorTarget::TextSelection {
                                         page: page as usize,
@@ -13062,12 +13134,34 @@ mod tests {
     fn frag(text: &str, rect: [f32; 4], font_size: f32) -> TextFragment {
         TextFragment {
             page: 1,
+            chars: Vec::new(),
             text: text.to_string(),
             rect,
             font: None,
             font_size,
             color: [0, 0, 0],
         }
+    }
+
+    /// Bloc de texte avec une boîte par caractère, comme pdfium.
+    fn frag_chars(text: &str, rect: [f32; 4], font_size: f32) -> TextFragment {
+        let mut fragment = frag(text, rect, font_size);
+        let count = text.chars().count().max(1) as f32;
+        let width = (rect[2] - rect[0]) / count;
+        fragment.chars = text
+            .chars()
+            .enumerate()
+            .map(|(index, ch)| TextChar {
+                ch,
+                rect: [
+                    rect[0] + index as f32 * width,
+                    rect[1],
+                    rect[0] + (index + 1) as f32 * width,
+                    rect[3],
+                ],
+            })
+            .collect();
+        fragment
     }
 
     /// La sélection suit l'ordre de lecture et joint les blocs correctement.
@@ -13080,20 +13174,69 @@ mod tests {
             frag("seconde", [10.0, 60.0, 60.0, 72.0], 12.0),
         ];
 
-        // Tout sélectionner parcourt de haut en bas puis de gauche à droite.
-        let all = selected_indices(&frags, None);
-        assert_eq!(all, vec![1, 0, 2]);
-        assert_eq!(selection_text(&frags, None), "bonjour monde\nseconde");
+        assert_eq!(
+            hit_runs(&frags, None),
+            vec![(1, 0, 7), (0, 0, 5), (2, 0, 7)]
+        );
+        assert_eq!(hit_selection_text(&frags, None), "bonjour monde\nseconde");
 
-        // Un glissé du premier bloc de la première ligne au second de la
-        // troisième ligne couvre bien tout.
-        let span = Some(([30.0, 88.0], [30.0, 66.0]));
-        assert_eq!(selected_indices(&frags, span), vec![1, 0, 2]);
+        // Du premier bloc de la première ligne au bloc de la troisième.
+        let span = Some((
+            TextHit { fragment: 1, offset: 0 },
+            TextHit { fragment: 2, offset: 7 },
+        ));
+        let runs = hit_runs(&frags, span);
+        assert_eq!(runs.first().map(|run| run.0), Some(1));
+        assert_eq!(runs.last().map(|run| run.0), Some(2));
+        assert_eq!(hit_selection_text(&frags, span), "bonjour monde\nseconde");
 
-        // Un glissé qui s'arrête dans la première ligne s'y arrête.
-        let span = Some(([30.0, 88.0], [30.0, 88.0]));
-        assert_eq!(selected_indices(&frags, span), vec![1]);
-        assert_eq!(selection_text(&frags, span), "bonjour");
+        // Une sélection qui s'arrête dans le premier mot ne prend que lui.
+        let span = Some((
+            TextHit { fragment: 1, offset: 0 },
+            TextHit { fragment: 1, offset: 7 },
+        ));
+        assert_eq!(hit_selection_text(&frags, span), "bonjour");
+    }
+
+    /// La sélection s'arrête au caractère, pas au bloc.
+    #[test]
+    fn selection_stops_mid_word() {
+        let frags = vec![frag_chars("bonjour", [10.0, 82.0, 80.0, 94.0], 12.0)];
+        let span = Some((
+            TextHit { fragment: 0, offset: 1 },
+            TextHit { fragment: 0, offset: 3 },
+        ));
+        assert_eq!(hit_selection_text(&frags, span), "on");
+        let rects = hit_rects(&frags, span);
+        assert_eq!(rects.len(), 1, "une seule ligne");
+        assert!((rects[0][0] - 20.0).abs() < 0.01, "{rects:?}");
+        assert!((rects[0][2] - 40.0).abs() < 0.01, "{rects:?}");
+    }
+
+    /// Une sélection qui traverse deux fragments coupe le premier et le second.
+    #[test]
+    fn selection_crosses_fragments_mid_word() {
+        let frags = vec![
+            frag_chars("ab", [10.0, 100.0, 30.0, 112.0], 12.0),
+            frag_chars("cd", [40.0, 100.0, 60.0, 112.0], 12.0),
+        ];
+        let span = Some((
+            TextHit { fragment: 0, offset: 1 },
+            TextHit { fragment: 1, offset: 1 },
+        ));
+        assert_eq!(
+            hit_runs(&frags, span),
+            vec![(0, 1, 2), (1, 0, 1)]
+        );
+        assert_eq!(hit_selection_text(&frags, span), "b c");
+    }
+
+    /// Un point tombe sur la frontière de caractère la plus proche.
+    #[test]
+    fn text_hit_snaps_to_the_nearest_character_edge() {
+        let frags = vec![frag_chars("abc", [10.0, 100.0, 40.0, 112.0], 12.0)];
+        let hit = text_hit(&frags, [31.0, 106.0]).expect("un caractère");
+        assert_eq!(hit, TextHit { fragment: 0, offset: 2 });
     }
 
     /// Une mise en évidence pose un quadrilatère par ligne de texte.
@@ -13104,15 +13247,13 @@ mod tests {
             frag("monde", [60.0, 82.0, 110.0, 94.0], 12.0),
             frag("seconde", [10.0, 60.0, 60.0, 72.0], 12.0),
         ];
-        let quads = markup_quads(&frags, &[0, 1, 2]);
+        let quads = hit_quads(&frags, None);
 
         assert_eq!(quads.len(), 2, "une ligne, puis l'autre");
-        // Première ligne : ses deux blocs sont réunis.
         assert_eq!(
             quads[0],
             [10.0, 94.0, 110.0, 94.0, 10.0, 82.0, 110.0, 82.0]
         );
-        // Seconde ligne : son propre bloc.
         assert_eq!(quads[1], [10.0, 72.0, 60.0, 72.0, 10.0, 60.0, 60.0, 60.0]);
     }
 
@@ -13123,10 +13264,10 @@ mod tests {
             frag("gauche", [10.0, 100.0, 60.0, 112.0], 12.0),
             frag("droite", [200.0, 100.0, 250.0, 112.0], 12.0),
         ];
-        // Le point est à droite du second bloc, sous la ligne.
-        let span = Some(([20.0, 106.0], [400.0, 40.0]));
-        assert_eq!(selected_indices(&frags, span), vec![0, 1]);
-        assert_eq!(selection_text(&frags, span), "gauche droite");
+        let hit = text_hit(&frags, [400.0, 40.0]).expect("un bloc");
+        assert_eq!(hit.fragment, 1);
+        let span = Some((TextHit { fragment: 0, offset: 0 }, hit));
+        assert_eq!(hit_selection_text(&frags, span), "gauche droite");
     }
 
     /// Deux blocs presque à la même hauteur restent sur une seule ligne.
@@ -13136,22 +13277,21 @@ mod tests {
             frag("a", [10.0, 100.0, 20.0, 112.0], 12.0),
             frag("b", [30.0, 101.0, 40.0, 113.0], 12.0),
         ];
-        assert_eq!(selection_text(&frags, None), "a b");
+        assert_eq!(hit_selection_text(&frags, None), "a b");
     }
 
     /// Une sélection vide ou un index absent ne paniquent pas.
     #[test]
     fn empty_selection_is_empty() {
-        assert!(selected_indices(&[], None).is_empty());
-        assert_eq!(selection_text(&[], None), "");
-        // Bloc unique : un point très loin retombe dessus.
+        assert!(hit_runs(&[], None).is_empty());
+        assert_eq!(hit_selection_text(&[], None), "");
         let frags = vec![frag("seul", [0.0, 0.0, 10.0, 10.0], 10.0)];
-        let span = Some(([900.0, 900.0], [-50.0, -50.0]));
-        assert_eq!(selected_indices(&frags, span), vec![0]);
+        let hit = text_hit(&frags, [900.0, 900.0]).expect("le bloc unique");
+        assert_eq!(hit.fragment, 0);
     }
 
     /// Des corps de police différents sur des lignes voisines ne doivent pas
-    /// mélanger l'ordre de lecture (comparateur non transitif d'autrefois).
+    /// mélanger l'ordre de lecture.
     #[test]
     fn reading_order_survives_mixed_font_sizes() {
         let frags = vec![
@@ -13159,7 +13299,7 @@ mod tests {
             frag("titre", [10.0, 118.0, 70.0, 134.0], 16.0),
             frag("bas", [10.0, 88.0, 55.0, 100.0], 12.0),
         ];
-        assert_eq!(selection_text(&frags, None), "titre\ncorps\nbas");
+        assert_eq!(hit_selection_text(&frags, None), "titre\ncorps\nbas");
     }
 
     /// Deux corps différents sur une même ligne y restent.
@@ -13169,7 +13309,7 @@ mod tests {
             frag("grand", [40.0, 98.0, 90.0, 118.0], 20.0),
             frag("petit", [10.0, 100.0, 35.0, 112.0], 12.0),
         ];
-        assert_eq!(selection_text(&frags, None), "petit grand");
+        assert_eq!(hit_selection_text(&frags, None), "petit grand");
     }
 
     /// Commentaire de test, avec un identifiant et un auteur choisis.
