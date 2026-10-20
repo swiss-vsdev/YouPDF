@@ -290,3 +290,83 @@ fn excel_exact_layout_detects_columns() {
     assert!(sheet.contains(r#"r="B1""#), "colonne B absente : {sheet}");
     let _ = std::fs::remove_file(out_path);
 }
+
+/// Les images embarquées partent dans word/media et sont liées au document.
+#[test]
+fn word_embeds_page_images() {
+    use lopdf::{dictionary, Document as LopdfDoc, Object, Stream};
+
+    let mut doc = LopdfDoc::with_version("1.7");
+    let mut image = Stream::new(
+        dictionary! {
+            "Type" => Object::Name(b"XObject".to_vec()),
+            "Subtype" => Object::Name(b"Image".to_vec()),
+            "Width" => 2,
+            "Height" => 2,
+            "ColorSpace" => Object::Name(b"DeviceRGB".to_vec()),
+            "BitsPerComponent" => 8,
+        },
+        vec![255u8, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0],
+    );
+    image.dict.set("Length", 12);
+    let image_id = doc.add_object(image);
+    let content = doc.add_object(Stream::new(
+        dictionary! {},
+        b"q 100 0 0 100 50 600 cm /Im0 Do Q".to_vec(),
+    ));
+    let pages_id = doc.new_object_id();
+    let page = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "Parent" => pages_id,
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+        "Contents" => content,
+        "Resources" => dictionary! {
+            "XObject" => dictionary! { "Im0" => image_id },
+        },
+    });
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => Object::Name(b"Pages".to_vec()),
+            "Kids" => Object::Array(vec![page.into()]),
+            "Count" => 1,
+        }),
+    );
+    let catalog = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => pages_id,
+    });
+    doc.trailer.set("Root", Object::Reference(catalog));
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).expect("écriture");
+
+    let doc = Document::from_bytes(&bytes).expect("ouverture");
+    let out_path = std::env::temp_dir().join("youpdf-word-images.docx");
+    doc.export_office(&out_path, OfficeFormat::Word)
+        .expect("export");
+
+    let mut archive = ZipArchive::new(std::fs::File::open(&out_path).expect("archive")).expect("zip");
+    let names: Vec<String> = (0..archive.len())
+        .filter_map(|index| archive.by_index(index).ok().map(|file| file.name().to_string()))
+        .collect();
+    assert!(
+        names.iter().any(|name| name.starts_with("word/media/image1.")),
+        "image absente : {names:?}"
+    );
+    let mut document = String::new();
+    archive
+        .by_name("word/document.xml")
+        .expect("document.xml")
+        .read_to_string(&mut document)
+        .expect("lecture");
+    assert!(document.contains("<w:drawing>"), "dessin absent");
+    assert!(document.contains("r:embed=\"rId10\""), "relation image absente");
+    let mut rels = String::new();
+    archive
+        .by_name("word/_rels/document.xml.rels")
+        .expect("rels")
+        .read_to_string(&mut rels)
+        .expect("lecture");
+    assert!(rels.contains("relationships/image"), "relation image absente : {rels}");
+    let _ = std::fs::remove_file(out_path);
+}

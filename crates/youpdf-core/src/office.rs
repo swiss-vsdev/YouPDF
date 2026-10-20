@@ -100,7 +100,14 @@ impl Document {
         let pages = self.office_pages();
         let parts = match format {
             OfficeFormat::Word => match layout {
-                OfficeLayout::Flow => word_parts(&pages),
+                OfficeLayout::Flow => {
+                    let (parts, media) = word_parts_with_images(&pages, &self.office_images());
+                    let owned: Vec<(String, Vec<u8>)> = parts
+                        .into_iter()
+                        .map(|(name, content)| (name, content.into_bytes()))
+                        .collect();
+                    return write_zip_with_media(path, &owned, &media);
+                }
                 OfficeLayout::Exact => word_parts_exact(&self.office_placed()),
             },
             OfficeFormat::Excel => match layout {
@@ -110,6 +117,22 @@ impl Document {
             OfficeFormat::PowerPoint => powerpoint_parts(&pages),
         };
         write_zip(path, &parts)
+    }
+
+    /// Images embarquées de chaque page, en PNG, avec leurs dimensions.
+    fn office_images(&self) -> Vec<Vec<(Vec<u8>, u32, u32)>> {
+        let total = self.page_count() as u32;
+        let mut pages = Vec::new();
+        for number in 1..=total {
+            let mut images = Vec::new();
+            for info in self.extract_images(number).unwrap_or_default() {
+                if let Ok(png) = self.extract_image_png(&info) {
+                    images.push((png, info.width, info.height));
+                }
+            }
+            pages.push(images);
+        }
+        pages
     }
 
     /// Fragments positionnés de chaque page, pour la mise en page exacte.
@@ -160,13 +183,26 @@ impl Document {
 
 /// Écrit une archive ZIP contenant chaque partie en DEFLATE.
 fn write_zip(path: &Path, parts: &[Part]) -> Result<()> {
+    let owned: Vec<(String, Vec<u8>)> = parts
+        .iter()
+        .map(|(name, content)| (name.clone(), content.as_bytes().to_vec()))
+        .collect();
+    write_zip_with_media(path, &owned, &[])
+}
+
+/// Écrit une archive ZIP mêlant parties XML et parties binaires.
+fn write_zip_with_media(
+    path: &Path,
+    parts: &[(String, Vec<u8>)],
+    media: &[(String, Vec<u8>)],
+) -> Result<()> {
     let file = std::fs::File::create(path)?;
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    for (name, content) in parts {
+    for (name, content) in parts.iter().chain(media.iter()) {
         zip.start_file(name.as_str(), options)
             .map_err(|e| Error::Pdf(format!("écriture de {name} : {e}")))?;
-        zip.write_all(content.as_bytes())?;
+        zip.write_all(content)?;
     }
     zip.finish()
         .map_err(|e| Error::Pdf(format!("finalisation de l'archive Office : {e}")))?;
@@ -237,6 +273,116 @@ fn word_document_exact(pages: &[(f32, f32, Vec<(String, f32, f32, f32)>)]) -> St
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}<w:sectPr><w:pgSz w:w="{page_w}" w:h="{page_h}"/><w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0"/></w:sectPr></w:body></w:document>"#
     )
+}
+
+/// Paquet Word avec les images embarquées de chaque page.
+fn word_parts_with_images(
+    pages: &[Vec<String>],
+    images: &[Vec<(Vec<u8>, u32, u32)>],
+) -> (Vec<Part>, Vec<(String, Vec<u8>)>) {
+    let mut media = Vec::new();
+    let mut placements: Vec<Vec<(usize, u32, u32)>> = Vec::new();
+    let mut index = 0usize;
+    for page in images {
+        let mut placed = Vec::new();
+        for (png, width, height) in page {
+            index += 1;
+            media.push((format!("word/media/image{index}.png"), png.clone()));
+            placed.push((index, *width, *height));
+        }
+        placements.push(placed);
+    }
+    let count = index;
+    let parts = vec![
+        ("[Content_Types].xml".to_string(), word_content_types_with_images(count > 0)),
+        ("_rels/.rels".to_string(), root_rels("word/document.xml")),
+        (
+            "word/document.xml".to_string(),
+            word_document_with_images(pages, &placements),
+        ),
+        ("word/styles.xml".to_string(), word_styles()),
+        (
+            "word/_rels/document.xml.rels".to_string(),
+            document_rels_with_images(count),
+        ),
+    ];
+    (parts, media)
+}
+
+/// Relation `rId` de la n-ième image (les styles occupent `rId1`).
+fn image_rel_id(index: usize) -> usize {
+    index + 9
+}
+
+fn document_rels_with_images(images: usize) -> String {
+    let mut rels = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#,
+    );
+    for index in 1..=images {
+        rels.push_str(&format!(
+            r#"<Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image{index}.png"/>"#,
+            image_rel_id(index)
+        ));
+    }
+    rels.push_str("</Relationships>");
+    rels
+}
+
+/// Paragraphe contenant une image en ligne, à six pouces de large au plus.
+fn word_picture_paragraph(index: usize, width: u32, height: u32) -> String {
+    const EMU_PER_PIXEL: u64 = 9_525;
+    const MAX_WIDTH_EMU: u64 = 5_486_400; // 6 pouces
+    let natural = (width.max(1) as u64) * EMU_PER_PIXEL;
+    let scale = (MAX_WIDTH_EMU as f64 / natural as f64).min(1.0);
+    let cx = (natural as f64 * scale) as u64;
+    let cy = ((height.max(1) as u64) * EMU_PER_PIXEL) as f64 * scale;
+    let cy = cy as u64;
+    format!(
+        r#"<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="{index}" name="Picture {index}"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="{index}" name="image{index}.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId{rel}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#,
+        rel = image_rel_id(index)
+    )
+}
+
+fn word_document_with_images(
+    pages: &[Vec<String>],
+    images: &[Vec<(usize, u32, u32)>],
+) -> String {
+    let mut body = String::new();
+    for (page_index, page) in pages.iter().enumerate() {
+        if page_index > 0 {
+            body.push_str(r#"<w:p><w:r><w:br w:type="page"/></w:r></w:p>"#);
+        }
+        for line in page {
+            body.push_str(r#"<w:p><w:r><w:t xml:space="preserve">"#);
+            body.push_str(&escape_xml(line));
+            body.push_str("</w:t></w:r></w:p>");
+        }
+        if let Some(page_images) = images.get(page_index) {
+            for (index, width, height) in page_images {
+                body.push_str(&word_picture_paragraph(*index, *width, *height));
+            }
+        }
+        if page.is_empty() && images.get(page_index).map(Vec::is_empty).unwrap_or(true) {
+            body.push_str("<w:p/>");
+        }
+    }
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>{body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1417" w:right="1417" w:bottom="1417" w:left="1417"/></w:sectPr></w:body></w:document>"#
+    )
+}
+
+fn word_content_types_with_images(images: bool) -> String {
+    let mut types = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>"#,
+    );
+    if images {
+        types.push_str(r#"<Default Extension="png" ContentType="image/png"/>"#);
+    }
+    types.push_str(r#"<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>"#);
+    types
 }
 
 /// `[Content_Types].xml` d'un document Word.
