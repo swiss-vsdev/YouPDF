@@ -17,6 +17,11 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([1470.0, 923.0])
             .with_min_inner_size([960.0, 620.0])
             .with_title("YouPDF")
+            // Icône de l'application (dock macOS, fenêtre Linux/Windows).
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!("assets/icon.png"))
+                    .expect("icône PNG valide"),
+            )
             // Chrome maison : la zone de titre fait partie du contenu, les
             // feux de circulation natifs restent visibles par-dessus.
             // `titlebar_shown(false)` → barre de titre *transparente*

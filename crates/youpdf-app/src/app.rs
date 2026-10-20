@@ -10510,7 +10510,7 @@ impl YouPdfApp {
                 ui.painter().text(
                     forget_rect.center(),
                     Align2::CENTER_CENTER,
-                    if forget_resp.hovered() { "✕" } else { "" },
+                    if forget_resp.hovered() { ph::X } else { "" },
                     FontId::proportional(12.0),
                     pal().icon,
                 );
@@ -10846,7 +10846,7 @@ impl YouPdfApp {
                         |ui| {
                             ui.set_min_width(170.0);
                             for choice in PageLayout::ALL {
-                                let mark = if choice == layout { "✓" } else { "" };
+                                let mark = if choice == layout { ph::CHECK } else { "" };
                                 if menu_row(ui, choice.label(), mark, None) {
                                     layout_choice = Some(choice);
                                 }
@@ -10887,7 +10887,7 @@ impl YouPdfApp {
                             for (label, mode) in ZoomMode::CHOICES {
                                 let selected =
                                     zoom_choice_matches(*mode, current_zoom, zoom_fit_page);
-                                if menu_row(ui, label, if selected { "✓" } else { "" }, None) {
+                                if menu_row(ui, label, if selected { ph::CHECK } else { "" }, None) {
                                     zoom_choice = Some(*mode);
                                 }
                             }
@@ -11204,10 +11204,14 @@ impl eframe::App for YouPdfApp {
 // Thème
 // --------------------------------------------------------------------------
 
-/// Police d'icônes Phosphor (MIT) ajoutée à la famille proportionnelle.
+/// Polices de l'application : Phosphor (icônes) puis Hack en repli.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    // Ubuntu-Light n'a pas ⇧ (U+21E7) : Hack le fournit en repli proportionnel.
+    if let Some(keys) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+        keys.push("Hack".to_owned());
+    }
     ctx.set_fonts(fonts);
 }
 
