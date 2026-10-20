@@ -38,6 +38,17 @@ codesign --force --sign - pdfium/libpdfium.dylib
 
 Override the search path with `YOUPDF_PDFIUM_DIR=/path/to/dir`.
 
+### macOS app bundle (native icon)
+
+```sh
+cargo build --release -p youpdf-app
+scripts/build-macos-app.sh      # target/YouPDF.app avec YouPDF.icns
+```
+
+The bundle embeds the native `.icns` icon (declared via `CFBundleIconFile`).
+For plain `cargo run` builds eframe sets the dock icon from
+`crates/youpdf-app/src/assets/icon.png` instead.
+
 ## Status
 
 Implemented: tabs, home/recents, thumbnails, search & replace, zoom,
