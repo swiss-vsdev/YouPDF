@@ -43,18 +43,18 @@ Unchecked below = still open. The plan document is the authoritative task list.
 
 ## 1. Window Chrome & Layout
 *   **UPDF:** Tabbed interface with `+` new tab, Home house button, traffic lights, avatar, notifications.
-*   **YouPDF:** Basic tab support, no Home/start screen, no notifications, no cloud/account/avatar integration.
-*   **Action:** Implement `Home` screen (recents grid, file browser UI) and notification hub stub; replace traffic light inset with system-standard or custom-integrated titlebar.
+*   **YouPDF:** Tab bar with pinning, reordering and context menus; Home screen with Recents/Starred/Tools, grid and list views, search filter and page-1 thumbnails; system title bar. There is no notification hub, cloud account or avatar.
+*   **Action:** Add a notification hub/avatar only if cloud features are ever added.
 
 ## 2. Mode Toolbars & Inspectors
 *   **UPDF:** Context-aware floating pill inspectors (`TextOptionsView`, `AttributesInspector`) for in-place editing.
-*   **YouPDF:** Simple toolbar, mostly modal windows or panel toggles.
-*   **Action:** Implement floating, non-modal `FloatingInspector` that binds to selected elements, supporting `Font`, `Font Style`, `Font Size`, `Color` (with picker), `Alignment`, and style attributes (Bold/Italic/etc).
+*   **YouPDF:** Floating inspector implemented and bound to text blocks, images, annotations and form fields, with the full text style controls, image controls and per-field properties.
+*   **Action:** None.
 
 ## 3. Left Rail & Side Panels
 *   **UPDF:** 8-tool rail (Organize, Search, Thumbnails, Bookmarks, Comments, Forms, Attachments, Appearance).
-*   **YouPDF:** Mostly implemented, but `Appearance` panel is a toggle, not a full settings/palette picker.
-*   **Action:** Refine `Appearance` panel to map UPDF’s background/theme setting (Themes: Light, Dark, Mint, Starry, Auto; Backgrounds: 9 colors).
+*   **YouPDF:** All eight rail tools are present; the Appearance panel carries the canvas background set, page tints, border toggle and thumbnail scale.
+*   **Action:** None.
 
 ## 4. File & Batch Operations
 *   **UPDF:** `Batch Processing` tool (Convert, OCR, Combine, Insert, Create, Watermark, Background, Header/Footer, Bates, Compress, Encrypt, Remove, Print).
@@ -63,7 +63,7 @@ Unchecked below = still open. The plan document is the authoritative task list.
 ## 5. Advanced Tools
 *   **OCR:** UPDF offers 38 languages, 3 output modes (Editable, Searchable, Text/Pictures).
 *   **YouPDF:** Tesseract-based; the three modes now change the output: Searchable keeps the scan with an invisible text layer, Text+Image keeps the scan with visible text, Editable drops the scan and writes a white page with visible recognised text. Language selection, page ranges, and automatic scanned-page detection (`Document::looks_scanned`: no extractable text + image covering ≥80 % of the page) driving a notification bar with *Perform OCR* and *Don't show again*.
-*   **Action:** Upgrade OCR engine to support all 3 modes and provide UI for language selection; enable `PDF/UA` tag generation.
+*   **Action:** Enable `PDF/UA` tag generation. Output modes and language selection are done.
 *   **Forms:** UPDF provides properties editors (name, tooltip, required, read-only).
 *   **YouPDF:** Field creation (text, checkbox, radio, dropdown, list, button, date, barcode, signature), red alignment guides with edge/centre snapping, rubber-band multi-select in Prepare form, align/distribute/match toolbar, a six-tab properties inspector (General, Appearance, Options, Actions, Format, Calculate), form data import/export (FDF/XFDF/CSV/JSON), Reset Form, and interactive filling in reader mode.
 *   **Action:** Add push-button action dispatch (Reset/Submit/JavaScript), date picker grid, and Cmd/Ctrl-click multi-selection for list boxes.
