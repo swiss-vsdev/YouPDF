@@ -45,12 +45,21 @@ continuous scroll, page layouts, slideshow, text selection and copy, in-place
 text and image editing, annotations (markup, ink, shapes, stamps, signatures),
 bookmarks and attachments sidebars, a comment list with filters, threads,
 review states and FDF/XFDF/CSV/Markdown export, canvas themes and page tints,
-forms (fill and build), page organizing, crop, watermark, header/footer, Bates
-numbering, compression, protection (RC4/AES-256), redaction and sanitizing,
-OCR, measurement, document comparison, batch processing, Office export
-(Word/Excel/PowerPoint, flow and exact layout), AI assistant.
+forms (fill and build), page organizing, crop with box targets and auto-crop,
+tile splitting, watermark with anchoring/tiling/layering, header/footer
+macros, Bates numbering, compression presets with pruning and size estimate,
+protection (RC4/AES-256, permissions, remove-protection), redaction and
+sanitizing, OCR (searchable, text+image, editable) with scanned-page
+detection, measurement with calibration, document comparison with a
+difference navigator, batch processing (convert, OCR, insert, remove,
+watermark, background, header/footer, Bates, compress, protect, flatten,
+combine, print), Office export (Word/Excel/PowerPoint, flow and exact layout,
+Excel column detection, Word image embedding), preferences with auto-save,
+English/French chrome, and the AI assistant.
 
-In progress: 1:1 UPDF parity per `docs/UPDF_IMPLEMENTATION_PLAN.md`.
+In progress: 1:1 UPDF parity per `docs/UPDF_IMPLEMENTATION_PLAN.md`. Known
+gaps: PAdES/PKCS#7 signing (visual signatures only) and full localization
+beyond the menus, tools, common buttons and preferences.
 
 ## License
 
