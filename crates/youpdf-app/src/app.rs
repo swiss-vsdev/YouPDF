@@ -8679,6 +8679,13 @@ impl YouPdfApp {
                     let size = page_rect.size();
                     let resp = ui.interact(rect, row_id.with(page), sense);
 
+                    // Curseur de surlignage : l'outil de surbrillance est actif
+                    // et le pointeur est sur la page. egui n'a pas de curseur
+                    // « marqueur » natif, la croix de visée sert de surligneur.
+                    if markup_kind.is_some() && resp.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                    }
+
                     if jump == Some(page as usize) {
                         ui.scroll_to_rect(Rect::from_min_size(page_rect.min, size), Some(Align::Min));
                         jump = None;
