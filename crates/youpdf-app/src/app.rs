@@ -9226,6 +9226,17 @@ impl YouPdfApp {
                                     let from = drag_from.take();
                                     let to = drag_to.take();
                                     if let (Some(a), Some(b)) = (from, to) {
+                                        // Maj contraint le tracé à l'axe
+                                        // dominant, comme une règle.
+                                        let (a, b) = if ui.input(|i| i.modifiers.shift) {
+                                            if (b[0] - a[0]).abs() >= (b[1] - a[1]).abs() {
+                                                (a, [b[0], a[1]])
+                                            } else {
+                                                (a, [a[0], b[1]])
+                                            }
+                                        } else {
+                                            (a, b)
+                                        };
                                         pending_measure = Some((page as usize, a, b));
                                     }
                                 }
