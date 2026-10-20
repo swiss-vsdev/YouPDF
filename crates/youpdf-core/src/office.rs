@@ -214,6 +214,7 @@ fn write_zip_with_media(
 // ---------------------------------------------------------------------------
 
 /// Assemble les parties du paquet Word.
+#[allow(dead_code)]
 fn word_parts(pages: &[Vec<String>]) -> Vec<Part> {
     vec![
         ("[Content_Types].xml".to_string(), word_content_types()),
@@ -247,7 +248,7 @@ fn word_parts_exact(pages: &[(f32, f32, Vec<(String, f32, f32, f32)>)]) -> Vec<P
 
 fn word_document_exact(pages: &[(f32, f32, Vec<(String, f32, f32, f32)>)]) -> String {
     let mut body = String::new();
-    for (width, _height, runs) in pages {
+    for (_width, _height, runs) in pages {
         for (text, x, y, size) in runs {
             let x_twips = (*x * 20.0).round().max(0.0) as i64;
             let y_twips = (*y * 20.0).round().max(0.0) as i64;
@@ -393,6 +394,7 @@ fn word_content_types() -> String {
 }
 
 /// `word/document.xml` : un paragraphe par ligne, saut de page entre les pages.
+#[allow(dead_code)]
 fn word_document(pages: &[Vec<String>]) -> String {
     let mut body = String::new();
     for (page_index, page) in pages.iter().enumerate() {

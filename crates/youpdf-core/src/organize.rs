@@ -90,6 +90,7 @@ impl Document {
 
         // Collecte avant toute mutation : la suppression décalerait les
         // numéros de page.
+        #[allow(dead_code)]
         struct Source {
             number: usize,
             id: ObjectId,

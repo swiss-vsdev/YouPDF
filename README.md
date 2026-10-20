@@ -55,12 +55,21 @@ difference navigator, batch processing (convert, OCR, insert, remove,
 watermark, background, header/footer, Bates, compress, protect, flatten,
 combine, print), Office export (Word/Excel/PowerPoint, flow and exact layout,
 Excel column detection, Word image embedding), preferences with auto-save,
-English/French chrome, a macOS accessibility tree for screen readers, and
-the AI assistant.
+English/French UI (menus, tools, common buttons, preferences, inspector
+controls), and the AI assistant.
+
+Closed parity gaps (1:1 UPDF per `docs/UPDF_IMPLEMENTATION_PLAN.md`):
+- Character-level text selection via pdfium glyph boxes
+- Inherited form fields with widget-level entries
+- Overflow menu with capped height and nested submenus
+- Full PKCS#7 / PAdES detached RSA‑SHA‑256 digital signatures
+- French language support for all UI strings above
 
 In progress: 1:1 UPDF parity per `docs/UPDF_IMPLEMENTATION_PLAN.md`. Known
-gaps: PAdES/PKCS#7 signing (visual signatures only) and full localization
-beyond the menus, tools, common buttons and preferences.
+gaps: Full redaction two-phase engine, double‑click word / triple‑click line
+selection, OCR language expansion, Word/Excel/PowerPoint layout finesse,
+Preferences startup view persistence, and advanced page‑level operations
+(crop units, tile split gaps, Bates step/step).
 
 ## License
 
