@@ -39,6 +39,10 @@ use crate::document::Document;
 pub struct TextFragment {
     /// Numéro de page (1-indexé).
     pub page: usize,
+    /// Boîte de chaque caractère, quand le moteur la connaît. Vide pour le
+    /// décodeur interne : l'interface retombe alors sur une répartition
+    /// proportionnelle dans `rect`.
+    pub chars: Vec<TextChar>,
     /// Texte.
     pub text: String,
     /// Rectangle englobant en coordonnées PDF `[x1, y1, x2, y2]`.
@@ -49,6 +53,15 @@ pub struct TextFragment {
     pub font_size: f32,
     /// Couleur RGB (0–255).
     pub color: [u8; 3],
+}
+
+/// Un caractère et sa boîte, en repère page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextChar {
+    /// Le caractère.
+    pub ch: char,
+    /// Rectangle `[x1, y1, x2, y2]`.
+    pub rect: [f32; 4],
 }
 
 /// Police standard-14 utilisée par un patch de texte.
@@ -1448,6 +1461,7 @@ fn new_fragment(
     let width = font_size * 0.5 * text.chars().count() as f32;
     TextFragment {
         page,
+        chars: Vec::new(),
         text,
         rect: [tx, ty, tx + width, ty + font_size],
         font: font_name,
