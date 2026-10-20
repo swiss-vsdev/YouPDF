@@ -6804,7 +6804,7 @@ impl YouPdfApp {
                                     );
                                     ui.add_space(4.0);
                                 }
-                                if menu_row(ui, t(label), shortcut) {
+                                if menu_row(ui, t(label), shortcut, None) {
                                     chosen = Some(*entry);
                                 }
                             }
@@ -6933,17 +6933,17 @@ impl YouPdfApp {
                                 .auto_shrink([true, true])
                                 .show(ui, |ui| {
                                     ui.set_min_width(210.0);
-                                    if menu_row(ui, "Undo", "⌘Z") {
+                                    if menu_row(ui, "Undo", "⌘Z", Some(icon_undo)) {
                                         action = Some(MenuAction::Undo);
                                     }
-                                    if menu_row(ui, "Redo", "⇧⌘Z") {
+                                    if menu_row(ui, "Redo", "⇧⌘Z", Some(icon_redo)) {
                                         action = Some(MenuAction::Redo);
                                     }
                                     menu_separator(ui);
-                                    if menu_row(ui, "Save", "⌘S") {
+                                    if menu_row(ui, "Save", "⌘S", None) {
                                         action = Some(MenuAction::Save);
                                     }
-                                    if menu_row(ui, "Save as…", "⇧⌘S") {
+                                    if menu_row(ui, "Save as…", "⇧⌘S", None) {
                                         action = Some(MenuAction::SaveAs);
                                     }
                                     menu_submenu(ui, "Save as", |ui| {
@@ -7011,10 +7011,10 @@ impl YouPdfApp {
                                             }
                                         }
                                     });
-                                    if menu_row(ui, "Export…", "") {
+                                    if menu_row(ui, "Export…", "", None) {
                                         action = Some(MenuAction::Export);
                                     }
-                                    if menu_row(ui, "Flatten annotations", "") {
+                                    if menu_row(ui, "Flatten annotations", "", None) {
                                         action = Some(MenuAction::Flatten);
                                     }
                                     menu_separator(ui);
@@ -7131,23 +7131,23 @@ impl YouPdfApp {
                                             }
                                         }
                                     });
-                                    if menu_row(ui, "Preferences…", "⌘,") {
+                                    if menu_row(ui, "Preferences…", "⌘,", None) {
                                         action = Some(MenuAction::Preferences);
                                     }
                                     if menu_row_checked(ui, "AI features…", self.ai.enabled()) {
                                         action = Some(MenuAction::AiEnabled);
                                     }
                                     menu_separator(ui);
-                                    if menu_row(ui, "Print…", "⌘P") {
+                                    if menu_row(ui, "Print…", "⌘P", None) {
                                         action = Some(MenuAction::Print);
                                     }
-                                    if menu_row(ui, "Reveal in Finder", "") {
+                                    if menu_row(ui, "Reveal in Finder", "", None) {
                                         action = Some(MenuAction::Reveal);
                                     }
-                                    if menu_row(ui, "Properties…", "⌘D") {
+                                    if menu_row(ui, "Properties…", "⌘D", None) {
                                         action = Some(MenuAction::Properties);
                                     }
-                                    if menu_row(ui, "Close tab", "⌘W") {
+                                    if menu_row(ui, "Close tab", "⌘W", None) {
                                         action = Some(MenuAction::Close);
                                     }
                                 });
@@ -10847,7 +10847,7 @@ impl YouPdfApp {
                             ui.set_min_width(170.0);
                             for choice in PageLayout::ALL {
                                 let mark = if choice == layout { "✓" } else { "" };
-                                if menu_row(ui, choice.label(), mark) {
+                                if menu_row(ui, choice.label(), mark, None) {
                                     layout_choice = Some(choice);
                                 }
                             }
@@ -10887,7 +10887,7 @@ impl YouPdfApp {
                             for (label, mode) in ZoomMode::CHOICES {
                                 let selected =
                                     zoom_choice_matches(*mode, current_zoom, zoom_fit_page);
-                                if menu_row(ui, label, if selected { "✓" } else { "" }) {
+                                if menu_row(ui, label, if selected { "✓" } else { "" }, None) {
                                     zoom_choice = Some(*mode);
                                 }
                             }
@@ -11387,26 +11387,51 @@ fn menu_submenu(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui))
 }
 
 /// Ligne d'un sous-menu.
-fn submenu_row(ui: &mut egui::Ui, label: &str) -> bool {
-    ui.add(Button::new(RichText::new(label).size(12.0)).min_size(vec2(180.0, 24.0)))
-        .clicked()
+fn submenu_row(ui: &mut egui::Ui, label: &str, icon: Option<fn(&egui::Painter, egui::Rect, egui::Color32)>) -> bool {
+    let desired_width = if icon.is_some() { 200.0 } else { 180.0 };
+    let button = Button::new(RichText::new(label).size(12.0))
+        .min_size(vec2(desired_width, 24.0));
+    let resp = button.click();
+    // Draw icon if provided, positioned to the right of the label
+    if let Some(draw_icon) = icon {
+        let icon_size = 14.0; // Smaller icon for submenus
+        let icon_x = resp.rect.min.x + resp.rect.width() - 10.0 - icon_size;
+        let icon_rect = egui::Rect::from_min_max(
+            egui::pos2(icon_x, resp.rect.min.y + (resp.rect.height() - icon_size) / 2.0),
+            egui::pos2(icon_x + icon_size, resp.rect.max.y - (resp.rect.height() - icon_size) / 2.0),
+        );
+        draw_icon(ui.painter(), icon_rect, pal().icon_bright);
+    }
+    resp
 }
 
 /// Ligne de menu `Outils` : libellé à gauche, raccourci à droite.
-fn menu_row(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
+fn menu_row(ui: &mut egui::Ui, label: &str, shortcut: &str, icon: Option<fn(&egui::Painter, egui::Rect, egui::Color32)>) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(210.0, 26.0), Sense::click());
     if resp.hovered() {
         ui.painter().rect_filled(rect, Rounding::same(5.0), pal().hover_bg);
     }
+    let label_x = rect.min.x + 10.0;
+    let shortcut_x = rect.max.x - 10.0;
+    let icon_size = 16.0;
+    let icon_x = label_x + 20.0 + icon_size;
+    // Position icon only if provided and there's space
+    if let Some(draw_icon) = icon {
+        let icon_rect = egui::Rect::from_min_max(
+            egui::pos2(icon_x, rect.min.y + (rect.height() - icon_size) / 2.0),
+            egui::pos2(icon_x + icon_size, rect.max.y - (rect.height() - icon_size) / 2.0),
+        );
+        draw_icon(ui.painter(), icon_rect, pal().icon_bright);
+    }
     ui.painter().text(
-        pos2(rect.min.x + 10.0, rect.center().y),
+        pos2(label_x, rect.center().y),
         Align2::LEFT_CENTER,
         label,
         FontId::proportional(12.5),
         pal().icon_bright,
     );
     ui.painter().text(
-        pos2(rect.max.x - 10.0, rect.center().y),
+        pos2(shortcut_x, rect.center().y),
         Align2::RIGHT_CENTER,
         shortcut,
         FontId::proportional(11.0),
