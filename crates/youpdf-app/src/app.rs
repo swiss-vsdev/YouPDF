@@ -9823,6 +9823,10 @@ impl YouPdfApp {
         if let Some((page, point)) = pending_hit {
             // Vérifier d'abord si un champ de formulaire a été touché (mode Lecture).
             if matches!(self.mode, None | Some(0) | Some(2)) {
+                // La liste des champs n'est chargée qu'à la demande : sans
+                // cela, un clic sur un formulaire ne trouve rien tant que le
+                // panneau n'a pas été ouvert.
+                self.ensure_structure();
                 if let Some(form_idx) = self.form_hit_test(page, point) {
                     // En mode Préparer, le clic sélectionne le champ (Maj :
                     // ajoute ou retire de la sélection).
@@ -9837,34 +9841,50 @@ impl YouPdfApp {
                                 Some((form_idx, field.value.clone().unwrap_or_default()));
                         }
                         FormFieldKind::Checkbox => {
-                            let checked = matches!(
-                                field.value.as_deref(),
-                                Some("/Yes") | Some("Yes") | Some("1")
-                            );
-                            let new_value = if checked { "Off" } else { "Yes" };
-                            if let Some(tab) = self.tabs.get_mut(self.active) {
-                                let _ = tab.doc.fill_form_field(&field, new_value);
+                            let checked = field
+                                .value
+                                .as_deref()
+                                .is_some_and(|value| value != "Off")
+                                || field
+                                    .state
+                                    .as_deref()
+                                    .is_some_and(|state| state != "Off");
+                            let on_state = field
+                                .states
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| "Yes".to_string());
+                            let new_value = if checked { "Off" } else { on_state.as_str() };
+                            let filled = if let Some(tab) = self.tabs.get_mut(self.active) {
+                                let filled = tab.doc.fill_form_field(&field, new_value).is_ok();
                                 tab.forms = tab.doc.read_form_fields();
+                                filled
+                            } else {
+                                false
+                            };
+                            if filled {
+                                self.mark_document_changed();
                             }
                             self.form_editing = None;
                         }
                         FormFieldKind::Radio => {
-                            if let Some(tab) = self.tabs.get_mut(self.active) {
-                                let _ = tab.doc.fill_form_field(&field, "Yes");
-                                let siblings: Vec<FormField> = tab
-                                    .forms
-                                    .iter()
-                                    .filter(|other| {
-                                        other.kind == FormFieldKind::Radio
-                                            && other.name == field.name
-                                            && other.object_id != field.object_id
-                                    })
-                                    .cloned()
-                                    .collect();
-                                for other in siblings {
-                                    let _ = tab.doc.fill_form_field(&other, "Off");
-                                }
+                            let on_state = field
+                                .states
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| "Yes".to_string());
+                            let filled = if let Some(tab) = self.tabs.get_mut(self.active) {
+                                let filled =
+                                    tab.doc.fill_form_field(&field, &on_state).is_ok();
+                                // Le groupe partage `/V` : relire tous les
+                                // boutons remet leurs `/AS` à jour.
                                 tab.forms = tab.doc.read_form_fields();
+                                filled
+                            } else {
+                                false
+                            };
+                            if filled {
+                                self.mark_document_changed();
                             }
                             self.form_editing = None;
                         }
@@ -12827,6 +12847,7 @@ mod tests {
     fn snap_form_rect_aligns_to_neighbor_edge() {
         let neighbor = FormField {
             object_id: (1, 0),
+            widget_id: (1, 0),
             name: "a".to_string(),
             kind: FormFieldKind::Text,
             value: None,
@@ -12837,6 +12858,8 @@ mod tests {
             multiline: false,
             page: Some(1),
             rect: [100.0, 100.0, 200.0, 140.0],
+            states: Vec::new(),
+            state: None,
         };
         // Bord gauche à 2 pt de celui du voisin : il doit coller.
         let (rect, guides) =
