@@ -19,6 +19,7 @@ impl YouPdfApp {
         let mut open = true;
         let mut add_files = false;
         let mut add_folder = false;
+        let mut insert_file = false;
         let mut choose_dir = false;
         let mut clear = false;
         let mut run = false;
@@ -88,6 +89,30 @@ impl YouPdfApp {
                 );
                 ui.checkbox(&mut self.batch_combine, "Combine every file into one PDF");
                 ui.checkbox(&mut self.batch_print, "Send each file to the system printer");
+                ui.horizontal(|ui| {
+                    if ui.button("Insert pages from…").clicked() {
+                        insert_file = true;
+                    }
+                    ui.label(
+                        RichText::new(
+                            self.batch_insert
+                                .as_ref()
+                                .and_then(|p| p.file_name())
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| "No file chosen".to_owned()),
+                        )
+                        .size(11.0)
+                        .color(pal().muted),
+                    );
+                    ui.label(RichText::new("at").size(11.0).color(pal().muted));
+                    let mut at_page = self.batch_insert_at.min(9999) as u32;
+                    ui.add(egui::DragValue::new(&mut at_page).range(0..=9999).prefix("after "));
+                    self.batch_insert_at = if at_page == 0 {
+                        0
+                    } else {
+                        at_page as usize
+                    };
+                });
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Convert").size(11.0).color(pal().muted));
                     let current = self.batch_convert;
@@ -196,6 +221,11 @@ impl YouPdfApp {
                 }
             }
         }
+        if insert_file {
+            self.batch_insert = rfd::FileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .pick_file();
+        }
         if add_folder {
             if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                 let mut found: Vec<PathBuf> = std::fs::read_dir(&folder)
@@ -261,6 +291,8 @@ impl YouPdfApp {
             protect: self.batch_protect,
             flatten: self.batch_flatten,
             protect_options: self.protect.clone(),
+            insert: self.batch_insert.clone(),
+            insert_at: self.batch_insert_at,
             convert: self.batch_convert,
             remove_pages: self.batch_remove_pages.clone(),
             watermark_text: self.batch_watermark_text.clone(),
@@ -352,6 +384,8 @@ struct BatchJob {
     prefix: String,
     suffix: String,
     print: bool,
+    insert: Option<PathBuf>,
+    insert_at: usize,
 }
 
 impl BatchJob {
@@ -420,6 +454,17 @@ impl BatchJob {
                 let out = self.dir.join(format!("{stem}.{}", format.extension()));
                 if let Err(err) = doc.export_office(&out, format) {
                     errors.push(format!("convert: {err}"));
+                }
+            }
+            if let Some(source) = &self.insert {
+                let after = if self.insert_at == 0 {
+                    0
+                } else {
+                    self.insert_at.min(doc.page_count())
+                };
+                match doc.insert_pages_after(after, source) {
+                    Ok(_) => edited = true,
+                    Err(err) => errors.push(format!("insert: {err}")),
                 }
             }
             let removable = parse_page_numbers(&self.remove_pages, doc.page_count());
