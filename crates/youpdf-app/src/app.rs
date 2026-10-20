@@ -10683,6 +10683,44 @@ impl YouPdfApp {
             self.search_step(if shift { -1 } else { 1 });
             return;
         }
+        // Raccourcis Ctrl+1..0 du menu « Outils ». Ils sont lus avant le
+        // garde `cmd` ci-dessous : sinon toutes les combinaisons Ctrl seules
+        // seraient ignorées.
+        let ctrl_tool = ctx.input(|i| {
+            if !i.modifiers.ctrl || i.modifiers.command {
+                return None;
+            }
+            const DIGITS: [egui::Key; 10] = [
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+                egui::Key::Num5,
+                egui::Key::Num6,
+                egui::Key::Num7,
+                egui::Key::Num8,
+                egui::Key::Num9,
+                egui::Key::Num0,
+            ];
+            DIGITS.iter().position(|key| i.key_pressed(*key))
+        });
+        if let Some(index) = ctrl_tool {
+            match index {
+                0..=3 => {
+                    self.mode = Some(index);
+                    self.annot_tool = None;
+                    self.preset_open = false;
+                    self.text_sel = None;
+                }
+                4 => self.organize_open = true,
+                5 => self.crop_open = true,
+                6 => self.tile_split_open = true,
+                7 => self.watermark_open = true,
+                8 => self.background_open = true,
+                _ => self.header_footer_open = true,
+            }
+            return;
+        }
         if !cmd {
             return;
         }
@@ -10716,24 +10754,6 @@ impl YouPdfApp {
         }
         if zero {
             self.set_zoom(None);
-        }
-        // Basculement de mode (Ctrl+1..4).
-        let (m1, m2, m3, m4) = ctx.input(|i| {
-            (
-                i.key_pressed(egui::Key::Num1) && i.modifiers.ctrl,
-                i.key_pressed(egui::Key::Num2) && i.modifiers.ctrl,
-                i.key_pressed(egui::Key::Num3) && i.modifiers.ctrl,
-                i.key_pressed(egui::Key::Num4) && i.modifiers.ctrl,
-            )
-        });
-        if m1 {
-            self.mode = Some(0);
-        } else if m2 {
-            self.mode = Some(1);
-        } else if m3 {
-            self.mode = Some(2);
-        } else if m4 {
-            self.mode = Some(3);
         }
     }
 
