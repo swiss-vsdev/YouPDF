@@ -839,6 +839,8 @@ enum ToolsEntry {
     Compress,
     /// Aplatit les annotations.
     Flatten,
+    /// Signature numérique.
+    Sign,
 }
 
 /// Entrées du menu `Outils` : libellé, raccourci, action.
@@ -865,6 +867,7 @@ const TOOLS_MENU: &[(&str, &str, ToolsEntry)] = &[
     ("Protect…", "", ToolsEntry::Protect),
     ("Reduce file size…", "", ToolsEntry::Compress),
     ("Flatten annotations", "", ToolsEntry::Flatten),
+    ("Sign…", "", ToolsEntry::Sign),
 ];
 
 /// Nature du brouillon de texte en cours de saisie.
@@ -1243,6 +1246,7 @@ pub struct YouPdfApp {
     export_office_exact: bool,
     /// Fenêtre « Compresser » : dernier bilan affiché.
     compress_open: bool,
+    sign_open: bool,
     compress_report: Option<String>,
     /// Niveau de compression d'image choisi.
     compress_level: CompressionLevel,
@@ -1626,6 +1630,7 @@ impl YouPdfApp {
             export_office_format: OfficeFormat::Word,
             export_office_exact: false,
             compress_open: false,
+            sign_open: false,
             compress_report: None,
             compress_level: CompressionLevel::Ebook,
             compress_extras: CompressionExtras::default(),
@@ -6826,6 +6831,7 @@ impl YouPdfApp {
                     ToolsEntry::Protect => self.protect_open = true,
                     ToolsEntry::Compress => self.compress_open = true,
                     ToolsEntry::Flatten => self.flatten_annotations(ctx),
+                    ToolsEntry::Sign => self.sign_open = true,
                 }
             }
         }
