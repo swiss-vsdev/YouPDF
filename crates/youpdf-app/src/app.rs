@@ -792,6 +792,21 @@ const THUMBNAIL_STEP: i32 = -1;
 /// page à la finesse demandée.
 const ZOOM_SETTLE_SECS: f64 = 0.12;
 
+/// Délai de repos après le dernier défilement avant d'affiner les pages
+/// rastérisées à basse résolution.
+const SCROLL_SETTLE_SECS: f64 = 0.12;
+
+/// Échelle de rastérisation pendant un geste de défilement. Le coût de
+/// PDFium est quadratique : à 0,4× l'image pèse 16 % de la résolution
+/// complète, ce qui allège la frame d'un ordre de grandeur. Elle est
+/// étirée puis affinée à l'arrêt du geste.
+const FAST_RENDER_SCALE: f32 = 0.4;
+
+/// Réserve en haut du canevas pour les barres flottantes (outils, modes) :
+/// sans elle, la première page passe sous la barre d'outils. La barre de modes
+/// mesure 34 pt et commence 8 pt sous la barre de titre.
+const CANVAS_TOP_GAP: f32 = 48.0;
+
 /// Palier de rendu : une pyramide de pas √2 (1×, 1,41×, 2×…).
 ///
 /// Un palier reste valable tant que l'échelle demandée ne s'en écarte pas
@@ -1075,6 +1090,11 @@ struct Tab {
     /// paliers sont ceux de la pyramide de zoom, `THUMBNAIL_STEP` pour les
     /// vignettes.
     cache: HashMap<(u32, i32), CachedPage>,
+    /// Taille d'affichage des pages, indexée par numéro de page. Lire le
+    /// MediaBox parcourt l'arbre PDF, et le canevas demande la taille de
+    /// *toutes* les pages à chaque trame : sans cache, un document de mille
+    /// pages coûte mille parcours d'arbre par image.
+    page_sizes: Vec<(f32, f32)>,
     /// Dernière page rastérisée (numéro, échelle, pixels). Sert uniquement à
     /// lire la couleur du fond de page sous un bloc de texte réécrit.
     last_bitmap: Option<(u32, f32, PageBitmap)>,
@@ -1123,6 +1143,21 @@ impl Tab {
     fn invalidate_render(&mut self) {
         self.cache.clear();
         self.last_bitmap = None;
+        // La rotation d'une page change sa taille d'affichage.
+        self.page_sizes.clear();
+    }
+
+    /// Taille d'affichage d'une page, mise en cache. Le cache est reconstruit
+    /// dès que le nombre de pages change : les numéros, eux, ont bougé.
+    fn page_size_cached(&mut self, page: u32) -> (f32, f32) {
+        let total = self.total() as u32;
+        if self.page_sizes.len() != total as usize {
+            self.page_sizes = (1..=total).map(|p| self.doc.page_size(p)).collect();
+        }
+        self.page_sizes
+            .get((page.max(1) - 1) as usize)
+            .copied()
+            .unwrap_or((595.0, 842.0))
     }
 
     /// Empile un état d'annotations avant modification.
@@ -1571,6 +1606,11 @@ pub struct YouPdfApp {
     zoom_dirty: bool,
     /// Instant du dernier changement de zoom (voir `ZOOM_SETTLE_SECS`).
     zoom_moved_at: f64,
+    /// Instant du dernier défilement (voir `SCROLL_SETTLE_SECS`).
+    scroll_moved_at: f64,
+    /// Position écran de la première page à la frame précédente : sa
+    /// variation dit que le contenu a glissé.
+    last_page_y: Option<f32>,
 }
 
 impl YouPdfApp {
@@ -1807,6 +1847,8 @@ impl YouPdfApp {
             last_fit: 1.0,
             zoom_dirty: false,
             zoom_moved_at: 0.0,
+            scroll_moved_at: 0.0,
+            last_page_y: None,
         };
 
         // Les préférences vivent dans le panneau IA, qui tient déjà la
@@ -1992,6 +2034,7 @@ impl YouPdfApp {
             zoom: initial_zoom,
             zoom_fit_page: fit_page,
             cache: HashMap::new(),
+            page_sizes: Vec::new(),
             last_bitmap: None,
             dirty: false,
             structural_dirty: false,
@@ -4394,6 +4437,7 @@ impl YouPdfApp {
         logical_scale: f32,
         ppp: f32,
         allow_render: bool,
+        fast: bool,
         status_holder: &mut String,
     ) -> Option<TextureHandle> {
         let key = (page, step);
@@ -4424,11 +4468,20 @@ impl YouPdfApp {
             }
             // Rien en cache pour cette page : elle entre à l'écran. Étirer un
             // néant afficherait une page blanche, on la rastérise donc
-            // malgré le geste en cours.
+            // malgré le geste en cours — mais à basse résolution, sinon la
+            // frame saute et le défilement saccade.
         }
 
+        // Pendant un geste, on rasterise à échelle réduite : le bitmap est
+        // étiré jusqu'à l'arrêt, puis affiné (l'entrée du cache porte alors
+        // une échelle éloignée de la cible, donc elle est reprise).
+        let render_scale = if fast {
+            target_scale * FAST_RENDER_SCALE
+        } else {
+            target_scale
+        };
         let options = RenderOptions {
-            scale: target_scale,
+            scale: render_scale,
             ..Default::default()
         };
         match renderer.render_page(&tab.doc, page, &options) {
@@ -4437,13 +4490,13 @@ impl YouPdfApp {
                     "render page {page} step {step}: bitmap {}x{} (scale {:.3})",
                     bitmap.width,
                     bitmap.height,
-                    logical_scale * ppp
+                    render_scale
                 );
                 let image = bitmap.to_egui_image();
                 // La page en cours d'affichage garde ses pixels : la
                 // réécriture y lit la couleur du fond. Une vignette rendue à
                 // une échelle minuscule ne doit pas écraser cette référence.
-                if page as usize == tab.page && step != THUMBNAIL_STEP {
+                if page as usize == tab.page && step != THUMBNAIL_STEP && !fast {
                     tab.last_bitmap = Some((page, target_scale, bitmap));
                 }
                 let handle = ctx.load_texture(
@@ -4455,7 +4508,7 @@ impl YouPdfApp {
                     key,
                     CachedPage {
                         texture: handle.clone(),
-                        scale: target_scale,
+                        scale: render_scale,
                     },
                 );
 
@@ -5454,7 +5507,7 @@ impl YouPdfApp {
             .show(ui, |ui| {
                 let tile_width = ui.available_width().max(80.0);
                 for page in 1..=total as u32 {
-                    let (wp, hp) = tab.doc.page_size(page);
+                    let (wp, hp) = tab.page_size_cached(page);
                     let scale = zoom / wp.max(1.0);
                     let size = vec2(wp * scale, hp * scale);
                     let (rect, resp) = ui.allocate_exact_size(
@@ -5490,6 +5543,7 @@ impl YouPdfApp {
                         scale,
                         ppp,
                         true,
+                        false,
                         status,
                     ) {
                         ui.painter().image(
@@ -8478,6 +8532,19 @@ impl YouPdfApp {
             ui.ctx().request_repaint();
         }
         let zoom_settled = now - self.zoom_moved_at >= ZOOM_SETTLE_SECS;
+        // Défilement : même mécanique que le zoom. La molette et le
+        // trackpad signalent le geste tout de suite ; le glissement de la
+        // barre de défilement est repéré plus bas, d'après le mouvement des
+        // pages. Tant que le geste dure, on rasterise à basse résolution.
+        if ui.input(|i| i.raw_scroll_delta.length() > 0.0) {
+            self.scroll_moved_at = now;
+        }
+        let scroll_settled = now - self.scroll_moved_at >= SCROLL_SETTLE_SECS;
+        let fast = !zoom_settled || !scroll_settled;
+        if fast {
+            // La trame nette est encore due : on la programme.
+            ui.ctx().request_repaint();
+        }
 
         let active = self.active;
         let mut jump = self.jump.take();
@@ -8588,6 +8655,14 @@ impl YouPdfApp {
         let crop_draft = self.image_crop;
         let mut crop_next: Option<ImageCrop> = None;
 
+        // Réserve pour les barres flottantes : les pages commencent sous la
+        // barre d'outils, sinon la première page passe dessous.
+        ui.add_space(CANVAS_TOP_GAP);
+        // Position écran de la première page : sa variation d'une trame à
+        // l'autre trahit un défilement que la molette n'a pas signalé
+        // (barre de défilement tenue, inertie).
+        let mut first_page_y: Option<f32> = None;
+
         ScrollArea::vertical()
             .auto_shrink([false, false])
             .show_viewport(ui, |ui, _viewport| {
@@ -8609,7 +8684,7 @@ impl YouPdfApp {
                     // hauteur, et la lecture perdrait ses repères.
                     let sizes: Vec<(f32, f32)> = row_pages
                         .iter()
-                        .map(|page| tab.doc.page_size(*page))
+                        .map(|page| tab.page_size_cached(*page))
                         .collect();
                     let total_w: f32 = sizes.iter().map(|(w, _)| *w).sum();
                     let max_h = sizes.iter().map(|(_, h)| *h).fold(1.0_f32, f32::max);
@@ -8655,13 +8730,16 @@ impl YouPdfApp {
                         placed.push((*page, hit, page_rect, row.id, scale));
                     }
                 }
+                if let Some((_, _, page_rect, _, _)) = placed.first() {
+                    first_page_y = Some(page_rect.min.y);
+                }
 
                 // Une seule page rastérisée par trame, et seulement une fois
-                // le zoom au repos : la page courante d'abord, puis les
-                // autres pages visibles au fil des trames suivantes. La
-                // comparaison porte sur le palier *manquant ou trop grossier*,
-                // d'où `needs_render` sans négation.
-                let pending_render: Option<(u32, i32, f32)> = if zoom_settled {
+                // le zoom et le défilement au repos : la page courante
+                // d'abord, puis les autres pages visibles au fil des trames
+                // suivantes. La comparaison porte sur le palier *manquant ou
+                // trop grossier*, d'où `needs_render` sans négation.
+                let pending_render: Option<(u32, i32, f32)> = if zoom_settled && scroll_settled {
                     let mut visible: Vec<(u32, i32, f32)> = placed
                         .iter()
                         .filter(|(_, _, page_rect, _, _)| clip.intersects(*page_rect))
@@ -8682,8 +8760,15 @@ impl YouPdfApp {
                     // Curseur de surlignage : l'outil de surbrillance est actif
                     // et le pointeur est sur la page. egui n'a pas de curseur
                     // « marqueur » natif, la croix de visée sert de surligneur.
-                    if markup_kind.is_some() && resp.hovered() {
-                        ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                    // On interroge la position du pointeur et non
+                    // `resp.hovered()` : pendant le glissé de surlignage, le
+                    // widget n'est plus « survolé ».
+                    if markup_kind.is_some() {
+                        if let Some(pos) = ctx.pointer_hover_pos() {
+                            if rect.contains(pos) {
+                                ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                            }
+                        }
                     }
 
                     if jump == Some(page as usize) {
@@ -8713,7 +8798,7 @@ impl YouPdfApp {
                         let step = render_step(scale, ppp);
                         let wanted = pending_render == Some((page, step, scale * ppp));
                         if let Some(tex) = Self::page_texture(
-                            &ctx, renderer, tab, page, step, scale, ppp, wanted, status,
+                            &ctx, renderer, tab, page, step, scale, ppp, wanted, fast, status,
                         ) {
                             ui.painter().image(
                                 tex.id(),
@@ -9787,6 +9872,15 @@ impl YouPdfApp {
                         .retain(|key, _| (key.0 as i64 - current).abs() < 10);
                 }
             });
+
+        // Le contenu a glissé : la première page n'est plus à la même place.
+        // Cela couvre le défilement à la barre, que la molette ne signale pas.
+        if let (Some(y), Some(last_y)) = (first_page_y, self.last_page_y) {
+            if (y - last_y).abs() > 0.5 {
+                self.scroll_moved_at = now;
+            }
+        }
+        self.last_page_y = first_page_y;
 
         self.edit_text = draft;
         self.form_edit = form_draft;
