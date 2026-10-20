@@ -54,6 +54,19 @@ eframe = { version = "0.29", default-features = false, features = ["accesskit", 
 # ---- PDF -----------------------------------------------------------------
 lopdf = "0.34"
 
+# ---- Signature numérique (PKCS#7 / PAdES) --------------------------------
+rsa         = { version = "0.9", features = ["sha2"] }
+sha2        = "0.10"
+cms         = { version = "0.2", features = ["builder"] }
+x509-cert   = { version = "0.2", features = ["pem", "builder"] }
+der         = { version = "0.7", features = ["alloc", "oid", "pem"] }
+spki        = { version = "0.7", features = ["pem"] }
+pkcs8       = { version = "0.10", features = ["pem", "encryption"] }
+pkcs12      = "0.1"
+const-oid   = { version = "0.9", features = ["db"] }
+time        = "0.3"
+rcgen       = "0.13"
+
 # ---- Utilitaires ---------------------------------------------------------
 uuid        = { version = "1", features = ["v4", "serde"] }
 chrono      = { version = "0.4", features = ["serde"] }
