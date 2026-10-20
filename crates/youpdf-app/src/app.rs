@@ -6954,13 +6954,13 @@ impl YouPdfApp {
                                             Conformance::PdfX4,
                                             Conformance::PdfE1,
                                         ] {
-                                            if submenu_row(ui, level.display_name()) {
+                                            if submenu_row(ui, level.display_name(), None) {
                                                 action = Some(MenuAction::Conformance(level));
                                                 ui.close_menu();
                                             }
                                         }
                                         ui.separator();
-                                        if submenu_row(ui, "Image PDF…") {
+                                        if submenu_row(ui, "Image PDF…", None) {
                                             action = Some(MenuAction::ImagePdf);
                                             ui.close_menu();
                                         }
@@ -6971,7 +6971,7 @@ impl YouPdfApp {
                                             (OfficeFormat::PowerPoint, "PowerPoint (.pptx)"),
                                             (OfficeFormat::Excel, "Excel (.xlsx)"),
                                         ] {
-                                            if submenu_row(ui, label) {
+                                            if submenu_row(ui, label, None) {
                                                 action =
                                                     Some(MenuAction::ExportOffice(format));
                                                 ui.close_menu();
@@ -6983,16 +6983,16 @@ impl YouPdfApp {
                                             (ImageFormat::Jpeg, "Image — JPEG"),
                                             (ImageFormat::Tiff, "Image — TIFF"),
                                         ] {
-                                            if submenu_row(ui, label) {
+                                            if submenu_row(ui, label, None) {
                                                 action = Some(MenuAction::ExportImage(format));
                                                 ui.close_menu();
                                             }
                                         }
-                                        if submenu_row(ui, "Long image (PNG)") {
+                                        if submenu_row(ui, "Long image (PNG)", None) {
                                             action = Some(MenuAction::ExportLongImage);
                                             ui.close_menu();
                                         }
-                                        if submenu_row(ui, "Embedded images (PNG)") {
+                                        if submenu_row(ui, "Embedded images (PNG)", None) {
                                             action = Some(MenuAction::ExportEmbedded);
                                             ui.close_menu();
                                         }
@@ -7005,7 +7005,7 @@ impl YouPdfApp {
                                             (TextFormat::Html, "HTML (.htm)"),
                                             (TextFormat::Markdown, "Markdown (.md)"),
                                         ] {
-                                            if submenu_row(ui, label) {
+                                            if submenu_row(ui, label, None) {
                                                 action = Some(MenuAction::ExportText(format));
                                                 ui.close_menu();
                                             }
@@ -7019,15 +7019,15 @@ impl YouPdfApp {
                                     }
                                     menu_separator(ui);
                                     menu_submenu(ui, "New", |ui| {
-                                        if submenu_row(ui, "Blank page") {
+                                        if submenu_row(ui, "Blank page", None) {
                                             action = Some(MenuAction::NewBlank);
                                             ui.close_menu();
                                         }
-                                        if submenu_row(ui, "From images…") {
+                                        if submenu_row(ui, "From images…", None) {
                                             action = Some(MenuAction::FromImages);
                                             ui.close_menu();
                                         }
-                                        if submenu_row(ui, "Combine with a PDF…") {
+                                        if submenu_row(ui, "Combine with a PDF…", None) {
                                             action = Some(MenuAction::Combine);
                                             ui.close_menu();
                                         }
@@ -7040,7 +7040,7 @@ impl YouPdfApp {
                                             ("Extract data…", MenuAction::Extract),
                                             ("Compare PDFs…", MenuAction::Compare),
                                         ] {
-                                            if submenu_row(ui, label) {
+                                            if submenu_row(ui, label, None) {
                                                 action = Some(item);
                                                 ui.close_menu();
                                             }
@@ -7056,28 +7056,28 @@ impl YouPdfApp {
                                             ("Background…", MenuAction::Background),
                                             ("Bates numbering…", MenuAction::Bates),
                                         ] {
-                                            if submenu_row(ui, label) {
+                                            if submenu_row(ui, label, None) {
                                                 action = Some(item);
                                                 ui.close_menu();
                                             }
                                         }
                                     });
                                     menu_submenu(ui, "Protect", |ui| {
-                                        if submenu_row(ui, "Protect with a password…") {
+                                        if submenu_row(ui, "Protect with a password…", None) {
                                             action = Some(MenuAction::Protect);
                                             ui.close_menu();
                                         }
-                                        if submenu_row(ui, "Remove protection…") {
+                                        if submenu_row(ui, "Remove protection…", None) {
                                             action = Some(MenuAction::RemoveProtection);
                                             ui.close_menu();
                                         }
                                     });
                                     menu_submenu(ui, "Bookmarks", |ui| {
-                                        if submenu_row(ui, "Generate bookmarks") {
+                                        if submenu_row(ui, "Generate bookmarks", None) {
                                             action = Some(MenuAction::GenerateOutline);
                                             ui.close_menu();
                                         }
-                                        if submenu_row(ui, "Clear bookmarks") {
+                                        if submenu_row(ui, "Clear bookmarks", None) {
                                             action = Some(MenuAction::ClearOutline);
                                             ui.close_menu();
                                         }
@@ -7112,7 +7112,7 @@ impl YouPdfApp {
                                             action = Some(MenuAction::Fullscreen);
                                             ui.close_menu();
                                         }
-                                        if submenu_row(ui, "Slideshow  (F5)") {
+                                        if submenu_row(ui, "Slideshow  (F5)", None) {
                                             action = Some(MenuAction::Slideshow);
                                             ui.close_menu();
                                         }
@@ -11391,7 +11391,7 @@ fn submenu_row(ui: &mut egui::Ui, label: &str, icon: Option<fn(&egui::Painter, e
     let desired_width = if icon.is_some() { 200.0 } else { 180.0 };
     let button = Button::new(RichText::new(label).size(12.0))
         .min_size(vec2(desired_width, 24.0));
-    let resp = button.click();
+    let resp = ui.add(button);
     // Draw icon if provided, positioned to the right of the label
     if let Some(draw_icon) = icon {
         let icon_size = 14.0; // Smaller icon for submenus
@@ -11402,7 +11402,7 @@ fn submenu_row(ui: &mut egui::Ui, label: &str, icon: Option<fn(&egui::Painter, e
         );
         draw_icon(ui.painter(), icon_rect, pal().icon_bright);
     }
-    resp
+    resp.clicked
 }
 
 /// Ligne de menu `Outils` : libellé à gauche, raccourci à droite.
