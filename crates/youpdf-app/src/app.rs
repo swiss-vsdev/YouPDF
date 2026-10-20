@@ -22,7 +22,7 @@ mod batch_ui;
 mod forms_ui;
 mod organize_ui;
 
-use youpdf_shared::{pal, set_palette, Theme};
+use youpdf_shared::{i18n, pal, set_palette, t, Language, Theme};
 use crate::ai::AiPanel;
 use crate::home::{self, HomeCategory, HomeView, ViewMode};
 use crate::inspector::{
@@ -1436,6 +1436,7 @@ impl YouPdfApp {
         // La configuration est lue une seule fois : le thème en vient, et le
         // panneau IA reçoit le même objet au lieu de relire le fichier.
         let settings = youpdf_ai::AppSettings::load().unwrap_or_default();
+        i18n::set_language(Language::from_code(&settings.locale));
         let theme = settings.theme();
         apply_theme(&cc.egui_ctx, theme);
 
@@ -6666,7 +6667,7 @@ impl YouPdfApp {
                                 ui.allocate_exact_size(vec2(15.0, 15.0), Sense::hover());
                             icon_tools(ui.painter(), rect, pal().icon_bright);
                             ui.add_space(6.0);
-                            ui.label(RichText::new("Tools").size(12.5).color(pal().icon_bright));
+                            ui.label(RichText::new(t("Tools")).size(12.5).color(pal().icon_bright));
                             ui.add_space(4.0);
                             let (rect, _) =
                                 ui.allocate_exact_size(vec2(9.0, 9.0), Sense::hover());
@@ -6853,7 +6854,7 @@ impl YouPdfApp {
                                     );
                                     ui.add_space(4.0);
                                 }
-                                if menu_row(ui, label, shortcut) {
+                                if menu_row(ui, t(label), shortcut) {
                                     chosen = Some(*entry);
                                 }
                             }
@@ -6992,7 +6993,7 @@ impl YouPdfApp {
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(10.0);
-                                ui.label(RichText::new("File").size(10.0).color(pal().muted));
+                                ui.label(RichText::new(t("File")).size(10.0).color(pal().muted));
                             });
                             if menu_row(ui, "New blank page", "") {
                                 action = Some(MenuAction::NewBlank);
@@ -7098,7 +7099,7 @@ impl YouPdfApp {
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(10.0);
-                                ui.label(RichText::new("View").size(10.0).color(pal().muted));
+                                ui.label(RichText::new(t("View")).size(10.0).color(pal().muted));
                             });
                             for (mark, layout) in [
                                 ("Single page", PageLayout::Single),
@@ -8059,7 +8060,7 @@ impl YouPdfApp {
         let mut apply = false;
         self.show_modal(ctx, "modal-prefs", "Preferences", 420.0, &mut open, |app, ui| {
             let mut settings = app.ai.settings.clone();
-            ui.label(RichText::new("General").size(12.0).color(pal().muted));
+            ui.label(RichText::new(t("General")).size(12.0).color(pal().muted));
             egui::Grid::new("prefs-general")
                 .num_columns(2)
                 .spacing([8.0, 6.0])
@@ -8154,7 +8155,23 @@ impl YouPdfApp {
                     ui.end_row();
                 });
             ui.add_space(6.0);
-            ui.label(RichText::new("Appearance").size(12.0).color(pal().muted));
+            ui.label(RichText::new(t("Appearance")).size(12.0).color(pal().muted));
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(t("Language")).size(11.0));
+                let current = Language::from_code(&settings.locale);
+                egui::ComboBox::from_id_salt("prefs-language")
+                    .selected_text(current.label())
+                    .show_ui(ui, |ui| {
+                        for language in Language::ALL {
+                            if ui
+                                .selectable_label(current == language, language.label())
+                                .clicked()
+                            {
+                                settings.locale = language.code().to_string();
+                            }
+                        }
+                    });
+            });
             ui.horizontal(|ui| {
                 for theme in Theme::ALL {
                     let index = Theme::ALL
@@ -8180,6 +8197,7 @@ impl YouPdfApp {
                 if ui.button("Save").clicked() {
                     app.ai.settings = settings.clone();
                     let _ = app.ai.settings.save();
+                    i18n::set_language(Language::from_code(&app.ai.settings.locale));
                     apply = true;
                 }
                 if ui.button("Close").clicked() {

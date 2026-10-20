@@ -8,7 +8,9 @@
 //! de dépendance circulaire.
 
 pub mod error;
+pub mod i18n;
 pub mod theme;
 
 pub use error::{Error, Result};
+pub use i18n::{t, Language};
 pub use theme::{pal, set_palette, Palette, Theme};
