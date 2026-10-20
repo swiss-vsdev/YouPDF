@@ -274,8 +274,14 @@ impl Document {
         // `save_to` prend `&mut self` : on sérialise sur une copie, comme
         // auparavant, pour garder une méthode accessible par `&self`.
         let mut buf = Vec::new();
-        self.inner
-            .clone()
+        let mut inner = self.inner.clone();
+        // `save_to` réécrit un fichier complet : conserver `/Prev` (ou
+        // `/XRefStm`) pointerait vers l'ancienne table, à un offset qui
+        // n'existe plus dans le nouveau fichier. lopdf refuserait alors de
+        // relire sa propre sortie.
+        inner.trailer.remove(b"Prev");
+        inner.trailer.remove(b"XRefStm");
+        inner
             .save_to(&mut buf)
             .map_err(|e| Error::Pdf(format!("sérialisation : {e}")))?;
         let bytes = Rc::new(buf);

@@ -44,7 +44,17 @@ sha2      = "0.10"
 aes       = "0.8"
 cbc       = { version = "0.1", features = ["alloc"] }
 getrandom = "0.2"
+rsa         = { workspace = true }
+cms         = { workspace = true }
+x509-cert   = { workspace = true }
+der         = { workspace = true }
+spki        = { workspace = true }
+pkcs8       = { workspace = true }
+pkcs12      = { workspace = true }
+const-oid   = { workspace = true }
+time        = { workspace = true }
 
 [dev-dependencies]
 # Validation du XML produit par l'export Office dans les tests.
 quick-xml = "0.41"
+rcgen = { workspace = true }
