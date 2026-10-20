@@ -152,6 +152,20 @@ enum ExportMode {
 enum MenuAction {
     /// Ouvre la fenêtre des préférences.
     Preferences,
+    /// Annule le dernier pas d'historique.
+    Undo,
+    /// Rejoue le dernier pas annulé.
+    Redo,
+    /// Ouvre l'export de texte sur un format précis.
+    ExportText(TextFormat),
+    /// Ouvre l'export d'images sur un format précis.
+    ExportImage(ImageFormat),
+    /// Exporte les pages empilées en une seule image.
+    ExportLongImage,
+    /// Exporte les images incorporées, pas les pages.
+    ExportEmbedded,
+    /// Ouvre l'export bureautique sur un format précis.
+    ExportOffice(OfficeFormat),
     Save,
     SaveAs,
     /// Ouvre la fenêtre d'export.
@@ -6821,7 +6835,9 @@ impl YouPdfApp {
                     });
             });
 
-        // Menu `…` : enregistrer, exporter, propriétés.
+        // Menu `…` : les mêmes familles que le menu Fichier d'UPDF, en
+        // sous-menus. Une seule colonne scrollable : la hauteur suit la
+        // fenêtre au lieu de déborder de l'écran.
         if self.actions_open {
             let mut action = None;
             let area = Area::new(Id::new("actions-menu"))
@@ -6834,183 +6850,233 @@ impl YouPdfApp {
                         .stroke(Stroke::new(1.0_f32, pal().separator))
                         .inner_margin(Margin::symmetric(4.0, 4.0))
                         .show(ui, |ui| {
-                            if menu_row(ui, "Save", "⌘S") {
-                                action = Some(MenuAction::Save);
-                            }
-                            if menu_row(ui, "Save as…", "Shift+⌘S") {
-                                action = Some(MenuAction::SaveAs);
-                            }
-                            if menu_row(ui, "Export…", "") {
-                                action = Some(MenuAction::Export);
-                            }
-                            if menu_row(ui, "Flatten annotations", "") {
-                                action = Some(MenuAction::Flatten);
-                            }
-                            ui.add_space(4.0);
-                            let sep = ui.cursor().top();
-                            ui.painter().hline(
-                                ui.max_rect().x_range(),
-                                sep,
-                                Stroke::new(1.0_f32, pal().separator),
-                            );
-                            ui.add_space(6.0);
-                            ui.horizontal(|ui| {
-                                ui.add_space(10.0);
-                                ui.label(RichText::new(t("File")).size(10.0).color(pal().muted));
-                            });
-                            if menu_row(ui, "New blank page", "") {
-                                action = Some(MenuAction::NewBlank);
-                            }
-                            if menu_row(ui, "From images…", "") {
-                                action = Some(MenuAction::FromImages);
-                            }
-                            if menu_row(ui, "Combine with a PDF…", "") {
-                                action = Some(MenuAction::Combine);
-                            }
-                            if menu_row(ui, "Print…", "⌘P") {
-                                action = Some(MenuAction::Print);
-                            }
-                            if menu_row(ui, "Reveal in Finder", "") {
-                                action = Some(MenuAction::Reveal);
-                            }
-                            if menu_row(ui, "Remove protection…", "") {
-                                action = Some(MenuAction::RemoveProtection);
-                            }
-                            ui.add_space(4.0);
-                            let sep = ui.cursor().top();
-                            ui.painter().hline(
-                                ui.max_rect().x_range(),
-                                sep,
-                                Stroke::new(1.0_f32, pal().separator),
-                            );
-                            ui.add_space(6.0);
-                            ui.horizontal(|ui| {
-                                ui.add_space(10.0);
-                                ui.label(RichText::new("Document").size(10.0).color(pal().muted));
-                            });
-                            if menu_row(ui, "Watermark…", "") {
-                                action = Some(MenuAction::Watermark);
-                            }
-                            if menu_row(ui, "Header & footer…", "") {
-                                action = Some(MenuAction::HeaderFooter);
-                            }
-                            if menu_row(ui, "Page numbers…", "") {
-                                action = Some(MenuAction::PageNumbers);
-                            }
-                            if menu_row(ui, "Compress…", "") {
-                                action = Some(MenuAction::Compress);
-                            }
-                            if menu_row(ui, "Protect…", "") {
-                                action = Some(MenuAction::Protect);
-                            }
-                            if menu_row(ui, "Crop pages…", "") {
-                                action = Some(MenuAction::Crop);
-                            }
-                            if menu_row(ui, "Background…", "") {
-                                action = Some(MenuAction::Background);
-                            }
-                            if menu_row(ui, "Bates numbering…", "") {
-                                action = Some(MenuAction::Bates);
-                            }
-                            if menu_row(ui, "Compare PDFs…", "") {
-                                action = Some(MenuAction::Compare);
-                            }
-                            if menu_row(ui, "OCR…", "") {
-                                action = Some(MenuAction::Ocr);
-                            }
-                            if menu_row(ui, "Create…", "") {
-                                action = Some(MenuAction::Create);
-                            }
-                            if menu_row(ui, "Batch processing…", "") {
-                                action = Some(MenuAction::Batch);
-                            }
-                            if menu_row(ui, "Extract data…", "") {
-                                action = Some(MenuAction::Extract);
-                            }
-                            if menu_row(ui, "Generate bookmarks", "") {
-                                action = Some(MenuAction::GenerateOutline);
-                            }
-                            if menu_row(ui, "Clear bookmarks", "") {
-                                action = Some(MenuAction::ClearOutline);
-                            }
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                ui.add_space(10.0);
-                                ui.label(RichText::new("Save as").size(10.0).color(pal().muted));
-                            });
-                            for level in [
-                                Conformance::PdfA1b,
-                                Conformance::PdfA2b,
-                                Conformance::PdfX1a,
-                                Conformance::PdfX4,
-                                Conformance::PdfE1,
-                            ] {
-                                if menu_row(ui, level.display_name(), "") {
-                                    action = Some(MenuAction::Conformance(level));
-                                }
-                            }
-                            if menu_row(ui, "Image PDF…", "") {
-                                action = Some(MenuAction::ImagePdf);
-                            }
-                            ui.add_space(4.0);
-                            let sep = ui.cursor().top();
-                            ui.painter().hline(
-                                ui.max_rect().x_range(),
-                                sep,
-                                Stroke::new(1.0_f32, pal().separator),
-                            );
-                            ui.add_space(6.0);
-                            ui.horizontal(|ui| {
-                                ui.add_space(10.0);
-                                ui.label(RichText::new(t("View")).size(10.0).color(pal().muted));
-                            });
-                            for (mark, layout) in [
-                                ("Single page", PageLayout::Single),
-                                ("Continuous scroll", PageLayout::Continuous),
-                                ("Two pages", PageLayout::TwoPages),
-                                ("Cover (book)", PageLayout::Cover),
-                            ] {
-                                if menu_row_checked(ui, mark, self.page_layout == layout) {
-                                    action = Some(MenuAction::Layout(layout));
-                                }
-                            }
-                            if menu_row_checked(ui, "Fullscreen", self.fullscreen) {
-                                action = Some(MenuAction::Fullscreen);
-                            }
-                            if menu_row(ui, "Slideshow", "F5") {
-                                action = Some(MenuAction::Slideshow);
-                            }
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                ui.add_space(10.0);
-                                ui.label(RichText::new("Theme").size(10.0).color(pal().muted));
-                            });
-                            for theme in Theme::ALL {
-                                if menu_row_checked(ui, theme.label(), self.theme == theme) {
-                                    action = Some(MenuAction::Theme(theme));
-                                }
-                            }
-                            ui.add_space(4.0);
-                            if menu_row(ui, "Preferences…", "\u{2318},") {
-                                action = Some(MenuAction::Preferences);
-                            }
-                            if menu_row_checked(ui, "AI features…", self.ai.enabled()) {
-                                action = Some(MenuAction::AiEnabled);
-                            }
-                            ui.add_space(4.0);
-                            let sep = ui.cursor().top();
-                            ui.painter().hline(
-                                ui.max_rect().x_range(),
-                                sep,
-                                Stroke::new(1.0_f32, pal().separator),
-                            );
-                            ui.add_space(4.0);
-                            if menu_row(ui, "Properties…", "⌘D") {
-                                action = Some(MenuAction::Properties);
-                            }
-                            if menu_row(ui, "Close tab", "⌘W") {
-                                action = Some(MenuAction::Close);
-                            }
+                            let max_height =
+                                (ctx.screen_rect().height() - top - 70.0).max(220.0);
+                            ScrollArea::vertical()
+                                .id_salt("actions-scroll")
+                                .max_height(max_height)
+                                .max_width(230.0)
+                                .auto_shrink([true, true])
+                                .show(ui, |ui| {
+                                    ui.set_min_width(210.0);
+                                    if menu_row(ui, "Undo", "⌘Z") {
+                                        action = Some(MenuAction::Undo);
+                                    }
+                                    if menu_row(ui, "Redo", "⇧⌘Z") {
+                                        action = Some(MenuAction::Redo);
+                                    }
+                                    menu_separator(ui);
+                                    if menu_row(ui, "Save", "⌘S") {
+                                        action = Some(MenuAction::Save);
+                                    }
+                                    if menu_row(ui, "Save as…", "⇧⌘S") {
+                                        action = Some(MenuAction::SaveAs);
+                                    }
+                                    menu_submenu(ui, "Save as", |ui| {
+                                        for level in [
+                                            Conformance::PdfA1b,
+                                            Conformance::PdfA2b,
+                                            Conformance::PdfX1a,
+                                            Conformance::PdfX4,
+                                            Conformance::PdfE1,
+                                        ] {
+                                            if submenu_row(ui, level.display_name()) {
+                                                action = Some(MenuAction::Conformance(level));
+                                                ui.close_menu();
+                                            }
+                                        }
+                                        ui.separator();
+                                        if submenu_row(ui, "Image PDF…") {
+                                            action = Some(MenuAction::ImagePdf);
+                                            ui.close_menu();
+                                        }
+                                    });
+                                    menu_submenu(ui, "Export to", |ui| {
+                                        for (format, label) in [
+                                            (OfficeFormat::Word, "Word (.docx)"),
+                                            (OfficeFormat::PowerPoint, "PowerPoint (.pptx)"),
+                                            (OfficeFormat::Excel, "Excel (.xlsx)"),
+                                        ] {
+                                            if submenu_row(ui, label) {
+                                                action =
+                                                    Some(MenuAction::ExportOffice(format));
+                                                ui.close_menu();
+                                            }
+                                        }
+                                        ui.separator();
+                                        for (format, label) in [
+                                            (ImageFormat::Png, "Image — PNG"),
+                                            (ImageFormat::Jpeg, "Image — JPEG"),
+                                            (ImageFormat::Tiff, "Image — TIFF"),
+                                        ] {
+                                            if submenu_row(ui, label) {
+                                                action = Some(MenuAction::ExportImage(format));
+                                                ui.close_menu();
+                                            }
+                                        }
+                                        if submenu_row(ui, "Long image (PNG)") {
+                                            action = Some(MenuAction::ExportLongImage);
+                                            ui.close_menu();
+                                        }
+                                        if submenu_row(ui, "Embedded images (PNG)") {
+                                            action = Some(MenuAction::ExportEmbedded);
+                                            ui.close_menu();
+                                        }
+                                        ui.separator();
+                                        for (format, label) in [
+                                            (TextFormat::Plain, "Text (.txt)"),
+                                            (TextFormat::Rtf, "RTF (.rtf)"),
+                                            (TextFormat::Csv, "CSV (.csv)"),
+                                            (TextFormat::Xml, "XML (.xml)"),
+                                            (TextFormat::Html, "HTML (.htm)"),
+                                            (TextFormat::Markdown, "Markdown (.md)"),
+                                        ] {
+                                            if submenu_row(ui, label) {
+                                                action = Some(MenuAction::ExportText(format));
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    });
+                                    if menu_row(ui, "Export…", "") {
+                                        action = Some(MenuAction::Export);
+                                    }
+                                    if menu_row(ui, "Flatten annotations", "") {
+                                        action = Some(MenuAction::Flatten);
+                                    }
+                                    menu_separator(ui);
+                                    menu_submenu(ui, "New", |ui| {
+                                        if submenu_row(ui, "Blank page") {
+                                            action = Some(MenuAction::NewBlank);
+                                            ui.close_menu();
+                                        }
+                                        if submenu_row(ui, "From images…") {
+                                            action = Some(MenuAction::FromImages);
+                                            ui.close_menu();
+                                        }
+                                        if submenu_row(ui, "Combine with a PDF…") {
+                                            action = Some(MenuAction::Combine);
+                                            ui.close_menu();
+                                        }
+                                    });
+                                    menu_submenu(ui, "Tools", |ui| {
+                                        for (label, item) in [
+                                            ("Create…", MenuAction::Create),
+                                            ("Batch processing…", MenuAction::Batch),
+                                            ("OCR…", MenuAction::Ocr),
+                                            ("Extract data…", MenuAction::Extract),
+                                            ("Compare PDFs…", MenuAction::Compare),
+                                        ] {
+                                            if submenu_row(ui, label) {
+                                                action = Some(item);
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    });
+                                    menu_submenu(ui, "Document", |ui| {
+                                        for (label, item) in [
+                                            ("Watermark…", MenuAction::Watermark),
+                                            ("Header & footer…", MenuAction::HeaderFooter),
+                                            ("Page numbers…", MenuAction::PageNumbers),
+                                            ("Compress…", MenuAction::Compress),
+                                            ("Crop pages…", MenuAction::Crop),
+                                            ("Background…", MenuAction::Background),
+                                            ("Bates numbering…", MenuAction::Bates),
+                                        ] {
+                                            if submenu_row(ui, label) {
+                                                action = Some(item);
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    });
+                                    menu_submenu(ui, "Protect", |ui| {
+                                        if submenu_row(ui, "Protect with a password…") {
+                                            action = Some(MenuAction::Protect);
+                                            ui.close_menu();
+                                        }
+                                        if submenu_row(ui, "Remove protection…") {
+                                            action = Some(MenuAction::RemoveProtection);
+                                            ui.close_menu();
+                                        }
+                                    });
+                                    menu_submenu(ui, "Bookmarks", |ui| {
+                                        if submenu_row(ui, "Generate bookmarks") {
+                                            action = Some(MenuAction::GenerateOutline);
+                                            ui.close_menu();
+                                        }
+                                        if submenu_row(ui, "Clear bookmarks") {
+                                            action = Some(MenuAction::ClearOutline);
+                                            ui.close_menu();
+                                        }
+                                    });
+                                    menu_separator(ui);
+                                    menu_submenu(ui, "View", |ui| {
+                                        for (label, layout) in [
+                                            ("Single page", PageLayout::Single),
+                                            ("Continuous scroll", PageLayout::Continuous),
+                                            ("Two pages", PageLayout::TwoPages),
+                                            ("Cover (book)", PageLayout::Cover),
+                                        ] {
+                                            if ui
+                                                .selectable_label(
+                                                    self.page_layout == layout,
+                                                    RichText::new(label).size(12.0),
+                                                )
+                                                .clicked()
+                                            {
+                                                action = Some(MenuAction::Layout(layout));
+                                                ui.close_menu();
+                                            }
+                                        }
+                                        ui.separator();
+                                        if ui
+                                            .selectable_label(
+                                                self.fullscreen,
+                                                RichText::new("Fullscreen").size(12.0),
+                                            )
+                                            .clicked()
+                                        {
+                                            action = Some(MenuAction::Fullscreen);
+                                            ui.close_menu();
+                                        }
+                                        if submenu_row(ui, "Slideshow  (F5)") {
+                                            action = Some(MenuAction::Slideshow);
+                                            ui.close_menu();
+                                        }
+                                    });
+                                    menu_submenu(ui, "Theme", |ui| {
+                                        for theme in Theme::ALL {
+                                            if ui
+                                                .selectable_label(
+                                                    self.theme == theme,
+                                                    RichText::new(theme.label()).size(12.0),
+                                                )
+                                                .clicked()
+                                            {
+                                                action = Some(MenuAction::Theme(theme));
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    });
+                                    if menu_row(ui, "Preferences…", "⌘,") {
+                                        action = Some(MenuAction::Preferences);
+                                    }
+                                    if menu_row_checked(ui, "AI features…", self.ai.enabled()) {
+                                        action = Some(MenuAction::AiEnabled);
+                                    }
+                                    menu_separator(ui);
+                                    if menu_row(ui, "Print…", "⌘P") {
+                                        action = Some(MenuAction::Print);
+                                    }
+                                    if menu_row(ui, "Reveal in Finder", "") {
+                                        action = Some(MenuAction::Reveal);
+                                    }
+                                    if menu_row(ui, "Properties…", "⌘D") {
+                                        action = Some(MenuAction::Properties);
+                                    }
+                                    if menu_row(ui, "Close tab", "⌘W") {
+                                        action = Some(MenuAction::Close);
+                                    }
+                                });
                         });
                 });
             // Fermeture au clic hors du menu, comme les menus natifs. Le clic
@@ -7027,9 +7093,34 @@ impl YouPdfApp {
             if let Some(action) = action {
                 self.actions_open = false;
                 match action {
+                    MenuAction::Undo => self.undo(ctx),
+                    MenuAction::Redo => self.redo(ctx),
                     MenuAction::Save => self.save_active(ctx),
                     MenuAction::SaveAs => self.save_as(ctx),
                     MenuAction::Export => self.export_open = true,
+                    MenuAction::ExportText(format) => {
+                        self.export_mode = ExportMode::Text;
+                        self.export_format = format;
+                        self.export_open = true;
+                    }
+                    MenuAction::ExportImage(format) => {
+                        self.export_mode = ExportMode::Image;
+                        self.export_image_format = format;
+                        self.export_open = true;
+                    }
+                    MenuAction::ExportLongImage => {
+                        self.export_mode = ExportMode::LongImage;
+                        self.export_open = true;
+                    }
+                    MenuAction::ExportEmbedded => {
+                        self.export_mode = ExportMode::Embedded;
+                        self.export_open = true;
+                    }
+                    MenuAction::ExportOffice(format) => {
+                        self.export_mode = ExportMode::Office;
+                        self.export_office_format = format;
+                        self.export_open = true;
+                    }
                     MenuAction::Flatten => self.flatten_annotations(ctx),
                     MenuAction::Properties => self.props_open = true,
                     MenuAction::Close => {
@@ -11171,6 +11262,33 @@ fn menu_row_checked(ui: &mut egui::Ui, label: &str, checked: bool) -> bool {
         pal().icon_bright,
     );
     resp.clicked()
+}
+
+/// Séparateur de menu, aligné sur la largeur des lignes.
+fn menu_separator(ui: &mut egui::Ui) {
+    ui.add_space(4.0);
+    let y = ui.cursor().top();
+    ui.painter().hline(
+        ui.max_rect().x_range(),
+        y,
+        Stroke::new(1.0_f32, pal().separator),
+    );
+    ui.add_space(6.0);
+}
+
+/// Entrée qui ouvre un sous-menu au clic.
+fn menu_submenu(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
+    let text = RichText::new(format!("{label}  ▸")).size(12.5);
+    ui.menu_button(text, |ui| {
+        ui.set_min_width(180.0);
+        add(ui);
+    });
+}
+
+/// Ligne d'un sous-menu.
+fn submenu_row(ui: &mut egui::Ui, label: &str) -> bool {
+    ui.add(Button::new(RichText::new(label).size(12.0)).min_size(vec2(180.0, 24.0)))
+        .clicked()
 }
 
 /// Ligne de menu `Outils` : libellé à gauche, raccourci à droite.
