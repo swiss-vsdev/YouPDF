@@ -89,6 +89,11 @@ impl YouPdfApp {
                 );
                 ui.checkbox(&mut self.batch_combine, "Combine every file into one PDF");
                 ui.checkbox(&mut self.batch_print, "Send each file to the system printer");
+                ui.checkbox(&mut self.batch_ocr, "Recognise text (OCR, searchable)");
+                ui.checkbox(
+                    &mut self.batch_background,
+                    "Apply the current page background",
+                );
                 ui.horizontal(|ui| {
                     if ui.button("Insert pages from…").clicked() {
                         insert_file = true;
@@ -293,6 +298,8 @@ impl YouPdfApp {
             protect_options: self.protect.clone(),
             insert: self.batch_insert.clone(),
             insert_at: self.batch_insert_at,
+            ocr: self.batch_ocr,
+            background: self.batch_background.then(|| self.background.clone()),
             convert: self.batch_convert,
             remove_pages: self.batch_remove_pages.clone(),
             watermark_text: self.batch_watermark_text.clone(),
@@ -386,6 +393,8 @@ struct BatchJob {
     print: bool,
     insert: Option<PathBuf>,
     insert_at: usize,
+    ocr: bool,
+    background: Option<Background>,
 }
 
 impl BatchJob {
@@ -465,6 +474,27 @@ impl BatchJob {
                 match doc.insert_pages_after(after, source) {
                     Ok(_) => edited = true,
                     Err(err) => errors.push(format!("insert: {err}")),
+                }
+            }
+            if let Some(background) = &self.background {
+                match doc.add_background(background) {
+                    Ok(_) => edited = true,
+                    Err(err) => errors.push(format!("background: {err}")),
+                }
+            }
+            if self.ocr {
+                match PdfiumRenderer::load() {
+                    Ok(renderer) => {
+                        let engine = TesseractEngine::detect();
+                        match make_ocr(&doc, &renderer, &engine, "eng", OcrMode::Searchable) {
+                            Ok(recognised) => {
+                                doc = recognised;
+                                edited = true;
+                            }
+                            Err(err) => errors.push(format!("OCR: {err}")),
+                        }
+                    }
+                    Err(err) => errors.push(format!("OCR: {err}")),
                 }
             }
             let removable = parse_page_numbers(&self.remove_pages, doc.page_count());

@@ -1222,6 +1222,10 @@ pub struct YouPdfApp {
     batch_insert: Option<PathBuf>,
     /// Position d'insertion : 0 = en tête, `usize::MAX` = en fin.
     batch_insert_at: usize,
+    /// Reconnaître le texte de chaque fichier (OCR).
+    batch_ocr: bool,
+    /// Appliquer l'arrière-plan courant à chaque fichier.
+    batch_background: bool,
     /// Lignes du lot en cours, envoyées par le fil de travail.
     batch_rx: Option<std::sync::mpsc::Receiver<String>>,
     /// Vrai tant qu'un lot tourne.
@@ -1558,6 +1562,8 @@ impl YouPdfApp {
             batch_print: false,
             batch_insert: None,
             batch_insert_at: 0,
+            batch_ocr: false,
+            batch_background: false,
             batch_rx: None,
             batch_running: false,
             annot_tool: None,
