@@ -121,7 +121,7 @@ impl YouPdfApp {
                     ui.horizontal_wrapped(|ui| {
                         ui.add_space(12.0);
                         for page in 1..=total as u32 {
-                            let (wp, hp) = tab.doc.page_size(page);
+                            let (wp, hp) = tab.page_size_cached(page);
                             let scale = 104.0 / wp.max(1.0);
                             let thumb = vec2(wp * scale, hp * scale);
                             let (rect, resp) =
@@ -150,6 +150,7 @@ impl YouPdfApp {
                                 scale,
                                 ppp,
                                 true,
+                                false,
                                 status,
                             ) {
                                 ui.painter().image(
