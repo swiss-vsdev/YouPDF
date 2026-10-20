@@ -131,6 +131,10 @@ impl YouPdfApp {
                                 .clicked()
                             {
                                 settings.locale = language.code().to_string();
+                                // `selectable_label` ne ferme pas la liste :
+                                // sans cela elle reste ouverte après le choix
+                                // et masque les boutons Save/Close.
+                                ui.close_menu();
                             }
                         }
                     });
