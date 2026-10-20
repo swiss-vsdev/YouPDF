@@ -32,7 +32,7 @@ use crate::inspector::{
 };
 use youpdf_core::compress::CompressionLevel;
 use youpdf_core::render::NullRenderer;
-use youpdf_core::ocr::{make_searchable, TesseractEngine};
+use youpdf_core::ocr::{make_ocr, TesseractEngine};
 use youpdf_core::{
     blank_document, document_from_images, export_comments, fold_case, Annotation, AnnotationKind,
     AnnotationState, AnnotationStyle, AttachmentInfo, Background, BandSlots, Bates, BatesPosition,
@@ -8946,10 +8946,11 @@ impl YouPdfApp {
 
         if run {
             let language = self.ocr_language.clone();
+            let mode = self.ocr_mode;
             let result = {
                 let engine = TesseractEngine::detect();
                 self.tabs.get(self.active).map(|tab| {
-                    make_searchable(&tab.doc, &*self.renderer, &engine, &language)
+                    make_ocr(&tab.doc, &*self.renderer, &engine, &language, mode)
                 })
             };
             match result {
