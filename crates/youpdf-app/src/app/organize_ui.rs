@@ -92,7 +92,7 @@ impl YouPdfApp {
                         self.duplicate_pages(ui.ctx(), &selected, total);
                     }
                     ui.separator();
-                    if ui.button("✕ Close").clicked() {
+                    if ui.button(format!("{} Close", ph::X)).clicked() {
                         close = true;
                     }
                 });
@@ -171,7 +171,7 @@ impl YouPdfApp {
                                 ui.painter().text(
                                     badge,
                                     Align2::CENTER_CENTER,
-                                    "✓",
+                                    ph::CHECK,
                                     FontId::proportional(11.0),
                                     Color32::WHITE,
                                 );
@@ -208,7 +208,7 @@ impl YouPdfApp {
                                 if ui.put(left, Button::new("⟳").small()).clicked() {
                                     quick_rotate = Some(page as usize);
                                 }
-                                if ui.put(right, Button::new("✕").small()).clicked() {
+                                if ui.put(right, Button::new(ph::X).small()).clicked() {
                                     quick_delete = Some(page as usize);
                                 }
                             }
