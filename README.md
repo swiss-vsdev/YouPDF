@@ -55,7 +55,8 @@ difference navigator, batch processing (convert, OCR, insert, remove,
 watermark, background, header/footer, Bates, compress, protect, flatten,
 combine, print), Office export (Word/Excel/PowerPoint, flow and exact layout,
 Excel column detection, Word image embedding), preferences with auto-save,
-English/French chrome, and the AI assistant.
+English/French chrome, a macOS accessibility tree for screen readers, and
+the AI assistant.
 
 In progress: 1:1 UPDF parity per `docs/UPDF_IMPLEMENTATION_PLAN.md`. Known
 gaps: PAdES/PKCS#7 signing (visual signatures only) and full localization
