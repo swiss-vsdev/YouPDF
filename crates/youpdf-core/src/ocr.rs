@@ -410,6 +410,28 @@ pub fn make_searchable(
     engine: &dyn OcrEngine,
     language: &str,
 ) -> Result<Document> {
+    make_ocr(
+        source,
+        renderer,
+        engine,
+        language,
+        OcrMode::Searchable,
+    )
+}
+
+/// Variante de [`make_searchable`] qui choisit le mode de sortie.
+///
+/// - `Searchable` : image d'origine + texte invisible.
+/// - `TextAndImage` : image d'origine + texte visible par-dessus.
+/// - `Editable` : fond blanc + texte visible, sans image de scan ; le texte
+///   reste modifiable et cherchable, mais la texture du papier disparaît.
+pub fn make_ocr(
+    source: &Document,
+    renderer: &dyn crate::render::Renderer,
+    engine: &dyn OcrEngine,
+    language: &str,
+    mode: OcrMode,
+) -> Result<Document> {
     use lopdf::Document as LopdfDoc;
 
     // On valide le langage **avant** de rendre la première page : sur un
@@ -465,18 +487,25 @@ pub fn make_searchable(
         // 2. OCR.
         let ocr = engine.recognize(&bitmap, page_num, language, OcrMode::Searchable)?;
 
-        // 3. Image XObject (RGB).
-        let rgb = rgba_to_rgb(&bitmap.pixels);
-        let img_dict = dictionary! {
-            "Type" => Object::Name(b"XObject".to_vec()),
-            "Subtype" => Object::Name(b"Image".to_vec()),
-            "Width" => Object::Integer(bitmap.width as i64),
-            "Height" => Object::Integer(bitmap.height as i64),
-            "ColorSpace" => Object::Name(b"DeviceRGB".to_vec()),
-            "BitsPerComponent" => Object::Integer(8),
+        // 3. Image XObject (RGB), sauf en mode modifiable : le scan est
+        //    remplacé par un fond blanc pour que le texte reconnu devienne
+        //    la seule couche visible.
+        let keep_image = mode != OcrMode::Editable;
+        let img_id = if keep_image {
+            let rgb = rgba_to_rgb(&bitmap.pixels);
+            let img_dict = dictionary! {
+                "Type" => Object::Name(b"XObject".to_vec()),
+                "Subtype" => Object::Name(b"Image".to_vec()),
+                "Width" => Object::Integer(bitmap.width as i64),
+                "Height" => Object::Integer(bitmap.height as i64),
+                "ColorSpace" => Object::Name(b"DeviceRGB".to_vec()),
+                "BitsPerComponent" => Object::Integer(8),
+            };
+            let img_stream = Stream::new(img_dict, rgb);
+            Some(out.add_object(img_stream))
+        } else {
+            None
         };
-        let img_stream = Stream::new(img_dict, rgb);
-        let img_id = out.add_object(img_stream);
 
         // 4. Dimensions PDF de la page d'origine.
         let (w_pt, h_pt) = source.page_size(page_num as u32);
@@ -486,15 +515,22 @@ pub fn make_searchable(
         // police WinAnsi, et un accent écrit en UTF-8 y produirait deux
         // octets, donc deux glyphes faux.
         let mut content: Vec<u8> = Vec::new();
-        content.extend_from_slice(b"q\n");
-        content.extend_from_slice(format!("{w_pt:.2} 0 0 {h_pt:.2} 0 0 cm\n").as_bytes());
-        content.extend_from_slice(b"/Im0 Do\n");
-        content.extend_from_slice(b"Q\n");
+        if keep_image {
+            content.extend_from_slice(b"q\n");
+            content.extend_from_slice(format!("{w_pt:.2} 0 0 {h_pt:.2} 0 0 cm\n").as_bytes());
+            content.extend_from_slice(b"/Im0 Do\n");
+            content.extend_from_slice(b"Q\n");
+        }
 
         // Calque texte.
         content.extend_from_slice(b"BT\n");
-        // Mode 3 : ni rempli, ni contourné → invisible.
-        content.extend_from_slice(b"3 Tr\n");
+        // Mode 3 : ni rempli, ni contourné → invisible. Les deux autres
+        // modes écrivent le texte visible.
+        content.extend_from_slice(if mode == OcrMode::Searchable {
+            b"3 Tr\n".as_slice()
+        } else {
+            b"0 Tr\n".as_slice()
+        });
         content.extend_from_slice(b"0 g\n");
 
         // Le facteur de conversion entre pixels bitmap et points PDF.
@@ -531,6 +567,17 @@ pub fn make_searchable(
         let content_id = out.add_object(content_stream);
 
         // 6. Dictionnaire de page.
+        let mut resources = dictionary! {
+            "Font" => Object::Dictionary(dictionary! {
+                "F1" => Object::Reference(helv_id),
+            }),
+        };
+        if let Some(img_id) = img_id {
+            resources.set(
+                "XObject",
+                Object::Dictionary(dictionary! { "Im0" => Object::Reference(img_id) }),
+            );
+        }
         let page_dict = dictionary! {
             "Type" => Object::Name(b"Page".to_vec()),
             "Parent" => Object::Reference(pages_id),
@@ -540,14 +587,7 @@ pub fn make_searchable(
                 Object::Real(w_pt),
                 Object::Real(h_pt),
             ]),
-            "Resources" => Object::Dictionary(dictionary! {
-                "XObject" => Object::Dictionary(dictionary! {
-                    "Im0" => Object::Reference(img_id),
-                }),
-                "Font" => Object::Dictionary(dictionary! {
-                    "F1" => Object::Reference(helv_id),
-                }),
-            }),
+            "Resources" => Object::Dictionary(resources),
             "Contents" => Object::Reference(content_id),
         };
         let page_id = out.add_object(page_dict);

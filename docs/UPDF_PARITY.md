@@ -62,7 +62,7 @@ Unchecked below = still open. The plan document is the authoritative task list.
 
 ## 5. Advanced Tools
 *   **OCR:** UPDF offers 38 languages, 3 output modes (Editable, Searchable, Text/Pictures).
-*   **YouPDF:** Tesseract-based with all three modes in `OcrMode` (Editable, Text+Image, Searchable), language selection, page ranges, and automatic scanned-page detection (`Document::looks_scanned`: no extractable text + image covering ≥80 % of the page) driving a notification bar with *Perform OCR* and *Don't show again*.
+*   **YouPDF:** Tesseract-based; the three modes now change the output: Searchable keeps the scan with an invisible text layer, Text+Image keeps the scan with visible text, Editable drops the scan and writes a white page with visible recognised text. Language selection, page ranges, and automatic scanned-page detection (`Document::looks_scanned`: no extractable text + image covering ≥80 % of the page) driving a notification bar with *Perform OCR* and *Don't show again*.
 *   **Action:** Upgrade OCR engine to support all 3 modes and provide UI for language selection; enable `PDF/UA` tag generation.
 *   **Forms:** UPDF provides properties editors (name, tooltip, required, read-only).
 *   **YouPDF:** Field creation (text, checkbox, radio, dropdown, list, button, date, barcode, signature), red alignment guides with edge/centre snapping, rubber-band multi-select in Prepare form, align/distribute/match toolbar, a six-tab properties inspector (General, Appearance, Options, Actions, Format, Calculate), form data import/export (FDF/XFDF/CSV/JSON), Reset Form, and interactive filling in reader mode.
