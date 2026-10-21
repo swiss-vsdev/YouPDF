@@ -47,6 +47,112 @@ pub enum OcrMode {
     Searchable,
 }
 
+/// Une langue reconnue par tesseract.
+///
+/// Le catalogue est figé dans le binaire : il dit à l'utilisateur ce que
+/// tesseract **sait** faire, même quand le paquet de langue n'est pas
+/// encore installé sur la machine. La liste réellement disponible est
+/// obtenue par [`OcrEngine::available_languages`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OcrLanguage {
+    /// Code tesseract (`fra`, `chi_sim`, `old_deu`…).
+    pub code: &'static str,
+    /// Nom de la langue, en anglais.
+    pub name: &'static str,
+}
+
+/// Les langues usuuelles, dans l'ordre alphabétique anglais.
+///
+/// Le catalogue est plus large que la sélection par défaut : tesseract
+/// s'installe avec des paquets de langue séparés, et un utilisateur doit
+/// pouvoir **nommer** la langue qu'il veut même si elle n'est pas encore
+/// installée.
+pub const LANGUAGES: &[OcrLanguage] = &[
+    OcrLanguage { code: "afr", name: "Afrikaans" },
+    OcrLanguage { code: "ara", name: "Arabic" },
+    OcrLanguage { code: "aze", name: "Azerbaijani" },
+    OcrLanguage { code: "bel", name: "Belarusian" },
+    OcrLanguage { code: "ben", name: "Bengali" },
+    OcrLanguage { code: "bul", name: "Bulgarian" },
+    OcrLanguage { code: "cat", name: "Catalan" },
+    OcrLanguage { code: "ces", name: "Czech" },
+    OcrLanguage { code: "chi_sim", name: "Chinese (Simplified)" },
+    OcrLanguage { code: "chi_tra", name: "Chinese (Traditional)" },
+    OcrLanguage { code: "dan", name: "Danish" },
+    OcrLanguage { code: "deu", name: "German" },
+    OcrLanguage { code: "ell", name: "Greek" },
+    OcrLanguage { code: "eng", name: "English" },
+    OcrLanguage { code: "est", name: "Estonian" },
+    OcrLanguage { code: "eus", name: "Basque" },
+    OcrLanguage { code: "fas", name: "Persian" },
+    OcrLanguage { code: "fin", name: "Finnish" },
+    OcrLanguage { code: "fra", name: "French" },
+    OcrLanguage { code: "heb", name: "Hebrew" },
+    OcrLanguage { code: "hin", name: "Hindi" },
+    OcrLanguage { code: "hrv", name: "Croatian" },
+    OcrLanguage { code: "hun", name: "Hungarian" },
+    OcrLanguage { code: "ind", name: "Indonesian" },
+    OcrLanguage { code: "isl", name: "Icelandic" },
+    OcrLanguage { code: "ita", name: "Italian" },
+    OcrLanguage { code: "jpn", name: "Japanese" },
+    OcrLanguage { code: "kor", name: "Korean" },
+    OcrLanguage { code: "lat", name: "Latin" },
+    OcrLanguage { code: "lav", name: "Latvian" },
+    OcrLanguage { code: "lit", name: "Lithuanian" },
+    OcrLanguage { code: "mkd", name: "Macedonian" },
+    OcrLanguage { code: "msa", name: "Malay" },
+    OcrLanguage { code: "nld", name: "Dutch" },
+    OcrLanguage { code: "nor", name: "Norwegian" },
+    OcrLanguage { code: "pol", name: "Polish" },
+    OcrLanguage { code: "por", name: "Portuguese" },
+    OcrLanguage { code: "ron", name: "Romanian" },
+    OcrLanguage { code: "rus", name: "Russian" },
+    OcrLanguage { code: "slk", name: "Slovak" },
+    OcrLanguage { code: "slv", name: "Slovenian" },
+    OcrLanguage { code: "spa", name: "Spanish" },
+    OcrLanguage { code: "srp", name: "Serbian" },
+    OcrLanguage { code: "swe", name: "Swedish" },
+    OcrLanguage { code: "tha", name: "Thai" },
+    OcrLanguage { code: "tur", name: "Turkish" },
+    OcrLanguage { code: "ukr", name: "Ukrainian" },
+    OcrLanguage { code: "vie", name: "Vietnamese" },
+];
+
+/// Le nom lisible d'un code de langue.
+///
+/// Un code inconnu est renvoyé tel quel : l'utilisateur peut saisir une
+/// langue que tesseract sait mais que le catalogue ne connaît pas.
+pub fn language_name(code: &str) -> String {
+    match LANGUAGES.iter().find(|lang| lang.code == code) {
+        Some(lang) => lang.name.to_string(),
+        None => code.to_string(),
+    }
+}
+
+/// Assemble plusieurs langues en un identifiant tesseract.
+///
+/// Tesseract sépare les langues par `+` : `eng+fra` reconnaît un document
+/// qui mélange les deux. L'ordre est conservé, les doublons sont écartés.
+pub fn combine_languages(codes: &[String]) -> Result<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for code in codes {
+        let code = code.trim();
+        if code.is_empty() {
+            continue;
+        }
+        if !parts.contains(&code) {
+            parts.push(code);
+        }
+    }
+    if parts.is_empty() {
+        return Err(invalid_language(""));
+    }
+    let combined = parts.join("+");
+    validate_language(&combined)?;
+    Ok(combined)
+}
+
+
 impl OcrMode {
     pub const ALL: &'static [(OcrMode, &'static str, &'static str)] = &[
         (
