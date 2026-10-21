@@ -817,7 +817,7 @@ impl Document {
         );
         sig_body.extend_from_slice(BYTE_RANGE_PLACEHOLDER);
         sig_body.extend_from_slice(b" /Contents <");
-        sig_body.extend(std::iter::repeat_n(b'0', SIGNATURE_CAPACITY * 2));
+        sig_body.extend(std::iter::repeat(b'0').take(SIGNATURE_CAPACITY * 2));
         sig_body.extend_from_slice(b">");
         for (key, value) in [
             ("Name", options.name.as_str()),
@@ -1005,7 +1005,7 @@ impl Document {
             )));
         }
         let mut hex = hex_encode(&cms);
-        hex.extend(std::iter::repeat_n('0', SIGNATURE_CAPACITY * 2 - hex.len()));
+        hex.extend(std::iter::repeat('0').take(SIGNATURE_CAPACITY * 2 - hex.len()));
         file[contents_start + 1..contents_start + 1 + hex.len()]
             .copy_from_slice(hex.as_bytes());
 

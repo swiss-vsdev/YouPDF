@@ -260,7 +260,7 @@ fn extras_retirent_plan_et_vignettes() {
 fn estimation_ne_modifie_rien() {
     use youpdf_core::CompressionExtras;
 
-    let mut doc = Document::from_bytes(&page_repetitive()).expect("ouverture");
+    let doc = Document::from_bytes(&page_repetitive()).expect("ouverture");
     let before = doc.to_bytes().expect("sérialisation").len();
     let options = CompressionLevel::Screen.options();
     let estimate = doc
