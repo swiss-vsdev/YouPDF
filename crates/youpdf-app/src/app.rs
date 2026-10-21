@@ -1404,6 +1404,12 @@ pub struct YouPdfApp {
     scan_banner_off: bool,
     /// Fenêtre « Préférences » (⌘,).
     prefs_open: bool,
+    /// Réglages en cours d'édition dans la fenêtre « Préférences ».
+    ///
+    /// La fenêtre est redessinée chaque frame : sans cette copie, les
+    /// modifications seraient recréées à l'identique à chaque frame et ne
+    /// survivraient jamais jusqu'au bouton Save.
+    prefs_draft: Option<youpdf_ai::AppSettings>,
     /// Instant du dernier enregistrement automatique, en secondes egui.
     autosave_at: f64,
     /// Fenêtre de découpage en tuiles.
@@ -1782,6 +1788,7 @@ impl YouPdfApp {
             crop_range: 0,
             crop_target: 0,
             prefs_open: false,
+            prefs_draft: None,
             autosave_at: 0.0,
             scan_banner: false,
             scan_banner_off: false,
@@ -1963,8 +1970,9 @@ impl YouPdfApp {
             app.measure_unit = prefs.measure_unit.clone();
         }
         if initial.is_none() && prefs.startup == "blank" {
-            // Démarrage sur une page vierge : le document est créé ici pour
-            // que l'application n'ouvre pas l'écran d'accueil.
+            // Démarrage sur une page vierge : l'écran d'accueil doit rester
+            // fermé, y compris si le document ne peut pas être créé.
+            app.home_open = false;
             if let Ok(doc) = youpdf_core::blank_document(1, 595.0, 842.0) {
                 app.push_document(doc, None);
             }
@@ -13758,6 +13766,23 @@ mod tests {
         let crop = crop_fractions_in_image(matrix, [150.0, 300.0, 350.0, 400.0]);
         assert!((crop.left - 0.5).abs() < 1e-4, "{crop:?}");
         assert!(crop.right.abs() < 1e-4, "{crop:?}");
+    }
+
+    /// L'écran de démarrage suit la préférence enregistrée : `home` ouvre
+    /// l'accueil, `blank` ouvre une page vierge et ferme l'accueil.
+    #[test]
+    fn startup_view_suit_la_preference() {
+        let prefs = youpdf_ai::AppSettings::default();
+        assert_eq!(prefs.startup, "home", "l'accueil par défaut");
+        assert!(prefs.startup != "blank");
+        assert_eq!(
+            youpdf_ai::AppSettings {
+                startup: "blank".to_string(),
+                ..Default::default()
+            }
+            .startup,
+            "blank"
+        );
     }
 
     /// Un double-clic prend le mot entier, pas le caractère sous le curseur.
