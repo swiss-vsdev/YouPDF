@@ -49,6 +49,7 @@ use youpdf_core::{
     SearchOptions, SearchResult, TextChar, TextFormat,
     TextFragment, TextStyle, Unit, Watermark, STAMP_NAMES, smooth_polyline,
 };
+use youpdf_core::{LANGUAGES, combine_languages, language_name};
 
 use youpdf_core::annotate::BorderDash;
 
@@ -1442,7 +1443,10 @@ pub struct YouPdfApp {
     compare_report: Option<ComparisonReport>,
     /// Fenêtre « OCR » et ses réglages.
     ocr_open: bool,
+    /// Langue OCR courante, telle que tesseract la nomme.
     ocr_language: String,
+    /// Langues additionnelles cochées, pour un document multilingue.
+    ocr_extra_languages: Vec<String>,
     ocr_mode: OcrMode,
     ocr_report: Option<String>,
     /// Vrai quand les langues OCR ont déjà été lues.
@@ -1829,6 +1833,7 @@ impl YouPdfApp {
             compare_report: None,
             ocr_open: false,
             ocr_language: "eng".to_owned(),
+            ocr_extra_languages: Vec::new(),
             ocr_mode: OcrMode::default(),
             ocr_report: None,
             ocr_probed: false,
@@ -7967,6 +7972,48 @@ impl YouPdfApp {
                     }
                 }
             });
+            // Langues supplémentaires : tesseract accepte `eng+fra` pour un
+            // document qui mélange les deux. Le catalogue donne le nom lisible
+            // de chaque langue, même quand le paquet n'est pas installé.
+            if !app.ocr_extra_languages.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Also").size(12.0).color(pal().muted));
+                    for code in app.ocr_extra_languages.clone() {
+                        ui.label(
+                            RichText::new(language_name(&code))
+                                .size(12.0)
+                                .color(pal().icon_bright),
+                        );
+                    }
+                });
+            }
+            ui.add_space(4.0);
+            egui::CollapsingHeader::new("Add another language")
+                .default_open(!app.ocr_extra_languages.is_empty())
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                        for lang in LANGUAGES {
+                            let code = lang.code.to_string();
+                            // La langue principale ne peut pas être aussi
+                            // une langue additionnelle.
+                            if app.ocr_language == lang.code {
+                                continue;
+                            }
+                            let mut checked = app.ocr_extra_languages.contains(&code);
+                            if ui
+                                .add(egui::Checkbox::new(&mut checked, lang.name))
+                                .on_hover_text(lang.code)
+                                .changed()
+                            {
+                                if checked {
+                                    app.ocr_extra_languages.push(code);
+                                } else {
+                                    app.ocr_extra_languages.retain(|c| c != &code);
+                                }
+                            }
+                        }
+                    });
+                });
             ui.add_space(6.0);
             ui.label(RichText::new("Output").size(12.0).color(pal().muted));
             for &(mode, label, detail) in OcrMode::ALL {
@@ -8001,7 +8048,17 @@ impl YouPdfApp {
         });
 
         if run {
-            let language = self.ocr_language.clone();
+            // Une seule langue : le code tel quel. Plusieurs langues :
+            // tesseract les attend séparées par `+`.
+            let mut codes = vec![self.ocr_language.clone()];
+            codes.extend(self.ocr_extra_languages.iter().cloned());
+            let language = match combine_languages(&codes) {
+                Ok(language) => language,
+                Err(err) => {
+                    self.toast(ctx, format!("OCR failed: {err}"));
+                    return;
+                }
+            };
             let mode = self.ocr_mode;
             let result = {
                 let engine = TesseractEngine::detect();
