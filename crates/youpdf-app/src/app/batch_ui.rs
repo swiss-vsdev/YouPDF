@@ -90,6 +90,30 @@ impl YouPdfApp {
                 ui.checkbox(&mut self.batch_combine, "Combine every file into one PDF");
                 ui.checkbox(&mut self.batch_print, "Send each file to the system printer");
                 ui.checkbox(&mut self.batch_ocr, "Recognise text (OCR, searchable)");
+                if self.batch_ocr {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("OCR language").size(12.0).color(pal().muted));
+                        let mut picked: Option<String> = None;
+                        egui::ComboBox::from_id_salt("batch-ocr-lang")
+                            .selected_text(language_name(&self.ocr_language))
+                            .show_ui(ui, |ui| {
+                                for lang in LANGUAGES {
+                                    if ui
+                                        .selectable_label(
+                                            self.ocr_language == lang.code,
+                                            lang.name,
+                                        )
+                                        .clicked()
+                                    {
+                                        picked = Some(lang.code.to_string());
+                                    }
+                                }
+                            });
+                        if let Some(code) = picked {
+                            self.ocr_language = code;
+                        }
+                    });
+                }
                 ui.checkbox(
                     &mut self.batch_background,
                     "Apply the current page background",
@@ -299,6 +323,7 @@ impl YouPdfApp {
             insert: self.batch_insert.clone(),
             insert_at: self.batch_insert_at,
             ocr: self.batch_ocr,
+            ocr_language: self.ocr_language.clone(),
             background: self.batch_background.then(|| self.background.clone()),
             convert: self.batch_convert,
             remove_pages: self.batch_remove_pages.clone(),
@@ -394,6 +419,7 @@ struct BatchJob {
     insert: Option<PathBuf>,
     insert_at: usize,
     ocr: bool,
+    ocr_language: String,
     background: Option<Background>,
 }
 
@@ -486,7 +512,7 @@ impl BatchJob {
                 match PdfiumRenderer::load() {
                     Ok(renderer) => {
                         let engine = TesseractEngine::detect();
-                        match make_ocr(&doc, &renderer, &engine, "eng", OcrMode::Searchable) {
+                        match make_ocr(&doc, &renderer, &engine, &self.ocr_language, OcrMode::Searchable) {
                             Ok(recognised) => {
                                 doc = recognised;
                                 edited = true;
