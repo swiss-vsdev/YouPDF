@@ -46,7 +46,7 @@ use youpdf_core::{
     NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem, OutlineStyle,
     ImageCrop, OutlineTarget, PageRange, PageBitmap, PatchFont, PdfiumRenderer, RedactionFill,
     RedactionMark, RedactionOverlay, RedactionReport, RenderOptions, Renderer, SearchIndex,
-    SearchOptions, SearchResult, TextChar, TextFormat,
+    SearchOptions, SearchResult, TextFormat,
     TextFragment, TextStyle, Unit, Watermark, STAMP_NAMES, smooth_polyline,
 };
 use youpdf_core::{LANGUAGES, combine_languages, language_name};
@@ -547,7 +547,7 @@ fn text_hit(frags: &[TextFragment], point: [f32; 2]) -> Option<TextHit> {
             let dx = point[0] - x;
             let dy = point[1] - line_y;
             let distance = dx * dx + dy * dy;
-            if best.is_none_or(|(current, _)| distance < current) {
+            if best.map_or(true, |(current, _)| distance < current) {
                 best = Some((distance, TextHit { fragment, offset }));
             }
         }
@@ -665,8 +665,7 @@ fn hit_runs(
     let first = rank(start);
     let last = rank(end);
     let mut runs = Vec::new();
-    for position in first..=last {
-        let fragment = order[position];
+    for (position, &fragment) in order.iter().enumerate().take(last + 1).skip(first) {
         let length = hit_len(&frags[fragment]);
         let from = if position == first { start.offset } else { 0 }.min(length);
         let to = if position == last { end.offset } else { length }.min(length);
@@ -1296,6 +1295,10 @@ impl Tab {
 // --------------------------------------------------------------------------
 
 /// Kind de contenu : texte ou image. Détermine l'outil qui s'applique.
+///
+/// Les variantes appartiennent au modèle de l'éditeur de contenu : elles sont
+/// réservées pour la sélection des éléments, pas encore construites.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ContentKind {
     Text,
@@ -1304,6 +1307,10 @@ enum ContentKind {
 
 /// Element de contenu (texte ou image) sélectionné en mode Édition : le
 /// cadre, les poignées de redimensionnement et de rotation.
+///
+/// Fondation de l'éditeur de contenu : le type est réservé, il n'est pas
+/// encore construit.
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 struct ContentElement {
     kind: ContentKind,
@@ -1315,6 +1322,10 @@ struct ContentElement {
 
 /// Opérations en cours sur un élément de contenu (déplacement, redimensionnement,
 /// rotation). Le document n'est écrit qu'au relâchement du glissé.
+///
+/// Fondation de l'éditeur de contenu : les variantes sont réservées, elles
+/// ne sont pas encore construites.
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 enum ContentDrag {
     Move { start: [f32; 2], offset: [f32; 2] },
@@ -3150,7 +3161,6 @@ impl YouPdfApp {
     }
 
     /// Panneau Formulaires : lecture et remplissage des champs.
-
     /// Panneau Pièces jointes : ajout, ouverture, extraction et retrait.
     fn attachments_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         self.ensure_structure();
@@ -3773,14 +3783,14 @@ impl YouPdfApp {
         let mut changed = false;
         let mut kept: Vec<Annotation> = Vec::with_capacity(tab.annots.len());
         for mut annot in std::mem::take(&mut tab.annots) {
-            if annot.page == page && annot.kind == AnnotationKind::Ink {
-                if annot.erase_ink_segment(from, to, RADIUS) > 0 {
-                    changed = true;
-                    if annot.ink_points.is_empty() {
-                        continue;
-                    }
-                    annot.recompute_ink_bbox();
+            if annot.page == page && annot.kind == AnnotationKind::Ink
+                && annot.erase_ink_segment(from, to, RADIUS) > 0
+            {
+                changed = true;
+                if annot.ink_points.is_empty() {
+                    continue;
                 }
+                annot.recompute_ink_bbox();
             }
             kept.push(annot);
         }
@@ -9314,7 +9324,7 @@ impl YouPdfApp {
                                     rect,
                                     Rounding::same(2.0),
                                     Stroke::new(
-                                        if selected { 2.0 } else if active { 1.5 } else { 1.0 },
+                                        if selected { 2.0 } else if active { 1.5 } else { 1.0_f32 },
                                         if selected {
                                             Color32::from_rgb(230, 120, 40)
                                         } else {
@@ -11334,10 +11344,8 @@ impl YouPdfApp {
                     if status_button(ui, ph::CARET_DOUBLE_LEFT, "First page") {
                         goto = Some(1);
                     }
-                    if status_button(ui, ph::CARET_LEFT, "Previous page") {
-                        if page > 1 {
-                            goto = Some(page - 1);
-                        }
+                    if status_button(ui, ph::CARET_LEFT, "Previous page") && page > 1 {
+                        goto = Some(page - 1);
                     }
                     // Le champ reprend la page courante tant qu'il n'a pas le
                     // focus ; sinon une saisie en cours serait écrasée.
@@ -11359,10 +11367,8 @@ impl YouPdfApp {
                             .size(11.0)
                             .color(pal().muted),
                     );
-                    if status_button(ui, ph::CARET_RIGHT, "Next page") {
-                        if page < total {
-                            goto = Some(page + 1);
-                        }
+                    if status_button(ui, ph::CARET_RIGHT, "Next page") && page < total {
+                        goto = Some(page + 1);
                     }
                     if status_button(ui, ph::CARET_DOUBLE_RIGHT, "Last page") {
                         goto = Some(total);
@@ -12000,10 +12006,6 @@ fn csv_cell(value: &str) -> String {
         value.to_owned()
     }
 }
-
-/// Un lot à traiter : les fichiers, le dossier de sortie et les opérations
-/// cochées.
-
 
 /// Recadre les annotations du repère affiché (celui du canevas) vers le repère
 /// page, rotation et boîte visible comprises.
@@ -13468,6 +13470,7 @@ fn draw_annots(
 mod tests {
     use super::*;
     use std::collections::HashSet;
+    use youpdf_core::TextChar;
 
     fn cachet(rows: &[Vec<u32>]) -> HashSet<u32> {
         rows.iter().flatten().copied().collect()

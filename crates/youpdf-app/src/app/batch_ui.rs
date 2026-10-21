@@ -397,6 +397,8 @@ fn parse_page_numbers(text: &str, total: usize) -> Vec<usize> {
     out
 }
 
+/// Un lot à traiter : les fichiers, le dossier de sortie et les opérations
+/// cochées.
 struct BatchJob {
     files: Vec<PathBuf>,
     dir: PathBuf,
@@ -531,9 +533,11 @@ impl BatchJob {
                 }
             }
             if !self.watermark_text.trim().is_empty() {
-                let mut watermark = Watermark::default();
-                watermark.text = self.watermark_text.clone();
-                watermark.tiled = true;
+                let watermark = Watermark {
+                    text: self.watermark_text.clone(),
+                    tiled: true,
+                    ..Default::default()
+                };
                 match doc.add_text_watermark(&watermark) {
                     Ok(_) => edited = true,
                     Err(err) => errors.push(format!("watermark: {err}")),
