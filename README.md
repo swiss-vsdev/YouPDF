@@ -42,17 +42,18 @@ on.
 
 - Four working modes — **Comment**, **Edit**, **Form**, **Redact** — each with
   its own tool strip.
-- Edit mode covers in-place text editing (font, size, colour, alignment), image
-  placement, hyperlink insertion and layout tweaks.
+- Edit mode covers in-place text editing (font family, size, colour, bold,
+  italic, underline, strike-out, alignment and line spacing), image
+  placement (replace, rotate, flip, crop, opacity) and hyperlink insertion.
 - **Annotations**: highlight, underline, strike-out, squiggly, note, free text,
-  square, circle, line, arrow, polygon, polyline, ink, stamp, link, callout and
-  file attachment, with colours, opacity and dashed borders.
+  square, circle, line, arrow, ink, stamp, link and callout, with colours and
+  opacity.
 - **Comments** panel with filters, threaded replies, review states, and export
   to FDF, XFDF, CSV or Markdown.
 - **Forms**: fill existing AcroForm fields (including inherited fields with
   widget-level entries), and build new text fields, checkboxes, radio buttons,
-  dropdowns, list boxes, buttons, date fields, barcodes, signature fields and
-  image fields. Form data can be read back and exported.
+  dropdowns, list boxes, buttons, date fields, barcodes and signature fields.
+  Form data can be read back and exported.
 - **Bookmarks** can be read, generated from the text layer and cleared;
   **attachments** can be listed, extracted, added and removed.
 - Undo and redo on every mutation.
@@ -73,8 +74,12 @@ on.
 
 ### Produce and protect
 
-- **Redaction** that destroys the marked areas for good, with an optional
-  sanitising pass over the document afterwards.
+- **Redaction** in two phases: mark the areas, choose their appearance (fill
+  colour, overlay text), then confirm. The engine rewrites the content stream
+  instead of rasterising the page, so the text outside the marked areas stays
+  selectable — only a page whose content cannot be sliced cleanly falls back
+  to rasterisation, and the report says so. An optional sanitising pass over
+  the document follows.
 - **Compression**: several presets, recompression of the content streams,
   pruning of unused objects, a size estimate before saving, and a report of
   what was saved.
@@ -86,7 +91,9 @@ on.
   PDF/E-1.
 - **OCR** through the system Tesseract binary, in three modes (editable text,
   text plus image, or a searchable PDF), with automatic detection of scanned
-  pages and the language list read from `tesseract --list-langs`.
+  pages, a catalogue of 48 languages, multi-language combinations
+  (`eng+fra`), and the list of languages actually installed read from
+  `tesseract --list-langs`.
 - **Compare** two documents and browse the differences: added, removed and
   modified lines, plus pages that were added or removed.
 - **Extract data**: tables and key/value pairs out of the text layer.
@@ -110,8 +117,10 @@ on.
 | Office | Word `.docx`, Excel `.xlsx`, PowerPoint `.pptx` — reflowed text, or exact layout for Word (each run positioned), with Excel column detection and one slide per page |
 | Standards | PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4, PDF/E-1 |
 
-Text and Office export rebuild the text layer: images, tables and the original
-page geometry are not reconstructed unless the exact-layout option is used.
+Text export rebuilds the text layer only: images, tables and the page layout are
+left out. The Office exporters rebuild the text as paragraphs, rows or slides
+and carry the page images over; the original geometry is kept only by the
+exact-layout option (Word).
 
 ### AI assistant (optional)
 
@@ -197,9 +206,11 @@ xattr -d com.apple.quarantine pdfium/libpdfium.dylib
 codesign --force --sign - pdfium/libpdfium.dylib
 ```
 
-Without PDFium the application still starts: it logs `pdfium indisponible,
-rendu factice activé`, draws flat grey pages, and disables the operations that
-need a real rasteriser — redaction, image-PDF export and the searchable PDF.
+Without PDFium the application still starts: it logs `pdfium indisponible : <err>`
+and paints the pages with a flat near-white placeholder. The operations that
+need a real rasteriser then refuse to run instead of producing empty pages —
+redaction (when a page has to be rasterised), the searchable PDF and the
+image-PDF export.
 
 ### Tesseract (optional)
 
@@ -245,12 +256,16 @@ icon reads oversized in the Dock.
 3. Pick a mode in the toolbar: **Comment** to annotate and discuss, **Edit** to
    change text and images, **Form** to fill or build a form, **Redact** to
    black out content for good.
-4. Save with <kbd>⌘S</kbd>, or **Save As…** for a copy. <kbd>⌘P</kbd> prints.
+4. Save with <kbd>⌘S</kbd>, or **Save As…** for a copy. **Print…** in the
+   <kbd>⌘</kbd> menu sends the document to the system printer.
 
 Shortcuts: <kbd>⌘O</kbd> open, <kbd>⌘W</kbd> close, <kbd>⌘S</kbd> save,
-<kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> undo and redo, <kbd>⌘C</kbd> / <kbd>⌘A</kbd>
-copy and select all, <kbd>⌘,</kbd> preferences, <kbd>F5</kbd> slideshow,
-<kbd>+</kbd> / <kbd>−</kbd> / <kbd>⌘0</kbd> zoom, <kbd>⌘G</kbd> go to page.
+<kbd>⇧⌘S</kbd> save as, <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> undo and redo,
+<kbd>⌘C</kbd> / <kbd>⌘A</kbd> copy and select all, <kbd>⌘,</kbd> preferences,
+<kbd>⌘F</kbd> focus the search field, <kbd>⌘G</kbd> / <kbd>⇧⌘G</kbd> next and
+previous search result, <kbd>⇧⌘F</kbd> fullscreen, <kbd>F5</kbd> slideshow,
+<kbd>⌘+</kbd> / <kbd>⌘−</kbd> / <kbd>⌘0</kbd> zoom, and <kbd>⌃1</kbd> …
+<kbd>⌃0</kbd> for the modes and the tools of the Tools menu.
 
 ## Architecture
 
@@ -289,12 +304,16 @@ cargo test --workspace
 ```
 
 The suite is mostly integration tests over generated PDFs, so it needs no
-fixtures on disk. `youpdf-core` alone carries 244 integration tests spread
+fixtures on disk. `youpdf-core` alone carries 231 integration tests spread
 across 31 files, covering redaction, encryption, forms, annotations, crop,
 watermark, compression, OCR modes, comparison, extraction, measurement, page
 organisation, PDF/A conformance, text export and Office export. The
-application crate adds unit tests for the inspector, the home screen, the
-keyboard shortcuts and the preferences draft.
+application crate adds unit tests next to the code: the inspector placement
+and colour parsing, the home screen filter, star and relative time, and the
+internals of the document tab (undo history, form snapping, tab moves,
+bookmarks, page layouts, selection and reading order, comment threads and
+filters, crop fractions, the startup view preference, word and line
+expansion).
 
 ## Roadmap
 
@@ -326,7 +345,8 @@ controls), and the AI assistant.
 - Inherited form fields with widget-level entries
 - Overflow menu with capped height and nested submenus
 - Full PKCS#7 / PAdES detached RSA‑SHA‑256 digital signatures
-- French language support for all UI strings above
+- French translation for the menus, the tools, the common buttons, the
+  preferences and the inspector controls
 
 ### Next
 
