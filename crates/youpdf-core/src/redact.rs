@@ -310,7 +310,7 @@ impl Document {
                 mark.fill,
             );
             if let Some(overlay) = &mark.overlay {
-                let (x1, y1, x2, y2) = mark.rect;
+                let [x1, y1, _x2, _y2] = mark.rect;
                 let scale_px = bitmap.height as f32 / display_h.max(1.0);
                 burn::draw_text(
                     &mut pixels,

@@ -1,14 +1,16 @@
 //! Chirurgie du flux de contenu : suppression ciblée des instructions.
 //!
-//! SQUELETTE — l'implémentation réelle est écrite par l'agent dédié.
-//! Ne modifiez que ce fichier.
+//! Ce module réécrit le flux de contenu d'une page en retirant les
+//! instructions qui tombent dans une zone caviardée. Le reste de la page
+//! reste sélectionnable et cherchable.
 
-use lopdf::content::Operation;
+use lopdf::content::{Content, Operation};
+use lopdf::Object;
 
 use crate::document::Document;
-use crate::redact::geometry::BBox;
+use crate::redact::geometry::{BBox, Interpreter, OpKind, KNOWN_OPERATORS};
 
-use youpdf_shared::Result;
+use youpdf_shared::{Error, Result};
 
 /// Résultat de l'analyse d'un flux de contenu.
 #[derive(Debug, Clone, Default)]
@@ -41,29 +43,166 @@ pub struct TouchedImage {
 /// zones.
 ///
 /// `regions` sont les zones à effacer, en repère **page**.
-///
-/// Si le contenu de la page ne peut pas être décodé (image inline, flux
-/// corrompu) ou contient un opérateur qui peut peindre sans être
-/// interprétable, `needs_raster` passe à `true` : la page devra être
-/// rasterisée.
 pub(crate) fn slice_page(
     doc: &Document,
     page_id: lopdf::ObjectId,
     regions: &[BBox],
 ) -> Result<SliceOutcome> {
-    todo!()
+    let mut outcome = SliceOutcome::default();
+    let stream_ids = doc.inner().get_page_contents(page_id);
+
+    'outer: for id in stream_ids {
+        let obj = match doc.inner().get_object(id) {
+            Ok(o) => o,
+            Err(e) => return Err(Error::Pdf(format!("page : {e}"))),
+        };
+        let stream = match obj {
+            Object::Stream(s) => s.clone(),
+            _ => continue,
+        };
+
+        let bytes = match stream.get_plain_content() {
+            Ok(b) => b,
+            Err(_) => {
+                outcome.needs_raster = true;
+                break 'outer;
+            }
+        };
+
+        let content = match Content::decode(&bytes) {
+            Ok(c) => c,
+            Err(_) => {
+                outcome.needs_raster = true;
+                break 'outer;
+            }
+        };
+
+        let mut interp = Interpreter::new();
+        for operation in content.operations.iter() {
+            let geometry = interp.interpret(operation);
+
+            if !is_known_operator(&operation.operator) {
+                outcome.needs_raster = true;
+                outcome.unsupported.push(operation.operator.clone());
+                break 'outer;
+            }
+
+            match geometry {
+                None => {
+                    outcome.kept.push(operation.clone());
+                }
+                Some(g) => match g.kind {
+                    OpKind::Text => {
+                        let mut drop = false;
+                        for region in regions {
+                            if g.bbox.overlaps(region) {
+                                drop = true;
+                                break;
+                            }
+                        }
+                        if drop {
+                            outcome.text_ops_removed += 1;
+                        } else {
+                            outcome.kept.push(operation.clone());
+                        }
+                    }
+                    OpKind::Path => {
+                        let filled = g.filled;
+                        let stroked = g.stroked;
+                        if !filled && !stroked {
+                            outcome.kept.push(operation.clone());
+                            continue;
+                        }
+                        let partial = regions
+                            .iter()
+                            .any(|r| g.bbox.overlaps(r) && !g.bbox.inside(r));
+                        let inside = regions.iter().any(|r| g.bbox.inside(r));
+                        if partial {
+                            outcome.needs_raster = true;
+                            break 'outer;
+                        } else if inside {
+                            outcome.vector_ops_removed += 1;
+                        } else {
+                            outcome.kept.push(operation.clone());
+                        }
+                    }
+                    OpKind::Image => {
+                        outcome.kept.push(operation.clone());
+
+                        let resource_name = operation
+                            .operands
+                            .first()
+                            .and_then(|o| o.as_name().ok())
+                            .map(|n| String::from_utf8_lossy(n).to_string())
+                            .unwrap_or_default();
+
+                        let subtype = xobject_subtype(doc, page_id, resource_name.as_bytes());
+                        match subtype.as_deref() {
+                            Some(b"Form") => {
+                                outcome.needs_raster = true;
+                                break 'outer;
+                            }
+                            Some(b"Image") => {
+                                for region in regions {
+                                    if g.bbox.overlaps(region) {
+                                        outcome.images_touched.push(TouchedImage {
+                                            resource_name: resource_name.clone(),
+                                            bbox: g.bbox,
+                                        });
+                                        break;
+                                    }
+                                }
+                            }
+                            _ => {
+                                outcome.needs_raster = true;
+                                break 'outer;
+                            }
+                        }
+                    }
+                    OpKind::Other => {
+                        outcome.kept.push(operation.clone());
+                    }
+                },
+            }
+        }
+
+        if outcome.needs_raster {
+            break 'outer;
+        }
+    }
+
+    Ok(outcome)
 }
 
 /// Réécrit le flux de contenu d'une page.
-///
-/// `kept` est la suite d'instructions à écrire. Si elle est vide, le flux
-/// est vidé.
 pub(crate) fn write_back(
     doc: &mut Document,
     page_id: lopdf::ObjectId,
     kept: &[Operation],
 ) -> Result<()> {
-    todo!()
+    let encoded = Content {
+        operations: kept.to_vec(),
+    }
+    .encode()
+    .map_err(|e| Error::Pdf(format!("encodage du flux : {e}")))?;
+
+    let ids = doc.inner().get_page_contents(page_id);
+
+    let mut first = true;
+    for id in ids {
+        let obj = doc.inner().get_object(id).cloned();
+        if let Ok(Object::Stream(mut stream)) = obj {
+            if first {
+                stream.set_plain_content(encoded.clone());
+                first = false;
+            } else {
+                stream.set_plain_content(Vec::new());
+            }
+            doc.inner_mut().set_object(id, Object::Stream(stream));
+        }
+    }
+
+    Ok(())
 }
 
 /// Remplace le tableau `/Annots` d'une page.
@@ -72,10 +211,73 @@ pub(crate) fn set_annots(
     page_id: lopdf::ObjectId,
     kept: &[lopdf::ObjectId],
 ) -> Result<()> {
-    todo!()
+    let page_obj = doc
+        .inner_mut()
+        .get_object_mut(page_id)
+        .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+    let dict = page_obj
+        .as_dict_mut()
+        .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+
+    if kept.is_empty() {
+        dict.remove(b"Annots");
+    } else {
+        dict.set(
+            "Annots",
+            Object::Array(kept.iter().map(|id| Object::Reference(*id)).collect()),
+        );
+    }
+
+    Ok(())
 }
 
 /// Opérateurs que l'interpréteur sait traiter.
 pub(crate) fn is_known_operator(operator: &str) -> bool {
-    todo!()
+    KNOWN_OPERATORS.contains(&operator)
 }
+
+/// Résout le sous-type d'un XObject (Image/Form) dans les ressources de la
+/// page.
+fn xobject_subtype(
+    doc: &Document,
+    page_id: lopdf::ObjectId,
+    name: &[u8],
+) -> Option<Vec<u8>> {
+    let (res_opt, res_ids) = doc.inner().get_page_resources(page_id).ok()?;
+
+    if let Some(res) = res_opt {
+        if let Some(st) = lookup_xobject_subtype(doc, res, name) {
+            return Some(st);
+        }
+    }
+    for rid in res_ids {
+        if let Ok(res) = doc.inner().get_dictionary(rid) {
+            if let Some(st) = lookup_xobject_subtype(doc, res, name) {
+                return Some(st);
+            }
+        }
+    }
+    None
+}
+
+fn lookup_xobject_subtype(
+    doc: &Document,
+    res: &lopdf::Dictionary,
+    name: &[u8],
+) -> Option<Vec<u8>> {
+    let xobj = res.get(b"XObject").ok()?;
+    let xobj_dict = match xobj {
+        Object::Dictionary(d) => d,
+        Object::Reference(id) => doc.inner().get_object(*id).ok()?.as_dict().ok()?,
+        _ => return None,
+    };
+    let val = xobj_dict.get(name).ok()?;
+    let stream_id = match val {
+        Object::Reference(id) => *id,
+        _ => return None,
+    };
+    let d = doc.inner().get_dictionary(stream_id).ok()?;
+    let st = d.get(b"Subtype").ok()?;
+    Some(st.as_name().ok()?.to_vec())
+}
+
