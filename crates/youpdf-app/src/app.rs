@@ -1326,6 +1326,23 @@ enum ContentDrag {
 #[allow(dead_code)]
 const TEXT_CURSOR: CursorIcon = CursorIcon::Text;
 
+/// Callout en cours de construction.
+///
+/// L'outil Callout se pose en trois clics : le départ de la flèche, son
+/// genou, puis le coin du texte. Chaque clic renseigne un point ; les
+/// points déjà posés sont conservés entre deux trames.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CalloutPending {
+    /// Page visée.
+    page: usize,
+    /// Départ de la flèche.
+    start: [f32; 2],
+    /// Genou de la flèche.
+    knee: Option<[f32; 2]>,
+    /// Coin du texte.
+    text_corner: Option<[f32; 2]>,
+}
+
 pub struct YouPdfApp {
     renderer: Box<dyn Renderer>,
     renderer_label: &'static str,
@@ -1440,6 +1457,10 @@ pub struct YouPdfApp {
     /// Fenêtre « Comparer » : fichier choisi et rapport affiché.
     compare_open: bool,
     compare_path: Option<PathBuf>,
+    /// Callout en cours : les points déjà posés par les clics successifs.
+    /// L'outil prend trois clics (départ, genou, coin du texte) : l'état
+    /// doit survivre d'une trame à l'autre, sinon chaque clic repart de zéro.
+    callout_pending: Option<CalloutPending>,
     compare_report: Option<ComparisonReport>,
     /// Fenêtre « OCR » et ses réglages.
     ocr_open: bool,
@@ -1839,6 +1860,7 @@ impl YouPdfApp {
             ocr_probed: false,
             ocr_installed: false,
             ocr_languages: Vec::new(),
+            callout_pending: None,
             create_open: false,
             create_pages: 1,
             password_prompt: None,
@@ -2357,6 +2379,7 @@ impl YouPdfApp {
     fn reset_document_session(&mut self) {
         self.redact_marks.clear();
         self.redact_phase = RedactPhase::Marking;
+        self.callout_pending = None;
         self.form_edit = None;
         self.selected_annot = 0;
         self.has_annot_selection = false;
@@ -8945,7 +8968,6 @@ impl YouPdfApp {
         let mut pending_click: Option<(usize, [f32; 2])> = None;
         let mut pending_hit: Option<(usize, [f32; 2])> = None;
         let mut pending_erase_segment: Option<(usize, [f32; 2], [f32; 2])> = None;
-        let mut pending_callout: Option<(usize, [f32; 2], [f32; 2], [f32; 2])> = None;
         let mut pending_edit: Option<(usize, [f32; 2])> = None;
         let mut pending_image: Option<(usize, [f32; 2])> = None;
         let mut pending_redact: Option<(usize, [f32; 4])> = None;
@@ -8953,6 +8975,7 @@ impl YouPdfApp {
         let mut pending_form_select: Option<(usize, [f32; 4])> = None;
         let mut pending_measure: Option<(usize, [f32; 2], [f32; 2])> = None;
         let redact_marks = &self.redact_marks;
+        let callout_pending = self.callout_pending;
         let search_rects = &self.search_rects;
         let search_rects_page = self.search_rects_page;
         let selected_annot = self.selected_annot;
@@ -9924,9 +9947,37 @@ impl YouPdfApp {
                                 }
                             }
                             ToolAction::Callout => {
-                                // Mode callout : rien à faire ici, le traitement
-                                // se fait via pending_callout dans le gestionnaire
-                                // d'événements plus bas.
+                                // Mode callout : la pose se fait dans le
+                                // gestionnaire d'événements plus bas. Ici, on
+                                // dessine ce qui est déjà posé, pour que les
+                                // trois clics se lisent comme une seule forme.
+                                if let Some(p) = callout_pending {
+                                    if p.page == page as usize {
+                                        let knee = p.knee.unwrap_or(p.start);
+                                        let mut points = vec![to_screen(p.start), to_screen(knee)];
+                                        if let Some(corner) = p.text_corner {
+                                            points.push(to_screen(corner));
+                                        }
+                                        if points.len() > 1 {
+                                            ui.painter().add(Shape::line(
+                                                points.clone(),
+                                                Stroke::new(1.5_f32, pal().accent),
+                                            ));
+                                        }
+                                        for p in points {
+                                            ui.painter().circle_filled(
+                                                p,
+                                                4.0,
+                                                Color32::from_rgba_unmultiplied(
+                                                    pal().accent.r(),
+                                                    pal().accent.g(),
+                                                    pal().accent.b(),
+                                                    160,
+                                                ),
+                                            );
+                                        }
+                                    }
+                                }
                             }
                             ToolAction::Ink => {
                                 if resp.drag_started() {
@@ -10373,23 +10424,6 @@ impl YouPdfApp {
         if let Some((page, from, to)) = pending_erase_segment {
             self.erase_ink_segment(page, from, to, &ctx);
         }
-        if let Some((page, p1, p2, p3)) = pending_callout {
-            // Création de l'annotation Callout à partir des 3 points collectés.
-            let mut annot = Annotation::new(page, AnnotationKind::Callout, [
-                p1[0].min(p2[0]).min(p3[0]),
-                p1[1].min(p2[1]).min(p3[1]),
-                (p1[0].max(p2[0]).max(p3[0]) - p1[0].min(p2[0]).min(p3[0])).max(20.0),
-                (p1[1].max(p2[1]).max(p3[1]) - p1[1].min(p2[1]).min(p3[1])).max(20.0),
-            ]);
-            annot.style = self.annot_style(AnnotationKind::Callout);
-            annot.content = format!(
-                "Callout: arrow from ({:.1}, {:.1}) to knee ({:.1}, {:.1}), text at ({:.1}, {:.1})",
-                p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]
-            );
-            annot.ink_points = vec![vec![p1, p2, p3]];
-            annot.recompute_ink_bbox();
-            self.push_annot(annot);
-        }
         if let Some((page, point)) = pending_hit {
             // Vérifier d'abord si un champ de formulaire a été touché (mode Lecture).
             if matches!(self.mode, None | Some(0) | Some(2)) {
@@ -10486,34 +10520,58 @@ impl YouPdfApp {
                 }
                 ToolAction::Callout => {
                     // Mode callout : 3 clics pour poser la flèche + texte.
-                    if pending_callout.is_none() {
-                        // Premier clic : mémoriser le point de départ.
-                        pending_callout = Some((page, point, [0.0, 0.0], [0.0, 0.0]));
-                    } else if pending_callout.as_ref().unwrap().1 == [0.0, 0.0] {
-                        // Deuxième clic : mémoriser le genou.
-                        let mut cp = pending_callout.take().unwrap();
-                        cp.1 = point;
-                        pending_callout = Some(cp);
-                    } else if pending_callout.as_ref().unwrap().2 == [0.0, 0.0] {
-                        // Troisième clic : mémoriser le coin du texte, créer l'annotation.
-                        let mut cp = pending_callout.take().unwrap();
-                        cp.2 = point;
-                        // Création de l'annotation Callout.
-                        let mut annot = Annotation::new(cp.0, AnnotationKind::Callout, [
-                            cp.1[0].min(cp.2[0]).max(cp.1[0]).min(cp.2[0]),
-                            cp.1[1].min(cp.2[1]).max(cp.1[1]).min(cp.2[1]),
-                            (cp.1[0].max(cp.2[0]) - cp.1[0].min(cp.2[0])).max(20.0),
-                            (cp.1[1].max(cp.2[1]) - cp.1[1].min(cp.2[1])).max(20.0),
-                        ]);
-                        annot.style = self.annot_style(AnnotationKind::Callout);
-                        annot.content = format!(
-                            "Callout: arrow from ({:.1}, {:.1}) to knee ({:.1}, {:.1}), text at ({:.1}, {:.1})",
-                            cp.1[0], cp.1[1], cp.2[0], cp.2[1], cp.2[0], cp.2[1]
-                        );
-                        annot.ink_points = vec![vec![cp.1, cp.2, cp.2]];
-                        annot.recompute_ink_bbox();
-                        self.push_annot(annot);
-                    }
+                    // L'état vit dans l'application, pas dans la trame : sans
+                    // cela, chaque clic repartirait du premier.
+                    let pending = match self.callout_pending {
+                        // Premier clic : le départ de la flèche.
+                        None => Some(CalloutPending {
+                            page,
+                            start: point,
+                            knee: None,
+                            text_corner: None,
+                        }),
+                        // Deuxième clic : le genou de la flèche.
+                        Some(p) if p.knee.is_none() => Some(CalloutPending {
+                            knee: Some(point),
+                            ..p
+                        }),
+                        // Troisième clic : le coin du texte, l'annotation est complète.
+                        Some(p) if p.text_corner.is_none() => {
+                            let p = CalloutPending {
+                                text_corner: Some(point),
+                                ..p
+                            };
+                            let knee = p.knee.unwrap_or(p.start);
+                            let corner = p.text_corner.unwrap_or(p.start);
+                            let mut annot = Annotation::new(p.page, AnnotationKind::Callout, [
+                                p.start[0].min(knee[0]).min(corner[0]),
+                                p.start[1].min(knee[1]).min(corner[1]),
+                                (p.start[0].max(knee[0]).max(corner[0])
+                                    - p.start[0].min(knee[0]).min(corner[0]))
+                                .max(20.0),
+                                (p.start[1].max(knee[1]).max(corner[1])
+                                    - p.start[1].min(knee[1]).min(corner[1]))
+                                .max(20.0),
+                            ]);
+                            annot.style = self.annot_style(AnnotationKind::Callout);
+                            annot.content = format!(
+                                "Callout: arrow from ({:.1}, {:.1}) to knee ({:.1}, {:.1}), text at ({:.1}, {:.1})",
+                                p.start[0], p.start[1], knee[0], knee[1], corner[0], corner[1]
+                            );
+                            annot.ink_points = vec![vec![p.start, knee, corner]];
+                            annot.recompute_ink_bbox();
+                            self.push_annot(annot);
+                            None
+                        }
+                        // Le callout est déjà complet : on repart d'un nouveau.
+                        Some(_) => Some(CalloutPending {
+                            page,
+                            start: point,
+                            knee: None,
+                            text_corner: None,
+                        }),
+                    };
+                    self.callout_pending = pending;
                 }
                 _ => {}
             }
