@@ -44,8 +44,9 @@ use youpdf_core::{
     EncryptionOptions, EncryptionStrength, ExtractedTable, FieldProperties, FormDataFormat,
     FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, MeasureKind, Measurement,
     NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem, OutlineStyle,
-    ImageCrop, OutlineTarget, PageRange, PageBitmap, PatchFont, PdfiumRenderer, RedactionRegion,
-    RenderOptions, Renderer, SearchIndex, SearchOptions, SearchResult, TextChar, TextFormat,
+    ImageCrop, OutlineTarget, PageRange, PageBitmap, PatchFont, PdfiumRenderer, RedactionFill,
+    RedactionMark, RedactionOverlay, RedactionReport, RenderOptions, Renderer, SearchIndex,
+    SearchOptions, SearchResult, TextChar, TextFormat,
     TextFragment, TextStyle, Unit, Watermark, STAMP_NAMES, smooth_polyline,
 };
 
@@ -1048,6 +1049,15 @@ enum FormKind {
     Barcode,
 }
 
+/// Étape du caviardage : on marque d'abord, on confirme ensuite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RedactPhase {
+    /// Les zones sont en cours de marquage.
+    Marking,
+    /// La confirmation est demandée.
+    Confirming,
+}
+
 impl FormKind {
     /// Libellé affiché après création.
     fn label(&self) -> &'static str {
@@ -1618,8 +1628,20 @@ pub struct YouPdfApp {
     replace_open: bool,
     /// Texte de remplacement.
     replace_text: String,
-    /// Régions marquées pour le caviardage.
-    redact_regions: Vec<RedactionRegion>,
+    /// Régions marquées pour le caviardage, avec leur apparence.
+    redact_marks: Vec<RedactionMark>,
+    /// Étape courante du caviardage : marquage, puis confirmation.
+    redact_phase: RedactPhase,
+    /// Remplissage retenu pour les nouvelles marques.
+    redact_fill: RedactionFill,
+    /// Remplissage personnalisé (RGB).
+    redact_custom_color: [u8; 3],
+    /// Texte superposé aux zones caviardées, vide si l'on n'en veut pas.
+    redact_overlay_text: String,
+    /// Police du texte superposé.
+    redact_overlay_font: PatchFont,
+    /// Corps du texte superposé, en points.
+    redact_overlay_size: f32,
     /// Fenêtre de confirmation du caviardage.
     redact_modal: bool,
     /// Bloc de texte en cours de réécriture (mode Édition).
@@ -1910,7 +1932,13 @@ impl YouPdfApp {
             organize_split_mb: 5.0,
             replace_open: false,
             replace_text: String::new(),
-            redact_regions: Vec::new(),
+            redact_marks: Vec::new(),
+            redact_phase: RedactPhase::Marking,
+            redact_fill: RedactionFill::default(),
+            redact_custom_color: [0, 0, 0],
+            redact_overlay_text: String::new(),
+            redact_overlay_font: PatchFont::Helvetica,
+            redact_overlay_size: 12.0,
             redact_modal: false,
             edit_text: None,
             redact_sanitize: true,
@@ -2322,7 +2350,8 @@ impl YouPdfApp {
     /// résultats de recherche. Changer d'onglet doit les remettre à zéro,
     /// sinon la suite de l'action s'applique au mauvais fichier.
     fn reset_document_session(&mut self) {
-        self.redact_regions.clear();
+        self.redact_marks.clear();
+        self.redact_phase = RedactPhase::Marking;
         self.form_edit = None;
         self.selected_annot = 0;
         self.has_annot_selection = false;
@@ -4447,9 +4476,22 @@ impl YouPdfApp {
                     for rect in match_rects(&fragment.text, rect, &needle) {
                         // Ne pas empiler deux fois la même marque : le bouton
                         // corbeille et le bouton surlignage peuvent se suivre.
-                        let region = RedactionRegion { page, rect };
-                        if !self.redact_regions.contains(&region) {
-                            self.redact_regions.push(region);
+                        // La déduplication porte sur la page et le rectangle :
+                        // le remplissage et le texte superposé ne font pas
+                        // partie de l'identité de la zone.
+                        if !self
+                            .redact_marks
+                            .iter()
+                            .any(|m| m.page == page && m.rect == rect)
+                        {
+                            let fill = self.redact_fill;
+                            let overlay = self.overlay_for(fill);
+                            self.redact_marks.push(RedactionMark {
+                                page,
+                                rect,
+                                fill,
+                                overlay,
+                            });
                             added += 1;
                         }
                     }
@@ -4471,28 +4513,60 @@ impl YouPdfApp {
         }
     }
 
+    /// Le texte à superposer sur une zone, s'il y en a un.
+    ///
+    /// La couleur suit le fond : blanc sur un remplissage sombre, noir sur
+    /// un remplissage clair, sinon le texte superposé serait illisible.
+    fn overlay_for(&self, fill: RedactionFill) -> Option<RedactionOverlay> {
+        let text = self.redact_overlay_text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        let background = match fill {
+            RedactionFill::Black => [0, 0, 0],
+            RedactionFill::White => [255, 255, 255],
+            RedactionFill::Custom(rgb) => rgb,
+        };
+        // Luminance relative : au-delà de la moitié, le fond est clair.
+        let luminance = 0.299 * f32::from(background[0])
+            + 0.587 * f32::from(background[1])
+            + 0.114 * f32::from(background[2]);
+        let color = if luminance > 140.0 {
+            [0, 0, 0]
+        } else {
+            [255, 255, 255]
+        };
+        Some(RedactionOverlay {
+            text: text.to_string(),
+            font: self.redact_overlay_font,
+            size: self.redact_overlay_size,
+            color,
+        })
+    }
+
     /// Applique le caviardage marqué (destructif).
     fn apply_redactions(&mut self, ctx: &egui::Context) {
-        let regions = std::mem::take(&mut self.redact_regions);
+        let marks = std::mem::take(&mut self.redact_marks);
         self.redact_modal = false;
-        if regions.is_empty() {
+        self.redact_phase = RedactPhase::Marking;
+        if marks.is_empty() {
             self.toast(ctx, "No areas marked");
             return;
         }
         let sanitize = self.redact_sanitize;
-        let outcome: Result<(usize, usize), String> = {
+        let outcome: Result<(RedactionReport, usize), String> = {
             let Some(tab) = self.tabs.get_mut(self.active) else {
                 return;
             };
             let renderer = &*self.renderer;
-            match tab.doc.redact(&regions, renderer) {
-                Ok(()) => {
+            match tab.doc.redact_marks(&marks, renderer) {
+                Ok(report) => {
                     let cleaned = if sanitize {
                         tab.doc.sanitize().unwrap_or(0)
                     } else {
                         0
                     };
-                    Ok((regions.len(), cleaned))
+                    Ok((report, cleaned))
                 }
                 Err(err) => Err(err.to_string()),
             }
@@ -4500,7 +4574,7 @@ impl YouPdfApp {
         // Le caviardage réécrit les pages : caches et instantanés caducs.
         self.mark_document_changed();
         match outcome {
-            Ok((areas, cleaned)) => {
+            Ok((report, cleaned)) => {
                 // Le caviardage a détruit le contenu sous les zones : les
                 // annotations en mémoire sont caduques. Sans ce rechargement,
                 // `save_with_annotations` réécrirait dans le fichier une
@@ -4512,15 +4586,23 @@ impl YouPdfApp {
                 self.selected_annot = 0;
                 self.has_annot_selection = false;
                 self.annot_tool = Some(0);
-                let suffix = if sanitize {
-                    format!(" · {cleaned} metadata entries removed")
-                } else {
-                    String::new()
-                };
-                self.toast(ctx, format!("Redaction applied ({areas} areas){suffix}"));
+                // Le bilan est honnête : on n'annonce une rasterisation que
+                // s'il y en a eu une, mais on dit ce qui a été fait.
+                let mut message = format!(
+                    "Redaction applied ({} areas) · {} pages edited",
+                    marks.len(),
+                    report.pages_sliced
+                );
+                if report.pages_rasterized > 0 {
+                    message.push_str(&format!(", {} page(s) rasterized", report.pages_rasterized));
+                }
+                if sanitize {
+                    message.push_str(&format!(" · {cleaned} metadata entries removed"));
+                }
+                self.toast(ctx, message);
             }
             Err(err) => {
-                self.redact_regions = regions;
+                self.redact_marks = marks;
                 self.toast(ctx, format!("Redaction failed: {err}"));
             }
         }
@@ -6344,52 +6426,143 @@ impl YouPdfApp {
         }
     }
 
-    /// Fenêtre de confirmation du caviardage.
+    /// Fenêtre de caviardage, en deux temps.
+    ///
+    /// Première phase : le marquage. On choisit l'apparence des zones — le
+    /// remplissage, la couleur, le texte superposé. Deuxième phase : la
+    /// confirmation, qui dit honnêtement ce que le moteur va faire.
     fn redact_window(&mut self, ctx: &egui::Context) {
         if !self.redact_modal {
             return;
         }
-        let areas = self.redact_regions.len();
+        let areas = self.redact_marks.len();
         let mut confirm = false;
         let mut cancel = false;
+        let mut advance = false;
         let mut keep_open = true;
-        self.show_modal(ctx, "modal-redact", "Apply redaction", 360.0, &mut keep_open, |app, ui| {
-            ui.label(
-                RichText::new(format!("{areas} area(s) will be blacked out permanently."))
-                    .size(12.5)
-                    .color(pal().icon_bright),
-            );
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(
-                    "Redaction replaces each marked page with an image: the text                          underneath is destroyed, not hidden, and cannot be recovered.                          Annotations overlapping a marked area are deleted.",
-                )
-                .size(11.0)
-                .color(pal().muted),
-            );
-            ui.add_space(8.0);
-            ui.checkbox(
-                &mut app.redact_sanitize,
-                "Also remove metadata, XMP, JavaScript and attachments",
-            );
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() {
-                    cancel = true;
+        let phase = self.redact_phase;
+        self.show_modal(ctx, "modal-redact", "Redaction", 420.0, &mut keep_open, |app, ui| {
+            if phase == RedactPhase::Marking {
+                ui.label(
+                    RichText::new(format!("{areas} area(s) marked."))
+                        .size(12.5)
+                        .color(pal().icon_bright),
+                );
+                ui.add_space(8.0);
+
+                ui.label(RichText::new("Fill").size(11.0).color(pal().muted));
+                ui.horizontal(|ui| {
+                    ui.selectable_value(
+                        &mut app.redact_fill,
+                        RedactionFill::Black,
+                        "Black",
+                    );
+                    ui.selectable_value(
+                        &mut app.redact_fill,
+                        RedactionFill::White,
+                        "White",
+                    );
+                    ui.selectable_value(
+                        &mut app.redact_fill,
+                        RedactionFill::Custom(app.redact_custom_color),
+                        "Custom",
+                    );
+                });
+                if matches!(app.redact_fill, RedactionFill::Custom(_)) {
+                    let mut color = Color32::from_rgb(
+                        app.redact_custom_color[0],
+                        app.redact_custom_color[1],
+                        app.redact_custom_color[2],
+                    );
+                    ui.horizontal(|ui| {
+                        ui.color_edit_button_srgba(&mut color);
+                        if ui.button("Use colour").clicked() {
+                            app.redact_custom_color = [color.r(), color.g(), color.b()];
+                            app.redact_fill = RedactionFill::Custom(app.redact_custom_color);
+                        }
+                    });
                 }
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("Apply").color(Color32::WHITE))
-                            .fill(pal().redact_red),
+
+                ui.add_space(8.0);
+                ui.label(RichText::new("Overlay text").size(11.0).color(pal().muted));
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.redact_overlay_text)
+                        .hint_text("[REDACTED]")
+                        .desired_width(f32::INFINITY),
+                );
+                if !app.redact_overlay_text.is_empty() {
+                    ui.horizontal(|ui| {
+                        for font in PatchFont::ALL {
+                            ui.selectable_value(
+                                &mut app.redact_overlay_font,
+                                font,
+                                font.display_name(),
+                            );
+                        }
+                        ui.add(
+                            egui::DragValue::new(&mut app.redact_overlay_size)
+                                .range(6.0..=72.0)
+                                .suffix(" pt"),
+                        );
+                    });
+                }
+
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("Continue").color(Color32::WHITE))
+                                .fill(pal().accent),
+                        )
+                        .clicked()
+                    {
+                        advance = true;
+                    }
+                });
+            } else {
+                ui.label(
+                    RichText::new(format!("{areas} area(s) will be redacted permanently."))
+                        .size(12.5)
+                        .color(pal().icon_bright),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
+                        "The content under the marked areas is destroyed, not hidden, and cannot be recovered. The rest of each page keeps its selectable text, but a page whose content cannot be sliced cleanly may still be rasterized. Annotations overlapping a marked area are deleted.",
                     )
-                    .clicked()
-                {
-                    confirm = true;
-                }
-            });
+                    .size(11.0)
+                    .color(pal().muted),
+                );
+                ui.add_space(8.0);
+                ui.checkbox(
+                    &mut app.redact_sanitize,
+                    "Also remove metadata, XMP, JavaScript and attachments",
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Back").clicked() {
+                        app.redact_phase = RedactPhase::Marking;
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("Apply").color(Color32::WHITE))
+                                .fill(pal().redact_red),
+                        )
+                        .clicked()
+                    {
+                        confirm = true;
+                    }
+                });
+            }
         });
         if cancel || !keep_open {
             self.redact_modal = false;
+        }
+        if advance {
+            self.redact_phase = RedactPhase::Confirming;
         }
         if confirm {
             self.apply_redactions(ctx);
@@ -6881,9 +7054,10 @@ impl YouPdfApp {
                             self.toast(ctx, format!("{cleaned} metadata entries removed"));
                         }
                         4 => {
-                            if self.redact_regions.is_empty() {
+                            if self.redact_marks.is_empty() {
                                 self.toast(ctx, "Mark areas first");
                             } else {
+                                self.redact_phase = RedactPhase::Marking;
                                 self.redact_modal = true;
                             }
                         }
@@ -8721,7 +8895,7 @@ impl YouPdfApp {
         let mut pending_form: Option<(usize, [f32; 4], FormKind)> = None;
         let mut pending_form_select: Option<(usize, [f32; 4])> = None;
         let mut pending_measure: Option<(usize, [f32; 2], [f32; 2])> = None;
-        let redact_marks = &self.redact_regions;
+        let redact_marks = &self.redact_marks;
         let search_rects = &self.search_rects;
         let search_rects_page = self.search_rects_page;
         let selected_annot = self.selected_annot;
@@ -8976,15 +9150,23 @@ impl YouPdfApp {
                                     page_rect.max.y - region.rect[1] * scale,
                                 ),
                             );
+                            // Phase 1 : le marquage est visible mais la page
+                            // n'est pas encore caviardée. Le rouge signale
+                            // « à supprimer », pas « déjà supprimé ».
                             ui.painter().rect_filled(
                                 rect,
                                 Rounding::ZERO,
-                                Color32::from_black_alpha(190),
+                                Color32::from_rgba_unmultiplied(
+                                    pal().redact_red.r(),
+                                    pal().redact_red.g(),
+                                    pal().redact_red.b(),
+                                    110,
+                                ),
                             );
                             ui.painter().rect_stroke(
                                 rect,
                                 Rounding::ZERO,
-                                Stroke::new(1.5_f32, pal().redact_red),
+                                Stroke::new(2.0_f32, pal().redact_red),
                             );
                         }
                         if search_rects_page == Some(page) {
@@ -10073,7 +10255,16 @@ impl YouPdfApp {
         }
         if let Some((page, rect)) = pending_redact {
             if (rect[2] - rect[0]).abs() > 2.0 && (rect[3] - rect[1]).abs() > 2.0 {
-                self.redact_regions.push(RedactionRegion { page, rect });
+                // L'apparence est figée au moment du marquage : changer le
+                // remplissage ensuite ne touche que les zones nouvelles.
+                let fill = self.redact_fill;
+                let overlay = self.overlay_for(fill);
+                self.redact_marks.push(RedactionMark {
+                    page,
+                    rect,
+                    fill,
+                    overlay,
+                });
             }
         }
         if let Some((page, from, to)) = pending_measure {
