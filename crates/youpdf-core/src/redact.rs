@@ -7,41 +7,51 @@
 //! rectangle dessiné par-dessus ne suffit pas — n'importe qui peut
 //! extraire le texte sous-jacent.
 //!
-//! ## Approche retenue
+//! ## Deux moteurs
 //!
-//! YouPDF rasterise **la page entière** :
+//! ### `Document::redact` — rasterisation intégrale
 //!
-//! 1. Rendu de la page en bitmap haute résolution via pdfium.
-//! 2. Remplissage en noir de chaque région à caviarder.
-//! 3. Remplacement du contenu de la page par cette image.
+//! Rendu de la page entière en bitmap, remplissage des zones, remplacement
+//! du contenu par cette image. Le texte original est irrécupérable, mais
+//! **toute la page devient une image** : le texte non caviardé n'est plus
+//! sélectionnable. C'est le comportement historique, conservé tel quel.
 //!
-//! Le texte original est irrécupérable. L'inconvénient est que **toute
-//! la page devient une image** : le texte non caviardé n'est plus
-//! sélectionnable. Pour compenser, une couche texte OCR peut être
-//! régénérée sur les zones non caviardées (phase 5).
+//! ### `Document::redact_marks` — chirurgie du flux de contenu
 //!
-//! Les **annotations**, elles, ne sont pas rasterisées : elles restent
-//! des objets vectoriels vivants à côté de l'image (voir
-//! [`Document::classify_annots_for_redaction`]). Une annotation qui
-//! recouvre une zone caviardée est **détruite** — c'est le comportement
-//! attendu : un tampon, un surlignage ou un champ de formulaire peut
-//! masquer un mot sensible sans le contenir dans le flux de contenu, et
-//! l'incruster dans l'image pour le « conserver » reviendrait à
-//! reconstruire exactement ce qu'on vient d'effacer.
+//! Le moteur principal. Il réécrit le flux de contenu de la page :
 //!
-//! ## Alternatives écartées
+//! - les instructions de texte dont la boîte recouvre une zone caviardée
+//!   sont **supprimées** du flux, et le reste de la page reste
+//!   sélectionnable et cherchable ;
+//! - les tracés vectoriels entièrement contenus dans la zone sont
+//!   supprimés ;
+//! - les images sont **brûlées** : les pixels sous la zone sont écrasés et
+//!   l'image est réencodée, de sorte qu'aucun pixel d'origine ne
+//!   subsiste ;
+//! - les annotations qui recouvrent la zone sont **détruites** : un
+//!   surlignage ou un champ peut porter le mot sensible lui-même.
 //!
-//! - Suppression ciblée des instructions de texte dans le flux de
-//!   contenu : très fragile, ne gère pas les polices subset, les
-//!   opérateurs composés, les XObjects imbriqués.
-//! - Rectangle noir en annotation : non destructif, trompeur.
+//! Une page dont le contenu ne peut pas être découpé proprement (image
+//! inline, XObject de formulaire, tramé) est **rasterisée** : c'est le
+//! repli sûr, au prix de la couche texte de cette page-là.
+//!
+//! ## Repères
+//!
+//! Les rectangles donnés par l'utilisateur sont dans le repère **affiché**
+//! (rotation appliquée) ; le flux de contenu travaille dans le repère
+//! **page**. La conversion se fait avec [`PageView::page_rect`].
 
 use lopdf::{dictionary, Object, Stream};
 
 use youpdf_shared::{Error, Result};
 
 use crate::document::{Document, PageView};
+use crate::edit::PatchFont;
 use crate::render::{RenderOptions, Renderer};
+
+pub(crate) mod burn;
+pub(crate) mod geometry;
+pub(crate) mod surgery;
 
 /// Une région à caviarder sur une page.
 #[derive(Debug, Clone, PartialEq)]
@@ -55,7 +65,293 @@ pub struct RedactionRegion {
     pub rect: [f32; 4],
 }
 
+/// Couleur de remplissage d'une zone caviardée.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedactionFill {
+    /// Noir : le comportement par défaut d'un caviardage.
+    Black,
+    /// Blanc : pour masquer sans marquer la zone.
+    White,
+    /// Couleur personnalisée RGB.
+    Custom([u8; 3]),
+}
+
+impl Default for RedactionFill {
+    fn default() -> Self {
+        Self::Black
+    }
+}
+
+/// Texte superposé sur une zone caviardée, à la place du contenu effacé.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RedactionOverlay {
+    /// Texte à écrire, par exemple `[REDACTED]`.
+    pub text: String,
+    /// Police standard-14 utilisée.
+    pub font: PatchFont,
+    /// Corps en points.
+    pub size: f32,
+    /// Couleur RGB (0–255).
+    pub color: [u8; 3],
+}
+
+/// Un rectangle à caviarder, avec son apparence.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RedactionMark {
+    /// Page (1-indexée).
+    pub page: usize,
+    /// Rectangle `[x1, y1, x2, y2]` dans le repère **affiché**.
+    pub rect: [f32; 4],
+    /// Couleur de remplissage.
+    pub fill: RedactionFill,
+    /// Texte à superposer, si l'on souhaite remplacer le contenu effacé
+    /// par une mention lisible.
+    pub overlay: Option<RedactionOverlay>,
+}
+
+impl Default for RedactionMark {
+    fn default() -> Self {
+        Self {
+            page: 1,
+            rect: [0.0; 4],
+            fill: RedactionFill::default(),
+            overlay: None,
+        }
+    }
+}
+
+/// Bilan d'un caviardage : ce qui a été découpé, ce qui a dû être rasterisé.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RedactionReport {
+    /// Pages dont le flux de contenu a été réécrit.
+    pub pages_sliced: usize,
+    /// Pages rasterisées en repli.
+    pub pages_rasterized: usize,
+    /// Annotations détruites.
+    pub annotations_removed: usize,
+    /// Instructions de texte supprimées du flux.
+    pub text_ops_removed: usize,
+    /// Tracés vectoriels supprimés du flux.
+    pub vector_ops_removed: usize,
+    /// Images dont les pixels ont été brûlés.
+    pub images_burned: usize,
+}
+
 impl Document {
+    /// Applique un caviardage destructif par chirurgie du flux de contenu.
+    ///
+    /// C'est le moteur principal : il **réécrit** le contenu des pages
+    /// concernées plutôt que de les remplacer par une image. Le texte
+    /// resté hors des zones caviardées demeure sélectionnable et
+    /// cherchable.
+    ///
+    /// Une page dont le contenu n'est pas découpable proprement est
+    /// rasterisée en repli ; `renderer` n'est alors nécessaire que pour
+    /// ces pages-là. Si aucune page n'exige de rasterisation, le
+    /// caviardage aboutit **sans** pdfium.
+    pub fn redact_marks(
+        &mut self,
+        marks: &[RedactionMark],
+        renderer: &dyn Renderer,
+    ) -> Result<RedactionReport> {
+        let mut report = RedactionReport::default();
+        if marks.is_empty() {
+            return Ok(report);
+        }
+
+        // Regroupement par page : une page peut porter plusieurs zones.
+        let mut by_page: std::collections::BTreeMap<usize, Vec<&RedactionMark>> =
+            std::collections::BTreeMap::new();
+        for mark in marks {
+            by_page.entry(mark.page).or_default().push(mark);
+        }
+
+        for (page_number, page_marks) in by_page {
+            self.redact_page(page_number, &page_marks, renderer, &mut report)?;
+        }
+
+        Ok(report)
+    }
+
+    /// Caviarde une page : découpe le flux de contenu, ou rasterise.
+    fn redact_page(
+        &mut self,
+        page_number: usize,
+        marks: &[&RedactionMark],
+        renderer: &dyn Renderer,
+        report: &mut RedactionReport,
+    ) -> Result<()> {
+        let page_id = self
+            .page_id(page_number as u32)
+            .map_err(|e| Error::Pdf(format!("page {page_number} : {e}")))?;
+        let view = self.page_view(page_number as u32);
+
+        // Les zones de l'utilisateur sont en repère affiché ; le flux de
+        // contenu travaille en repère page.
+        let regions: Vec<geometry::BBox> = marks
+            .iter()
+            .map(|mark| geometry::BBox::from_rect(view.page_rect(mark.rect)))
+            .collect();
+
+        let outcome = surgery::slice_page(self, page_id, &regions)?;
+
+        // Une page non découpable part en rasterisation.
+        if outcome.needs_raster {
+            self.rasterize_page(page_number, marks, renderer, report)?;
+            return Ok(());
+        }
+
+        report.text_ops_removed += outcome.text_ops_removed;
+        report.vector_ops_removed += outcome.vector_ops_removed;
+
+        // Les images dont la zone recoupe une zone à effacer sont brûlées :
+        // les pixels d'origine disparaissent, ils ne sont pas seulement
+        // masqués.
+        for touched in &outcome.images_touched {
+            let overlapping: Vec<geometry::BBox> = regions
+                .iter()
+                .filter(|region| region.overlaps(&touched.bbox))
+                .copied()
+                .collect();
+            if overlapping.is_empty() {
+                continue;
+            }
+            let fill = marks
+                .iter()
+                .find(|mark| {
+                    let rect = geometry::BBox::from_rect(view.page_rect(mark.rect));
+                    rect.overlaps(&touched.bbox)
+                })
+                .map(|mark| mark.fill)
+                .unwrap_or_default();
+            let overlay = marks
+                .iter()
+                .find(|mark| {
+                    let rect = geometry::BBox::from_rect(view.page_rect(mark.rect));
+                    rect.overlaps(&touched.bbox)
+                })
+                .and_then(|mark| mark.overlay.as_ref());
+            if burn::burn_image(
+                self,
+                page_number,
+                &touched.resource_name,
+                &touched.bbox,
+                &overlapping,
+                fill,
+                overlay,
+            )? {
+                report.images_burned += 1;
+            }
+        }
+
+        // Le flux réécrit est remis en place.
+        if !outcome.kept.is_empty() || outcome.text_ops_removed > 0 || outcome.vector_ops_removed > 0
+        {
+            surgery::write_back(self, page_id, &outcome.kept)?;
+            report.pages_sliced += 1;
+        }
+
+        // Les annotations qui recouvrent une zone caviardée sont
+        // détruites : elles peuvent porter le mot sensible.
+        let annot_regions: Vec<RedactionRegion> = marks
+            .iter()
+            .map(|mark| RedactionRegion {
+                page: mark.page,
+                rect: mark.rect,
+            })
+            .collect();
+        let annot_refs: Vec<&RedactionRegion> = annot_regions.iter().collect();
+        let (kept, dropped) = self.classify_annots_for_redaction(page_id, &annot_refs, &view)?;
+        if dropped > 0 {
+            report.annotations_removed += dropped;
+            surgery::set_annots(self, page_id, &kept)?;
+        }
+
+        Ok(())
+    }
+
+    /// Rasterise une page et y peint les zones caviardées.
+    fn rasterize_page(
+        &mut self,
+        page_number: usize,
+        marks: &[&RedactionMark],
+        renderer: &dyn Renderer,
+        report: &mut RedactionReport,
+    ) -> Result<()> {
+        // Sans rendu réel, la page deviendrait une image vide : le texte
+        // d'origine disparaîtrait sans que la zone sensible soit effacée.
+        if !renderer.renders_real_content() {
+            return Err(Error::NotSupported(
+                "caviardage impossible sans rendu réel : la bibliothèque pdfium est \
+                 indisponible, et cette page devrait être rasterisée. Installez pdfium \
+                 (voir pdfium/README.md) puis relancez l'opération."
+                    .into(),
+            ));
+        }
+
+        const SCALE: f32 = 2.5;
+        let opts = RenderOptions {
+            scale: SCALE,
+            ..Default::default()
+        };
+        let bitmap = renderer.render_page(self, page_number as u32, &opts)?;
+
+        let view = self.page_view(page_number as u32);
+        let (display_w, display_h) = view.display_size();
+        let mut pixels = bitmap.pixels.clone();
+        for mark in marks {
+            burn::paint_rect(
+                &mut pixels,
+                bitmap.width,
+                bitmap.height,
+                display_w,
+                display_h,
+                mark.rect,
+                mark.fill,
+            );
+            if let Some(overlay) = &mark.overlay {
+                let (x1, y1, x2, y2) = mark.rect;
+                let scale_px = bitmap.height as f32 / display_h.max(1.0);
+                burn::draw_text(
+                    &mut pixels,
+                    bitmap.width,
+                    bitmap.height,
+                    x1 + 4.0 * scale_px / 2.5,
+                    y1 + 4.0 * scale_px / 2.5,
+                    &overlay.text,
+                    overlay.size * scale_px / 2.5,
+                    overlay.color,
+                );
+            }
+        }
+
+        let page_id = self
+            .page_id(page_number as u32)
+            .map_err(|e| Error::Pdf(format!("page {page_number} : {e}")))?;
+        let annot_regions: Vec<RedactionRegion> = marks
+            .iter()
+            .map(|mark| RedactionRegion {
+                page: mark.page,
+                rect: mark.rect,
+            })
+            .collect();
+        let annot_refs: Vec<&RedactionRegion> = annot_regions.iter().collect();
+        let (kept, dropped) = self.classify_annots_for_redaction(page_id, &annot_refs, &view)?;
+        report.annotations_removed += dropped;
+
+        self.replace_page_with_image(
+            page_id,
+            &pixels,
+            bitmap.width,
+            bitmap.height,
+            &kept,
+            &view,
+        )?;
+        report.pages_rasterized += 1;
+
+        Ok(())
+    }
+
     /// Applique un caviardage destructif.
     ///
     /// `regions` liste toutes les zones à noircir sur toutes les pages.
@@ -63,6 +359,10 @@ impl Document {
     ///
     /// `renderer` fournit le rendu haute résolution (typiquement
     /// `PdfiumRenderer`).
+    ///
+    /// Ce moteur **rasterise la page entière** : c'est l'ancien
+    /// comportement, conservé tel quel. Le moteur de surgery est
+    /// [`Document::redact_marks`].
     pub fn redact(&mut self, regions: &[RedactionRegion], renderer: &dyn Renderer) -> Result<()> {
         if regions.is_empty() {
             return Ok(());
