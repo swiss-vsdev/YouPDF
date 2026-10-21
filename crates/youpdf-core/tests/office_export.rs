@@ -80,6 +80,96 @@ fn ouvrir(path: &std::path::Path) -> ZipArchive<std::fs::File> {
     ZipArchive::new(file).expect("lecture ZIP")
 }
 
+/// PDF d'une page dont le contenu est donné brut : le flux de contenu est
+/// écrit tel quel, ce qui permet de placer précisément le texte.
+fn document_avec_contenu(contenu: &str) -> Vec<u8> {
+    use lopdf::{dictionary, Document as LopdfDoc, Object, Stream};
+
+    let mut doc = LopdfDoc::with_version("1.7");
+    let font = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Font".to_vec()),
+        "Subtype" => Object::Name(b"Type1".to_vec()),
+        "BaseFont" => Object::Name(b"Helvetica".to_vec()),
+    });
+    let stream = doc.add_object(Stream::new(dictionary! {}, contenu.as_bytes().to_vec()));
+    let page = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+        "Contents" => stream,
+        "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+    });
+    let pages_id = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Pages".to_vec()),
+        "Kids" => Object::Array(vec![Object::Reference(page)]),
+        "Count" => 1,
+    });
+    let catalog = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => pages_id,
+    });
+    doc.trailer.set("Root", Object::Reference(catalog));
+    let mut out = Vec::new();
+    doc.save_to(&mut out).expect("écriture du PDF de test");
+    out
+}
+
+/// PDF d'une page contenant une image de 2×2 pixels.
+fn document_avec_image() -> Vec<u8> {
+    use lopdf::{dictionary, Document as LopdfDoc, Object, Stream};
+
+    let mut doc = LopdfDoc::with_version("1.7");
+    let mut image = Stream::new(
+        dictionary! {
+            "Type" => Object::Name(b"XObject".to_vec()),
+            "Subtype" => Object::Name(b"Image".to_vec()),
+            "Width" => 2,
+            "Height" => 2,
+            "ColorSpace" => Object::Name(b"DeviceRGB".to_vec()),
+            "BitsPerComponent" => 8,
+        },
+        vec![255u8, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0],
+    );
+    image.dict.set("Length", 12);
+    let image_id = doc.add_object(image);
+    let content = doc.add_object(Stream::new(
+        dictionary! {},
+        b"q 100 0 0 100 50 600 cm /Im0 Do Q".to_vec(),
+    ));
+    let pages_id = doc.new_object_id();
+    let page = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Page".to_vec()),
+        "Parent" => pages_id,
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+        "Contents" => content,
+        "Resources" => dictionary! {
+            "XObject" => dictionary! { "Im0" => image_id },
+        },
+    });
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => Object::Name(b"Pages".to_vec()),
+            "Kids" => Object::Array(vec![page.into()]),
+            "Count" => 1,
+        }),
+    );
+    let catalog = doc.add_object(dictionary! {
+        "Type" => Object::Name(b"Catalog".to_vec()),
+        "Pages" => pages_id,
+    });
+    doc.trailer.set("Root", Object::Reference(catalog));
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).expect("écriture");
+    bytes
+}
+
+/// Noms de toutes les parties de l'archive.
+fn noms_des_parts(archive: &mut ZipArchive<std::fs::File>) -> Vec<String> {
+    (0..archive.len())
+        .filter_map(|index| archive.by_index(index).ok().map(|f| f.name().to_string()))
+        .collect()
+}
+
 #[test]
 fn word_export_basic() {
     let doc = Document::from_bytes(&document_avec(&[
@@ -368,5 +458,322 @@ fn word_embeds_page_images() {
         .read_to_string(&mut rels)
         .expect("lecture");
     assert!(rels.contains("relationships/image"), "relation image absente : {rels}");
+    let _ = std::fs::remove_file(out_path);
+}
+
+/// Le mode « flux » reconnaît un titre plus gros que le corps.
+#[test]
+fn word_flow_detects_headings() {
+    // Le titre est écrit en 36 pt, le corps en 12 pt : le rapport est de 3,
+    // ce qui place le paragraphe en Heading1.
+    let bytes = document_avec_contenu(
+        "BT /F1 36 Tf 60 700 Td (Titre) Tj ET BT /F1 12 Tf 60 660 Td (Corps) Tj ET",
+    );
+    let doc = Document::from_bytes(&bytes).expect("ouverture");
+    let out_path = std::env::temp_dir().join("youpdf-word-headings.docx");
+    doc.export_office(&out_path, OfficeFormat::Word)
+        .expect("export");
+
+    let mut archive = ouvrir(&out_path);
+    let document = lire_part(&mut archive, "word/document.xml");
+    assert!(
+        document.contains(r#"<w:pStyle w:val="Heading1"/>"#),
+        "titre non détecté : {document}"
+    );
+    let styles = lire_part(&mut archive, "word/styles.xml");
+    assert!(
+        styles.contains(r#"w:styleId="Heading1""#)
+            && styles.contains(r#"<w:basedOn w:val="Normal"/>"#),
+        "style Heading1 non défini : {styles}"
+    );
+    let _ = std::fs::remove_file(out_path);
+}
+
+/// Deux lignes proches forment un paragraphe ; une ligne lointaine, un autre.
+#[test]
+fn word_flow_keeps_paragraphs() {
+    // Deux lignes à 14 pt d'interligne : elles partagent le paragraphe.
+    // La troisième, 200 pt plus bas, ouvre un nouveau paragraphe.
+    let bytes = document_avec_contenu(
+        "BT /F1 12 Tf 60 700 Td (Ligne une) Tj ET \
+         BT /F1 12 Tf 60 686 Td (Ligne deux) Tj ET \
+         BT /F1 12 Tf 60 486 Td (Ligne trois) Tj ET",
+    );
+    let doc = Document::from_bytes(&bytes).expect("ouverture");
+    let out_path = std::env::temp_dir().join("youpdf-word-paragraphes.docx");
+    doc.export_office(&out_path, OfficeFormat::Word)
+        .expect("export");
+
+    let mut archive = ouvrir(&out_path);
+    let document = lire_part(&mut archive, "word/document.xml");
+    assert!(
+        document.contains("<w:br/>"),
+        "aucun saut de ligne dans le paragraphe : {document}"
+    );
+    // Deux paragraphes de texte : le second commence après le premier.
+    let first = document.find("Ligne une").expect("première ligne");
+    let second = document.find("Ligne deux").expect("deuxième ligne");
+    let third = document.find("Ligne trois").expect("troisième ligne");
+    assert!(first < second && second < third, "ordre des lignes : {document}");
+    // Le saut de ligne est entre les deux premières lignes, pas après la
+    // troisième : le paragraphe couvre « une » et « deux ».
+    let br = document.find("<w:br/>").expect("saut de ligne");
+    assert!(br > first && br < third, "saut de ligne mal placé : {document}");
+    let _ = std::fs::remove_file(out_path);
+}
+
+/// La mise en page exacte utilise la vraie boîte du fragment.
+#[test]
+fn word_exact_layout_uses_real_geometry() {
+    use youpdf_core::office::OfficeLayout;
+
+    // Texte posé en (100, 600), corps 20 : la boîte est
+    // [100, 600, 100 + largeur, 620].
+    let bytes = document_avec_contenu("BT /F1 20 Tf 100 600 Td (Hello) Tj ET");
+    let doc = Document::from_bytes(&bytes).expect("ouverture");
+    let out_path = std::env::temp_dir().join("youpdf-word-geometrie.docx");
+    doc.export_office_layout(&out_path, OfficeFormat::Word, OfficeLayout::Exact)
+        .expect("export");
+
+    let mut archive = ouvrir(&out_path);
+    let document = lire_part(&mut archive, "word/document.xml");
+    // `w:x` = 100 pt × 20 = 2000 twips.
+    assert!(
+        document.contains(r#"w:x="2000""#),
+        "abscisse absente : {document}"
+    );
+    // `w:y` = (792 − 620) × 20 = 3440 twips (ancré depuis le haut).
+    assert!(
+        document.contains(r#"w:y="3440""#),
+        "ordonnée absente : {document}"
+    );
+    // La hauteur reprend la boîte du fragment : 20 pt × 20 = 400 twips.
+    assert!(
+        document.contains(r#"w:h="400""#),
+        "hauteur absente : {document}"
+    );
+    // Le corps est écrit en demi-points : 20 pt → 40.
+    assert!(
+        document.contains(r#"<w:sz w:val="40"/>"#),
+        "corps absent : {document}"
+    );
+    let _ = std::fs::remove_file(out_path);
+}
+
+/// La mise en page exacte pose les images à leur position.
+#[test]
+fn word_exact_places_images() {
+    use youpdf_core::office::OfficeLayout;
+
+    let doc = Document::from_bytes(&document_avec_image()).expect("ouverture");
+    let out_path = std::env::temp_dir().join("youpdf-word-images-exact.docx");
+    doc.export_office_layout(&out_path, OfficeFormat::Word, OfficeLayout::Exact)
+        .expect("export");
+
+    let mut archive = ouvrir(&out_path);
+    let names = noms_des_parts(&mut archive);
+    assert!(
+        names.iter().any(|name| name == "word/media/image1.png"),
+        "image absente : {names:?}"
+    );
+    let document = lire_part(&mut archive, "word/document.xml");
+    assert!(document.contains("<w:drawing>"), "dessin absent : {document}");
+    // L'image est posée en 100 × 100 pt : 100 × 12 700 = 1 270 000 EMU.
+    assert!(
+        document.contains(r#"<wp:extent cx="1270000" cy="1270000"/>"#),
+        "taille de l'image absente : {document}"
+    );
+    let _ = std::fs::remove_file(out_path);
+}
+
+/// Les cellules portent leur type : nombre, date, texte.
+#[test]
+fn excel_detects_number_and_date_cells() {
+    use youpdf_core::office::OfficeLayout;
+
+    let bytes = document_avec_contenu(
+        "BT /F1 12 Tf 50 700 Td (Nom) Tj ET \
+         BT /F1 12 Tf 200 700 Td (Valeur) Tj ET \
+         BT /F1 12 Tf 200 680 Td (1234.56) Tj ET \
+         BT /F1 12 Tf 350 680 Td (2024-01-15) Tj ET",
+    );
+    let doc = Document::from_bytes(&bytes).expect("ouverture");
+    let out_path = std::env::temp_dir().join("youpdf-excel-types.xlsx");
+    doc.export_office_layout(&out_path, OfficeFormat::Excel, OfficeLayout::Exact)
+        .expect("export");
+
+    let mut archive = ouvrir(&out_path);
+    let sheet = lire_part(&mut archive, "xl/worksheets/sheet1.xml");
+    // Un nombre ne porte pas d'attribut de type.
+    assert!(
+        sheet.contains(r#"<c r="B2"><v>1234.56</v></c>"#),
+        "cellule numérique absente : {sheet}"
+    );
+    // Une date porte un index de style.
+    assert!(
+        sheet.contains(r#"<c r="C2" s="1"><v>"#),
+        "cellule de date absente : {sheet}"
+    );
+    let names = noms_des_parts(&mut archive);
+    assert!(
+        names.iter().any(|name| name == "xl/styles.xml"),
+        "styles absents : {names:?}"
+    );
+    let styles = lire_part(&mut archive, "xl/styles.xml");
+    assert!(
+        styles.contains(r#"numFmtId="14""#),
+        "format de date absent : {styles}"
+    );
+    let _ = std::fs::remove_file(out_path);
+}
+
+/// Les colonnes reçoivent une largeur calée sur leur contenu.
+#[test]
+fn excel_sets_column_widths() {
+    use youpdf_core::office::OfficeLayout;
+
+    let bytes = document_avec_contenu(
+        "BT /F1 12 Tf 50 700 Td (Nom) Tj ET BT /F1 12 Tf 250 700 Td (Prix) Tj ET",
+    );
+    let doc = Document::from_bytes(&bytes).expect("ouverture");
+    let out_path = std::env::temp_dir().join("youpdf-excel-colonnes.xlsx");
+    doc.export_office_layout(&out_path, OfficeFormat::Excel, OfficeLayout::Exact)
+        .expect("export");
+
+    let mut archive = ouvrir(&out_path);
+    let sheet = lire_part(&mut archive, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains("<cols>"), "largeurs absentes : {sheet}");
+    assert!(sheet.contains("<col "), "colonne sans largeur : {sheet}");
+    let _ = std::fs::remove_file(out_path);
+}
+
+/// La diapositive reprend la taille de la page PDF, en EMU.
+#[test]
+fn powerpoint_places_text_shapes() {
+    use youpdf_core::office::OfficeLayout;
+
+    let bytes = document_avec_contenu("BT /F1 20 Tf 100 600 Td (Hello) Tj ET");
+    let doc = Document::from_bytes(&bytes).expect("ouverture");
+    let out_path = std::env::temp_dir().join("youpdf-pptx-formes.pptx");
+    doc.export_office_layout(&out_path, OfficeFormat::PowerPoint, OfficeLayout::Exact)
+        .expect("export");
+
+    let mut archive = ouvrir(&out_path);
+    let presentation = lire_part(&mut archive, "ppt/presentation.xml");
+    // 612 pt × 12 700 = 7 772 400 EMU ; 792 × 12 700 = 10 058 400 EMU.
+    assert!(
+        presentation.contains(r#"<p:sldSz cx="7772400" cy="10058400"/>"#),
+        "taille de diapositive absente : {presentation}"
+    );
+    let slide = lire_part(&mut archive, "ppt/slides/slide1.xml");
+    // La forme est posée en x = 100 pt = 1 270 000 EMU.
+    assert!(
+        slide.contains(r#"<a:off x="1270000" y="2184400"/>"#),
+        "position absente : {slide}"
+    );
+    assert!(slide.contains("<p:sp>"), "aucune forme de texte : {slide}");
+    assert!(
+        slide.contains(r#"<a:rPr lang="fr-FR" sz="2000""#),
+        "corps absent : {slide}"
+    );
+    let _ = std::fs::remove_file(out_path);
+}
+
+/// Les images sont embarquées et posées sur la diapositive.
+#[test]
+fn powerpoint_embeds_images() {
+    use youpdf_core::office::OfficeLayout;
+
+    let doc = Document::from_bytes(&document_avec_image()).expect("ouverture");
+    let out_path = std::env::temp_dir().join("youpdf-pptx-images.pptx");
+    doc.export_office_layout(&out_path, OfficeFormat::PowerPoint, OfficeLayout::Exact)
+        .expect("export");
+
+    let mut archive = ouvrir(&out_path);
+    let names = noms_des_parts(&mut archive);
+    assert!(
+        names.iter().any(|name| name == "ppt/media/image1.png"),
+        "image absente : {names:?}"
+    );
+    let slide = lire_part(&mut archive, "ppt/slides/slide1.xml");
+    assert!(slide.contains("<p:pic>"), "aucune image : {slide}");
+    assert!(
+        slide.contains(r#"<a:blip r:embed="rId2"/>"#),
+        "relation image absente : {slide}"
+    );
+    let rels = lire_part(&mut archive, "ppt/slides/_rels/slide1.xml.rels");
+    assert!(
+        rels.contains("../media/image1.png"),
+        "cible image absente : {rels}"
+    );
+    let types = lire_part(&mut archive, "[Content_Types].xml");
+    assert!(
+        types.contains(r#"<Default Extension="png" ContentType="image/png"/>"#),
+        "type PNG absent : {types}"
+    );
+    let _ = std::fs::remove_file(out_path);
+}
+
+/// Toutes les parties XML des trois paquets sont bien formées.
+#[test]
+fn all_parts_are_well_formed_xml() {
+    use youpdf_core::office::OfficeLayout;
+
+    let bytes = document_avec_contenu(
+        "BT /F1 24 Tf 60 700 Td (Titre & <balise>) Tj ET \
+         BT /F1 12 Tf 60 660 Td (Corps de texte) Tj ET",
+    );
+    let doc = Document::from_bytes(&bytes).expect("ouverture");
+    let images = Document::from_bytes(&document_avec_image()).expect("ouverture");
+
+    for (format, layout, extension) in [
+        (OfficeFormat::Word, OfficeLayout::Flow, "docx"),
+        (OfficeFormat::Word, OfficeLayout::Exact, "docx"),
+        (OfficeFormat::Excel, OfficeLayout::Flow, "xlsx"),
+        (OfficeFormat::Excel, OfficeLayout::Exact, "xlsx"),
+        (OfficeFormat::PowerPoint, OfficeLayout::Flow, "pptx"),
+        (OfficeFormat::PowerPoint, OfficeLayout::Exact, "pptx"),
+    ] {
+        let out_path = std::env::temp_dir().join(format!(
+            "youpdf-bien-forme-{extension}-{}.{extension}",
+            match layout {
+                OfficeLayout::Flow => "flux",
+                OfficeLayout::Exact => "exact",
+            }
+        ));
+        doc.export_office_layout(&out_path, format, layout)
+            .expect("export");
+        let mut archive = ouvrir(&out_path);
+        for index in 0..archive.len() {
+            let mut file = archive.by_index(index).expect("partie");
+            let name = file.name().to_string();
+            if !name.ends_with(".xml") && !name.ends_with(".rels") {
+                continue;
+            }
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf).expect("lecture");
+            let xml = String::from_utf8(buf).expect("UTF-8");
+            assert!(xml_bien_forme(&xml), "part {name} mal formée");
+        }
+        let _ = std::fs::remove_file(out_path);
+    }
+
+    // Le paquet avec image, lui aussi, est bien formé.
+    let out_path = std::env::temp_dir().join("youpdf-bien-forme-image.docx");
+    images
+        .export_office_layout(&out_path, OfficeFormat::Word, OfficeLayout::Exact)
+        .expect("export");
+    let mut archive = ouvrir(&out_path);
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).expect("partie");
+        let name = file.name().to_string();
+        if !name.ends_with(".xml") && !name.ends_with(".rels") {
+            continue;
+        }
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf).expect("lecture");
+        let xml = String::from_utf8(buf).expect("UTF-8");
+        assert!(xml_bien_forme(&xml), "part {name} mal formée");
+    }
     let _ = std::fs::remove_file(out_path);
 }
