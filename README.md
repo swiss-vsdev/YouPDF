@@ -256,11 +256,12 @@ icon reads oversized in the Dock.
 3. Pick a mode in the toolbar: **Comment** to annotate and discuss, **Edit** to
    change text and images, **Form** to fill or build a form, **Redact** to
    black out content for good.
-4. Save with <kbd>⌘S</kbd>, or **Save As…** for a copy. **Print…** in the
-   <kbd>⌘</kbd> menu sends the document to the system printer.
+4. Save with <kbd>⌘S</kbd>, or **Save As…** for a copy. <kbd>⌘P</kbd> sends the
+   document to the system printer.
 
 Shortcuts: <kbd>⌘O</kbd> open, <kbd>⌘W</kbd> close, <kbd>⌘S</kbd> save,
-<kbd>⇧⌘S</kbd> save as, <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> undo and redo,
+<kbd>⇧⌘S</kbd> save as, <kbd>⌘P</kbd> print, <kbd>⌘D</kbd> properties,
+<kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> undo and redo,
 <kbd>⌘C</kbd> / <kbd>⌘A</kbd> copy and select all, <kbd>⌘,</kbd> preferences,
 <kbd>⌘F</kbd> focus the search field, <kbd>⌘G</kbd> / <kbd>⇧⌘G</kbd> next and
 previous search result, <kbd>⇧⌘F</kbd> fullscreen, <kbd>F5</kbd> slideshow,
