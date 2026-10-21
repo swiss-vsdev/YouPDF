@@ -40,7 +40,7 @@
 
 ## Phase 4: In-Place Text & Content Editing Engine ✅
 - [x] **Task 4.1** — Precise text caret navigation: click-to-place-caret, char/word/line arrow navigation, Shift+arrows for selection, typing/Backspace/Delete; live preview with opaque mask from page background; commit on Enter (single line) or focus loss; Escape cancels; `edit::replace_text_fragment` writes to PDF
-- [x] **Task 4.2** — Content element selection/movement/resizing: hover highlight (1 pt blue dashed border); 8 resize handles + rotation handle; drag to move/scale (Shift-lock proportional); undo/redo records all moves, resizes, and content edits
+- [ ] **Task 4.2** — Content element selection/movement/resizing: **foundation only.** The `ContentElement`/`ContentDrag`/`ContentKind` types and the `content_selection`/`content_drag` state vars exist, but no hit-test dispatch, no resize/rotation handles and no drag-to-move/scale are implemented yet. Image manipulation (replace, rotate, flip, crop, opacity, delete) is delivered by Task 3.4 through the in-place image inspector.
 
 ## Phase 5: Annotation Tools (Comment Mode) ✅
 - [x] **Task 5.1** — Text markup tools: drag-select creates Highlight/Underline/Strikeout/Squiggly per line with `/QuadPoints`; floating palette: color swatches + opacity slider
