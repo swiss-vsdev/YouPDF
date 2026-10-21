@@ -144,7 +144,10 @@ talk to your own provider and work on the text of the open document:
 
 ### Interface
 
-- **English and French** interface, switchable at any time from Preferences.
+- **English and French**, switchable at any time from Preferences. The
+  translation table in `youpdf-shared` carries about a hundred entries, but
+  only the **Tools** dropdown is wired to it so far: the rest of the interface
+  still shows its English labels whichever language is selected.
 - Four themes: Dark, Light, Mint and Starry.
 - **Preferences**: startup view, default zoom, default layout, author name,
   measure unit, auto-save interval, appearance and the AI switch. Edits are
@@ -340,8 +343,7 @@ a difference navigator, batch processing (convert, OCR, insert, remove,
 watermark, background, header/footer, Bates, compress, protect, flatten,
 combine, print), Office export (Word/Excel/PowerPoint, flow and exact layout,
 Excel column detection, Word image embedding), preferences with auto-save,
-English/French UI (menus, tools, common buttons, preferences, inspector
-controls), and the AI assistant.
+English/French UI (the Tools dropdown today), and the AI assistant.
 
 ### Closed parity gaps
 
@@ -351,8 +353,8 @@ controls), and the AI assistant.
 - Inherited form fields with widget-level entries
 - Overflow menu with capped height and nested submenus
 - Full PKCS#7 detached RSA‑SHA‑256 digital signatures
-- French translation for the menus, the tools, the common buttons, the
-  preferences and the inspector controls
+- French translation table with the language picker, wired to the Tools
+  dropdown
 
 ### Next
 
