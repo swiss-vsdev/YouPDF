@@ -304,14 +304,9 @@ impl YouPdfApp {
         if let Some((from, to)) = pending_move {
             if let Some(tab) = self.tabs.get_mut(active) {
                 let target = to.min(tab.total());
-                if from != target {
-                    if tab.doc.move_page(from, target).is_ok() {
-                        self.mark_document_changed();
-                        self.toast(
-                            ui.ctx(),
-                            format!("Page {from} moved to {target}"),
-                        );
-                    }
+                if from != target && tab.doc.move_page(from, target).is_ok() {
+                    self.mark_document_changed();
+                    self.toast(ui.ctx(), format!("Page {from} moved to {target}"));
                 }
             }
         }
@@ -323,11 +318,10 @@ impl YouPdfApp {
         if ui.input(|i| {
             (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
                 && !i.modifiers.command
-        }) {
-            if self.organize_selected.len() < total {
-                let sel = self.organize_selected.clone();
-                self.delete_pages(ui.ctx(), &sel, total);
-            }
+        }) && self.organize_selected.len() < total
+        {
+            let sel = self.organize_selected.clone();
+            self.delete_pages(ui.ctx(), &sel, total);
         }
 
         self.organize_dialogs(ui.ctx());
@@ -603,8 +597,8 @@ impl YouPdfApp {
                 }
             }
             match result {
-                Ok(()) => self.toast(&ctx, "Pages extracted".to_string()),
-                Err(err) => self.toast(&ctx, format!("Extract failed: {err}")),
+                Ok(()) => self.toast(ctx, "Pages extracted".to_string()),
+                Err(err) => self.toast(ctx, format!("Extract failed: {err}")),
             }
         } else {
             let Some(directory) = rfd::FileDialog::new().pick_folder() else {
