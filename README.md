@@ -62,8 +62,9 @@ on.
 
 - Rotate, delete, move, duplicate, insert blank pages, insert pages from
   another file, and replace or extract page ranges.
-- **Crop** with explicit margins in pt, mm, cm or in, crop to a drawn box,
-  auto-crop the margins, or reset the crop box.
+- **Crop** with explicit margins in pt, mm, cm or in, a choice of the page box
+  to write (CropBox, ArtBox, BleedBox, TrimBox), auto-crop of the margins, or
+  reset of the crop box.
 - **Split into tiles** (rows × columns) with an adjustable gap between tiles;
   split a document into several files by page count, file size or bookmarks.
 - **Watermark** (text, anchored, tiled, with a layer choice), **header and
