@@ -281,6 +281,8 @@ pub struct Bates {
     pub suffix: String,
     /// Premier numéro de la sélection.
     pub start: u32,
+    /// Incrément appliqué d'une page à l'autre.
+    pub step: u32,
     /// Nombre de chiffres, complété par des zéros.
     pub digits: usize,
     /// Position sur la page.
@@ -301,6 +303,7 @@ impl Default for Bates {
             prefix: String::new(),
             suffix: String::new(),
             start: 1,
+            step: 1,
             digits: 6,
             position: BatesPosition::BottomRight,
             margin: 36.0,
@@ -855,17 +858,18 @@ impl Document {
     /// Ajoute une numérotation Bates aux pages de `b.pages`.
     ///
     /// Le premier numéro de la sélection est `b.start` ; chaque page suivante
-    /// s'incrémente de 1. Renvoie le nombre de pages numérotées.
+    /// s'incrémente de `b.step`. Renvoie le nombre de pages numérotées.
     pub fn add_bates(&mut self, b: &Bates) -> Result<usize> {
         let total = self.page_count() as u32;
         let pages = b.pages.pages(total);
         let digits = b.digits.clamp(1, 20);
+        let step = b.step.max(1);
 
         for (index, page) in pages.iter().enumerate() {
             let page_id = self
                 .page_id(*page)
                 .map_err(|e| Error::Pdf(format!("page {page} : {e}")))?;
-            let n = b.start.saturating_add(index as u32);
+            let n = b.start.saturating_add(index as u32 * step);
             let label = format!("{}{n:0width$}{}", b.prefix, b.suffix, width = digits);
 
             let view = self.page_view(*page);

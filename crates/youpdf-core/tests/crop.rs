@@ -4,7 +4,7 @@
 //! la lecture du `/CropBox` propre ou la remise à zéro cassent.
 
 use lopdf::{dictionary, Document as LopdfDoc, Object};
-use youpdf_core::{CropMargins, Document};
+use youpdf_core::{CropMargins, Document, Unit};
 
 /// Construit un PDF d'une page par boîte `/MediaBox` fournie.
 fn pdf_with_boxes(boxes: &[[i64; 4]]) -> Vec<u8> {
@@ -112,4 +112,30 @@ fn over_large_margin_clamps_to_one_point() {
     let view = doc.page_view(1);
     assert!((view.width - 1.0).abs() < 0.01, "largeur ramenée à 1 pt");
     assert!((view.height - 1.0).abs() < 0.01, "hauteur ramenée à 1 pt");
+}
+
+/// Les marges saisies en millimètres sont converties en points.
+#[test]
+fn crop_margins_from_unit_are_converted_to_points() {
+    let mut doc = Document::from_bytes(&a4()).expect("ouverture");
+
+    // 5 mm = 5 * 72 / 25,4 ≈ 14,17 pt.
+    let margins = CropMargins::from_unit(5.0, 5.0, 5.0, 5.0, Unit::Millimeter);
+    doc.crop_pages(&[1], margins).expect("recadrage");
+
+    let box_ = doc.crop_box(1).expect("boîte");
+    let expected = 5.0 * 72.0 / 25.4;
+    assert!((box_[0] - expected).abs() < 0.01, "bord gauche : {box_:?}");
+}
+
+/// Une marge saisie en pouces donne 72 pt par pouce.
+#[test]
+fn crop_margins_from_inch_are_converted_to_points() {
+    let mut doc = Document::from_bytes(&a4()).expect("ouverture");
+
+    let margins = CropMargins::from_unit(0.5, 0.0, 0.0, 0.0, Unit::Inch);
+    doc.crop_pages(&[1], margins).expect("recadrage");
+
+    let box_ = doc.crop_box(1).expect("boîte");
+    assert!((box_[0] - 36.0).abs() < 0.01, "bord gauche : {box_:?}");
 }

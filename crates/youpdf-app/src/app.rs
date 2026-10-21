@@ -46,7 +46,7 @@ use youpdf_core::{
     NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem, OutlineStyle,
     ImageCrop, OutlineTarget, PageRange, PageBitmap, PatchFont, PdfiumRenderer, RedactionRegion,
     RenderOptions, Renderer, SearchIndex, SearchOptions, SearchResult, TextChar, TextFormat,
-    TextFragment, TextStyle, Watermark, STAMP_NAMES, smooth_polyline,
+    TextFragment, TextStyle, Unit, Watermark, STAMP_NAMES, smooth_polyline,
 };
 
 use youpdf_core::annotate::BorderDash;
@@ -1297,8 +1297,8 @@ pub struct YouPdfApp {
     /// Fenêtre « Recadrage » et ses marges.
     crop_open: bool,
     crop: CropMargins,
-    /// Unité d'affichage des marges : 0 pt, 1 mm, 2 cm, 3 in.
-    crop_unit: u8,
+    /// Unité d'affichage des marges.
+    crop_unit: Unit,
     /// Pages visées : 0 toutes, 1 courante, 2 impaires, 3 paires.
     crop_range: u8,
     /// Boîte écrite : 0 CropBox, 1 ArtBox, 2 BleedBox, 3 TrimBox.
@@ -1315,6 +1315,8 @@ pub struct YouPdfApp {
     tile_split_open: bool,
     tile_rows: usize,
     tile_cols: usize,
+    /// Blanc laissé entre les tuiles, en points.
+    tile_gap: f32,
     /// Fenêtre « Arrière-plan » et son brouillon.
     background_open: bool,
     background: Background,
@@ -1681,7 +1683,7 @@ impl YouPdfApp {
             protect: EncryptionOptions::default(),
             crop_open: false,
             crop: CropMargins::default(),
-            crop_unit: 0,
+            crop_unit: Unit::Point,
             crop_range: 0,
             crop_target: 0,
             prefs_open: false,
@@ -1691,6 +1693,7 @@ impl YouPdfApp {
             tile_split_open: false,
             tile_rows: 2,
             tile_cols: 2,
+            tile_gap: 0.0,
             background_open: false,
             background: Background::default(),
             background_from: None,

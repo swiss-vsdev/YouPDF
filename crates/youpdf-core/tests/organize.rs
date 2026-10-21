@@ -1006,3 +1006,41 @@ fn split_tiles_makes_four_pages() {
     assert!((width - 306.0).abs() < 0.01, "{width}");
     assert!((height - 396.0).abs() < 0.01, "{height}");
 }
+
+/// L'écart entre tuiles rétrécit les tuiles et laisse le blanc demandé.
+#[test]
+fn split_tiles_with_gap_leaves_room_between_tiles() {
+    let bytes = multipage_pdf(3).expect("PDF de test");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+    // 2 × 2 avec 12 pt d'écart : (612 - 12) / 2 = 300 pt de large.
+    let created = doc
+        .split_tiles_with_gap(&[2], 2, 2, 12.0)
+        .expect("découpage");
+    assert_eq!(created, 4);
+    let (width, height) = doc.page_size(2);
+    assert!((width - 300.0).abs() < 0.01, "largeur : {width}");
+    assert!((height - 390.0).abs() < 0.01, "hauteur : {height}");
+}
+
+/// Un écart nul donne le découpage exact d'origine.
+#[test]
+fn split_tiles_with_gap_zero_matches_plain_split() {
+    let bytes = multipage_pdf(2).expect("PDF de test");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+    doc.split_tiles_with_gap(&[1], 2, 2, 0.0).expect("découpage");
+    let (width, height) = doc.page_size(1);
+    assert!((width - 306.0).abs() < 0.01, "largeur : {width}");
+    assert!((height - 396.0).abs() < 0.01, "hauteur : {height}");
+}
+
+/// Un écart plus grand que la page ne produit pas de tuile de taille nulle.
+#[test]
+fn split_tiles_with_huge_gap_keeps_a_positive_tile() {
+    let bytes = multipage_pdf(2).expect("PDF de test");
+    let mut doc = Document::from_bytes(&bytes).expect("ouverture");
+    doc.split_tiles_with_gap(&[1], 2, 2, 10_000.0)
+        .expect("découpage");
+    let (width, height) = doc.page_size(1);
+    assert!(width >= 1.0, "largeur : {width}");
+    assert!(height >= 1.0, "hauteur : {height}");
+}

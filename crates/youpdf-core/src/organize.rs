@@ -71,6 +71,22 @@ impl Document {
     /// flux de contenu translaté pour que son coin bas-gauche tombe en (0, 0).
     /// Les pages d'origine sont retirées. Renvoie le nombre de pages créées.
     pub fn split_tiles(&mut self, pages: &[usize], rows: usize, cols: usize) -> Result<usize> {
+        self.split_tiles_with_gap(pages, rows, cols, 0.0)
+    }
+
+    /// Découpe comme [`Document::split_tiles`], en laissant `gap` points
+    /// blancs entre les tuiles.
+    ///
+    /// L'écart est réparti sur les `cols - 1` colonnes et les `rows - 1`
+    /// lignes : les tuiles rétrécissent pour laisser la place du blanc. Un
+    /// écart trop grand pour la page est ramené à ce qui tient.
+    pub fn split_tiles_with_gap(
+        &mut self,
+        pages: &[usize],
+        rows: usize,
+        cols: usize,
+        gap: f32,
+    ) -> Result<usize> {
         let rows = rows.clamp(1, 20);
         let cols = cols.clamp(1, 20);
         if rows == 1 && cols == 1 {
@@ -131,12 +147,31 @@ impl Document {
         let mut created = Vec::new();
         for source in &sources {
             let view = source.view;
-            let (tw, th) = (view.width / cols as f32, view.height / rows as f32);
+            // L'écart blanc est retiré de la place disponible avant de
+            // partager le reste : les tuiles gardent la même taille et le
+            // blanc se retrouve entre elles. L'écart est plafonné pour que
+            // chaque tuile garde au moins 1 pt de côté.
+            let gap_x = if cols > 1 {
+                let room = (view.width - cols as f32).max(0.0) / (cols as f32 - 1.0);
+                gap.max(0.0).min(room)
+            } else {
+                0.0
+            };
+            let gap_y = if rows > 1 {
+                let room = (view.height - rows as f32).max(0.0) / (rows as f32 - 1.0);
+                gap.max(0.0).min(room)
+            } else {
+                0.0
+            };
+            let (tw, th) = (
+                (view.width - gap_x * (cols as f32 - 1.0)) / cols as f32,
+                (view.height - gap_y * (rows as f32 - 1.0)) / rows as f32,
+            );
             for row in 0..rows {
                 for col in 0..cols {
-                    let x0 = view.x + col as f32 * tw;
+                    let x0 = view.x + col as f32 * (tw + gap_x);
                     // `row` se lit de haut en bas, comme l'aperçu.
-                    let y0 = view.y + (rows - 1 - row) as f32 * th;
+                    let y0 = view.y + (rows - 1 - row) as f32 * (th + gap_y);
                     let mut page = lopdf::Dictionary::new();
                     page.set("Type", Object::Name(b"Page".to_vec()));
                     page.set(

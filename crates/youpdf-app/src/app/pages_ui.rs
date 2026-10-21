@@ -192,6 +192,7 @@ impl YouPdfApp {
         let mut apply = false;
         let mut rows = self.tile_rows;
         let mut cols = self.tile_cols;
+        let mut gap = self.tile_gap;
         self.show_modal(ctx, "modal-tile-split", "Split pages", 360.0, &mut open, |app, ui| {
             ui.label(
                 RichText::new(
@@ -204,6 +205,10 @@ impl YouPdfApp {
             ui.add_space(6.0);
             ui.add(egui::Slider::new(&mut rows, 1..=8).text("Rows"));
             ui.add(egui::Slider::new(&mut cols, 1..=8).text("Columns"));
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Gap").size(12.0).color(pal().muted));
+                ui.add(egui::DragValue::new(&mut gap).range(0.0..=200.0).suffix(" pt"));
+            });
             ui.add_space(4.0);
             ui.label(
                 RichText::new(format!(
@@ -226,6 +231,7 @@ impl YouPdfApp {
         });
         self.tile_rows = rows;
         self.tile_cols = cols;
+        self.tile_gap = gap;
         if !open {
             self.tile_split_open = false;
         }
@@ -234,7 +240,7 @@ impl YouPdfApp {
             let result = self
                 .tabs
                 .get_mut(self.active)
-                .map(|tab| tab.doc.split_tiles(&pages, rows, cols));
+                .map(|tab| tab.doc.split_tiles_with_gap(&pages, rows, cols, gap));
             match result {
                 Some(Ok(count)) => {
                     self.mark_document_changed();
@@ -291,8 +297,6 @@ impl YouPdfApp {
         let mut apply = false;
         let mut reset = false;
         let mut auto = false;
-        // Facteur d'affichage : les marges vivent en points.
-        let factor = [1.0_f32, 72.0 / 25.4, 72.0 / 2.54, 72.0][self.crop_unit.min(3) as usize];
         self.show_modal(ctx, "modal-crop", "Crop pages", 380.0, &mut open, |app, ui| {
             ui.label(
                 RichText::new(
@@ -306,14 +310,14 @@ impl YouPdfApp {
                 ui.label(RichText::new("Unit").size(11.0).color(pal().muted));
                 egui::ComboBox::from_id_salt("crop-unit")
                     .width(64.0)
-                    .selected_text(["pt", "mm", "cm", "in"][app.crop_unit.min(3) as usize])
+                    .selected_text(app.crop_unit.suffix())
                     .show_ui(ui, |ui| {
-                        for (value, label) in [(0u8, "pt"), (1, "mm"), (2, "cm"), (3, "in")] {
+                        for unit in Unit::ALL {
                             if ui
-                                .selectable_label(app.crop_unit == value, label)
+                                .selectable_label(app.crop_unit == unit, unit.suffix())
                                 .clicked()
                             {
-                                app.crop_unit = value;
+                                app.crop_unit = unit;
                             }
                         }
                     });
@@ -376,17 +380,17 @@ impl YouPdfApp {
                         ("Bottom", &mut app.crop.bottom),
                     ] {
                         ui.label(RichText::new(label).size(12.0).color(pal().muted));
-                        let mut shown = *value / factor;
+                        let mut shown = app.crop_unit.from_points(*value);
                         if ui
                             .add(
                                 egui::DragValue::new(&mut shown)
-                                    .range(-200.0..=200.0)
+                                    .range(-2000.0..=2000.0)
                                     .speed(0.1)
-                                    .suffix([" pt", " mm", " cm", " in"][app.crop_unit.min(3) as usize]),
+                                    .suffix(format!(" {}", app.crop_unit.suffix())),
                             )
                             .changed()
                         {
-                            *value = shown * factor;
+                            *value = app.crop_unit.to_points(shown);
                         }
                         ui.end_row();
                     }
@@ -628,6 +632,9 @@ impl YouPdfApp {
                     ui.end_row();
                     ui.label(RichText::new("Start at").size(12.0).color(pal().muted));
                     ui.add(egui::DragValue::new(&mut app.bates.start).range(0..=999_999));
+                    ui.end_row();
+                    ui.label(RichText::new("Step").size(12.0).color(pal().muted));
+                    ui.add(egui::DragValue::new(&mut app.bates.step).range(1..=999_999));
                     ui.end_row();
                     ui.label(RichText::new("Digits").size(12.0).color(pal().muted));
                     ui.add(egui::DragValue::new(&mut app.bates.digits).range(1..=12));

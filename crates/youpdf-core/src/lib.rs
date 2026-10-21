@@ -43,6 +43,7 @@ pub mod render;
 pub mod search;
 pub mod signature;
 pub mod structure;
+pub mod units;
 pub mod util;
 pub mod watermark;
 
@@ -75,6 +76,7 @@ pub use signature::{SignaturePlacement, SignatureRequest, SignatureStatus};
 pub use structure::{
     decode_pdf_text, AttachmentInfo, OutlineEntry, OutlineItem, OutlineStyle, OutlineTarget,
 };
+pub use units::Unit;
 pub use watermark::{
     Background, BandSlots, Bates, BatesPosition, HeaderFooter, NumberStyle, PageRange, Watermark,
 };

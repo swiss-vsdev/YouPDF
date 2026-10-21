@@ -227,3 +227,26 @@ fn clear_bates_retire_seulement_bates() {
     assert!(text.contains("CONFIDENTIEL"), "le filigrane reste");
     assert!(text.contains("ORIGINAL"), "le contenu d'origine reste");
 }
+
+/// Le pas Bates espace les numéros d'une page à l'autre.
+#[test]
+fn bates_step_espace_les_numeros() {
+    let mut doc = Document::from_bytes(&document_avec_contenu(3)).expect("ouverture");
+    let b = Bates {
+        prefix: "D-".to_string(),
+        start: 10,
+        step: 5,
+        digits: 4,
+        position: BatesPosition::BottomRight,
+        pages: PageRange::All,
+        ..Default::default()
+    };
+
+    let numerotees = doc.add_bates(&b).expect("Bates");
+    assert_eq!(numerotees, 3);
+
+    let bytes = doc.to_bytes().expect("écriture");
+    assert!(text_of(&bytes, 1).contains("(D-0010) Tj"), "1re page");
+    assert!(text_of(&bytes, 2).contains("(D-0015) Tj"), "2e page");
+    assert!(text_of(&bytes, 3).contains("(D-0020) Tj"), "3e page");
+}
