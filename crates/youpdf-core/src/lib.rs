@@ -69,7 +69,9 @@ pub use ocr::{OcrEngine, OcrMode, OcrResult, TesseractEngine, validate_language}
 pub use office::OfficeFormat;
 pub use pdfa::Conformance;
 pub use protect::{EncryptionOptions, EncryptionStrength, Permissions};
-pub use redact::RedactionRegion;
+pub use redact::{
+    RedactionFill, RedactionMark, RedactionOverlay, RedactionRegion, RedactionReport,
+};
 pub use render::{PageBitmap, PdfiumRenderer, RenderOptions, Renderer};
 pub use search::{SearchIndex, SearchOptions, SearchResult, fold_case};
 pub use signature::{SignaturePlacement, SignatureRequest, SignatureStatus};
