@@ -82,6 +82,12 @@ pub enum OfficeLayout {
 /// Une partie du paquet OOXML : chemin dans l'archive, contenu XML.
 type Part = (String, String);
 
+/// Les médias embarqués par Word et leurs poses, page par page.
+///
+/// Le premier vecteur associe chaque image à son nom dans `word/media/`, le
+/// second donne, pour chaque page, les images qui y sont posées.
+type WordMedia = (Vec<(String, Vec<u8>)>, Vec<Vec<WordImage>>);
+
 /// Un fragment de texte, avec son style résolu en nom de police Office.
 #[derive(Debug, Clone)]
 struct OfficeRun {
@@ -330,13 +336,9 @@ fn office_font(base: &str) -> (&'static str, bool, bool) {
         "Times New Roman"
     } else if lower.contains("courier") || lower.contains("mono") {
         "Courier New"
-    } else if lower.contains("helvetica")
-        || lower.contains("arial")
-        || lower.contains("calibri")
-        || lower.contains("sans")
-    {
-        "Arial"
     } else {
+        // Helvetica, Arial, Calibri et les polices sans empattement rejoignent
+        // le repli Arial.
         "Arial"
     };
     (family, bold, italic)
@@ -602,7 +604,7 @@ fn word_run(run: &OfficeRun) -> String {
 
 /// Embarque les images des pages et renvoie, pour chaque page, la liste des
 /// images posées (indice global, largeur, hauteur).
-fn word_media(pages: &[OfficePage]) -> (Vec<(String, Vec<u8>)>, Vec<Vec<WordImage>>) {
+fn word_media(pages: &[OfficePage]) -> WordMedia {
     let mut media = Vec::new();
     let mut placements: Vec<Vec<WordImage>> = Vec::new();
     let mut index = 0usize;
@@ -1189,7 +1191,7 @@ fn excel_date_serial(text: &str) -> Option<f64> {
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
-    if year < 1900 || year > 9999 {
+    if !(1900..=9999).contains(&year) {
         return None;
     }
     let days = days_from_civil(year, month, day)?;

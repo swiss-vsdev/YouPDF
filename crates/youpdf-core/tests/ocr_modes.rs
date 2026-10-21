@@ -1,9 +1,8 @@
 //! Modes de sortie OCR : calque invisible, texte visible, page sans scan.
 
 use youpdf_core::ocr::{make_ocr, OcrEngine, OcrMode, OcrResult, OcrWord};
-use youpdf_core::render::{PageBitmap, Renderer};
+use youpdf_core::render::PageBitmap;
 use youpdf_core::{blank_document, Document, PdfiumRenderer};
-use youpdf_shared::Result;
 
 struct FakeEngine;
 
