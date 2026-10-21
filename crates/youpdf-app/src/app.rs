@@ -11566,20 +11566,23 @@ impl YouPdfApp {
             self.toast(ctx, "Annotation removed");
             return;
         }
-        let (cmd, shift, open, close, plus, minus, zero, save, find, full) = ctx.input(|i| {
-            (
-                i.modifiers.command,
-                i.modifiers.shift,
-                i.key_pressed(egui::Key::O),
-                i.key_pressed(egui::Key::W),
-                i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals),
-                i.key_pressed(egui::Key::Minus),
-                i.key_pressed(egui::Key::Num0),
-                i.key_pressed(egui::Key::S),
-                i.key_pressed(egui::Key::G),
-                i.key_pressed(egui::Key::F),
-            )
-        });
+        let (cmd, shift, open, close, plus, minus, zero, save, find, full, print, props) = ctx
+            .input(|i| {
+                (
+                    i.modifiers.command,
+                    i.modifiers.shift,
+                    i.key_pressed(egui::Key::O),
+                    i.key_pressed(egui::Key::W),
+                    i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals),
+                    i.key_pressed(egui::Key::Minus),
+                    i.key_pressed(egui::Key::Num0),
+                    i.key_pressed(egui::Key::S),
+                    i.key_pressed(egui::Key::G),
+                    i.key_pressed(egui::Key::F),
+                    i.key_pressed(egui::Key::P),
+                    i.key_pressed(egui::Key::D),
+                )
+            });
         // Copie et « tout sélectionner » portent sur le texte de la page : un
         // champ de saisie au premier plan garde la priorité (garde `typing`).
         let (copy_text, select_all) = ctx.input(|i| {
@@ -11671,6 +11674,12 @@ impl YouPdfApp {
         }
         if zero {
             self.set_zoom(None);
+        }
+        if print {
+            self.print_active(ctx);
+        }
+        if props {
+            self.props_open = true;
         }
     }
 
