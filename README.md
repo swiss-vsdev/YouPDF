@@ -88,8 +88,12 @@ on.
   an open password and a permissions password, per-permission flags (print,
   copy, modify, annotate), removal of protection, and opening a protected file
   with its password.
-- **PDF/A and PDF/X conformance**: PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4 and
-  PDF/E-1.
+- **Declared PDF/A and PDF/X markers**: PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4
+  and PDF/E-1. The engine writes the XMP packet, `/OutputIntents`, `/MarkInfo`
+  and `/ID` the standards ask for, but it does not validate the result — fonts,
+  transparency and structure are not checked and no ICC profile is embedded,
+  so a validator (veraPDF, preflight) is still needed to call the file
+  conforming.
 - **OCR** through the system Tesseract binary, in three modes (editable text,
   text plus image, or a searchable PDF), with automatic detection of scanned
   pages, a catalogue of 48 languages, multi-language combinations
@@ -116,7 +120,7 @@ on.
 | Images | PNG, JPEG, TIFF (one file per page), plus one long image with all pages stacked; 36–600 dpi |
 | Embedded images | PNG, one file per image embedded in the document |
 | Office | Word `.docx`, Excel `.xlsx`, PowerPoint `.pptx` — reflowed text, or exact layout for Word (each run positioned), with Excel column detection and one slide per page |
-| Standards | PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4, PDF/E-1 |
+| Standards | PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4, PDF/E-1 — declared markers, not validated conformance |
 
 Text export rebuilds the text layer only: images, tables and the page layout are
 left out. The Office exporters rebuild the text as paragraphs, rows or slides
@@ -309,7 +313,7 @@ The suite is mostly integration tests over generated PDFs, so it needs no
 fixtures on disk. `youpdf-core` alone carries 231 integration tests spread
 across 31 files, covering redaction, encryption, forms, annotations, crop,
 watermark, compression, OCR modes, comparison, extraction, measurement, page
-organisation, PDF/A conformance, text export and Office export. The
+organisation, PDF/A markers, text export and Office export. The
 application crate adds unit tests next to the code: the inspector placement
 and colour parsing, the home screen filter, star and relative time, and the
 internals of the document tab (undo history, form snapping, tab moves,
