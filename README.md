@@ -102,9 +102,9 @@ on.
 - **Compare** two documents and browse the differences: added, removed and
   modified lines, plus pages that were added or removed.
 - **Extract data**: tables and key/value pairs out of the text layer.
-- **Digital signatures at library level**: detached PKCS#7 / PAdES RSA-SHA-256
-  signatures, self-signed certificate creation, PKCS#12 import, visual
-  signature placement and signature validation.
+- **Digital signatures at library level**: detached PKCS#7 (`adbe.pkcs7.detached`)
+  RSA-SHA-256 signatures, self-signed certificate creation, PKCS#12 import,
+  visual signature placement and signature validation.
 - **Batch window**: apply export, OCR, compression, protection, flattening,
   watermarks, headers/footers, Bates numbering, backgrounds, page insertion and
   page removal to a whole folder, combine several files into one PDF, or send
@@ -350,7 +350,7 @@ controls), and the AI assistant.
 - Character-level text selection via pdfium glyph boxes
 - Inherited form fields with widget-level entries
 - Overflow menu with capped height and nested submenus
-- Full PKCS#7 / PAdES detached RSA‑SHA‑256 digital signatures
+- Full PKCS#7 detached RSA‑SHA‑256 digital signatures
 - French translation for the menus, the tools, the common buttons, the
   preferences and the inspector controls
 
