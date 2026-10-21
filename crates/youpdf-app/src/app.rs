@@ -553,6 +553,92 @@ fn text_hit(frags: &[TextFragment], point: [f32; 2]) -> Option<TextHit> {
     best.map(|(_, hit)| hit)
 }
 
+/// Caractère du fragment à l'offset donné, ou `None` si l'offset est hors
+/// du fragment.
+fn char_at(frag: &TextFragment, offset: usize) -> Option<char> {
+    if !frag.chars.is_empty() {
+        return frag.chars.get(offset).map(|item| item.ch);
+    }
+    frag.text.chars().nth(offset)
+}
+
+/// Étend une position jusqu'aux bords du mot qui la contient.
+///
+/// Un mot est une suite de caractères non blancs. La position donnée est
+/// ramenée dans le fragment si elle déborde, puis les bords sont cherchés de
+/// part et d'autre.
+fn expand_to_word(frags: &[TextFragment], hit: TextHit) -> Option<(TextHit, TextHit)> {
+    let frag = frags.get(hit.fragment)?;
+    let len = hit_len(frag);
+    if len == 0 {
+        return None;
+    }
+    let mut offset = hit.offset.min(len);
+
+    // Un clic dans l'espace entre deux mots prend le mot suivant ; un clic
+    // après le dernier mot prend le mot précédent.
+    while offset < len && char_at(frag, offset).is_some_and(char::is_whitespace) {
+        offset += 1;
+    }
+    if offset >= len {
+        offset = hit.offset.min(len.saturating_sub(1));
+        while offset > 0 && char_at(frag, offset).is_some_and(char::is_whitespace) {
+            offset -= 1;
+        }
+    }
+    if char_at(frag, offset).is_some_and(char::is_whitespace) {
+        return None;
+    }
+
+    let mut start = offset;
+    while start > 0 {
+        match char_at(frag, start - 1) {
+            Some(ch) if !ch.is_whitespace() => start -= 1,
+            _ => break,
+        }
+    }
+    let mut end = offset + 1;
+    while end < len {
+        match char_at(frag, end) {
+            Some(ch) if !ch.is_whitespace() => end += 1,
+            _ => break,
+        }
+    }
+    Some((
+        TextHit {
+            fragment: hit.fragment,
+            offset: start,
+        },
+        TextHit {
+            fragment: hit.fragment,
+            offset: end,
+        },
+    ))
+}
+
+/// Étend une position jusqu'aux bords de sa ligne visuelle.
+///
+/// Une ligne regroupe les fragments qui partagent la même ligne de base, à la
+/// tolérance de corps de police employée partout ailleurs (60 % de la
+/// hauteur). La sélection part du début de la ligne et finit à sa fin, dans
+/// l'ordre de lecture.
+fn expand_to_line(frags: &[TextFragment], hit: TextHit) -> Option<(TextHit, TextHit)> {
+    let groups = line_groups(frags);
+    let group = groups
+        .iter()
+        .find(|group| group.contains(&hit.fragment))?;
+    let start = TextHit {
+        fragment: group[0],
+        offset: 0,
+    };
+    let last = *group.last()?;
+    let end = TextHit {
+        fragment: last,
+        offset: hit_len(&frags[last]),
+    };
+    Some((start, end))
+}
+
 /// Plages `(fragment, début, fin)` couvertes par une sélection, caractère
 /// exclu à la fin.
 fn hit_runs(
@@ -664,6 +750,15 @@ fn hit_quads(frags: &[TextFragment], span: Option<(TextHit, TextHit)>) -> Vec<[f
 /// blocs d'une même ligne et on les trie de gauche à droite. Chaque groupe est
 /// fermé, l'ordre est donc déterministe.
 fn reading_order(frags: &[TextFragment]) -> Vec<usize> {
+    line_groups(frags).into_iter().flatten().collect()
+}
+
+/// Répartit les blocs en lignes visuelles, de haut en bas.
+///
+/// Chaque groupe contient les fragments d'une même ligne de base, triés de
+/// gauche à droite. Le regroupement est le même que celui du tri global, mais
+/// isolé : c'est lui qui dit où commence et où finit une ligne.
+fn line_groups(frags: &[TextFragment]) -> Vec<Vec<usize>> {
     let mut order: Vec<usize> = (0..frags.len()).collect();
     order.sort_by(|a, b| {
         line_center(&frags[*b])
@@ -671,7 +766,7 @@ fn reading_order(frags: &[TextFragment]) -> Vec<usize> {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let mut out: Vec<usize> = Vec::with_capacity(order.len());
+    let mut groups: Vec<Vec<usize>> = Vec::with_capacity(order.len());
     let mut start = 0;
     while start < order.len() {
         let reference = line_center(&frags[order[start]]);
@@ -692,10 +787,10 @@ fn reading_order(frags: &[TextFragment]) -> Vec<usize> {
                 .partial_cmp(&frags[*b].rect[0])
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        out.extend(row);
+        groups.push(row);
         start = end;
     }
-    out
+    groups
 }
 
 /// Ordonnée du centre d'un bloc, en repère affiché.
@@ -9430,7 +9525,41 @@ impl YouPdfApp {
                             }
                         }
                         if resp.clicked() {
-                            sel = None;
+                            // Un double-clic prend le mot sous le pointeur, un
+                            // triple-clic la ligne entière. Un clic simple
+                            // efface la sélection.
+                            let expand = if resp.triple_clicked() {
+                                Some(3)
+                            } else if resp.double_clicked() {
+                                Some(2)
+                            } else {
+                                None
+                            };
+                            match expand {
+                                Some(clicks) => {
+                                    if !tab.fragments.contains_key(&page) {
+                                        extract_page_fragments(renderer, tab, page);
+                                    }
+                                    let point = resp.interact_pointer_pos().map(to_pdf);
+                                    let span = point
+                                        .and_then(|point| {
+                                            tab.fragments.get(&page).and_then(|frags| {
+                                                text_hit(frags, point).and_then(|hit| {
+                                                    if clicks == 2 {
+                                                        expand_to_word(frags, hit)
+                                                    } else {
+                                                        expand_to_line(frags, hit)
+                                                    }
+                                                })
+                                            })
+                                        });
+                                    sel = span.map(|(start, end)| TextSel {
+                                        page,
+                                        span: Some((start, end)),
+                                    });
+                                }
+                                None => sel = None,
+                            }
                         }
                         let on_page = sel.map(|s| s.page == page).unwrap_or(false);
                         // Un glissé explicite ouvre l'inspecteur ; « tout
@@ -13631,4 +13760,81 @@ mod tests {
         assert!(crop.right.abs() < 1e-4, "{crop:?}");
     }
 
+    /// Un double-clic prend le mot entier, pas le caractère sous le curseur.
+    #[test]
+    fn expand_to_word_prend_le_mot_entier() {
+        let frags = vec![frag("le monde entier", [10.0, 100.0, 130.0, 112.0], 12.0)];
+        // Le curseur est sur « monde », caractère 4.
+        let hit = TextHit {
+            fragment: 0,
+            offset: 4,
+        };
+        let (start, end) = expand_to_word(&frags, hit).expect("un mot");
+        assert_eq!(start.offset, 3, "début de « monde »");
+        assert_eq!(end.offset, 8, "fin de « monde »");
+    }
+
+    /// Un double-clic sur un mot à la fin du bloc s'arrête au bord.
+    #[test]
+    fn expand_to_word_eteint_le_dernier_mot() {
+        let frags = vec![frag("bonjour", [10.0, 100.0, 70.0, 112.0], 12.0)];
+        let hit = TextHit {
+            fragment: 0,
+            offset: 6,
+        };
+        let (start, end) = expand_to_word(&frags, hit).expect("un mot");
+        assert_eq!(start.offset, 0);
+        assert_eq!(end.offset, 7);
+    }
+
+    /// Un clic dans un espace prend le mot suivant, pas le précédent.
+    #[test]
+    fn expand_to_word_ignore_le_dernier_espace() {
+        let frags = vec![frag("un deux", [10.0, 100.0, 70.0, 112.0], 12.0)];
+        // L'offset 2 est l'espace entre « un » et « deux ».
+        let hit = TextHit {
+            fragment: 0,
+            offset: 2,
+        };
+        let (start, end) = expand_to_word(&frags, hit).expect("un mot");
+        assert_eq!(start.offset, 3, "début de « deux »");
+        assert_eq!(end.offset, 7);
+    }
+
+    /// Un triple-clic prend la ligne entière, même quand elle est faite de
+    /// plusieurs fragments.
+    #[test]
+    fn expand_to_line_prend_la_ligne_entiere() {
+        let frags = vec![
+            frag("bonjour", [10.0, 82.0, 55.0, 94.0], 12.0),
+            frag("monde", [60.0, 82.0, 110.0, 94.0], 12.0),
+            frag("seconde", [10.0, 60.0, 60.0, 72.0], 12.0),
+        ];
+        let hit = TextHit {
+            fragment: 1,
+            offset: 2,
+        };
+        let (start, end) = expand_to_line(&frags, hit).expect("une ligne");
+        assert_eq!(start.fragment, 0, "début de la première ligne");
+        assert_eq!(start.offset, 0);
+        assert_eq!(end.fragment, 1, "fin de la première ligne");
+        assert_eq!(end.offset, 5);
+    }
+
+    /// Un triple-clic ne déborde pas sur la ligne du dessous.
+    #[test]
+    fn expand_to_line_ignore_la_ligne_suivante() {
+        let frags = vec![
+            frag("bonjour", [10.0, 82.0, 55.0, 94.0], 12.0),
+            frag("seconde", [10.0, 60.0, 60.0, 72.0], 12.0),
+        ];
+        let hit = TextHit {
+            fragment: 1,
+            offset: 1,
+        };
+        let (start, end) = expand_to_line(&frags, hit).expect("une ligne");
+        assert_eq!(start.fragment, 1);
+        assert_eq!(end.fragment, 1);
+        assert_eq!(end.offset, 7);
+    }
 }
