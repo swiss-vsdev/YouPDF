@@ -71,7 +71,6 @@ pub fn t(key: &'static str) -> &'static str {
     match key {
         // Menus et sections.
         "File" => "Fichier",
-        "Edit" => "Édition",
         "View" => "Affichage",
         "Tools" => "Outils",
         "Help" => "Aide",
@@ -110,7 +109,6 @@ pub fn t(key: &'static str) -> &'static str {
         "Search text" => "Rechercher du texte",
         "Search file…" => "Rechercher un fichier",
         "Search comments" => "Rechercher des commentaires",
-        "Create…" => "Créer…",
         // Inspector and style controls.
         "Font" => "Police",
         "Size" => "Taille",
@@ -138,16 +136,12 @@ pub fn t(key: &'static str) -> &'static str {
         "Align" => "Aligner",
         "Sum / Product / Average" => "Somme / Produit / Moyenne",
         // Watermark and background.
-        "Watermark" => "Filigrane",
-        "Background" => "Arrière-plan",
         "Page tint" => "Teinte de page",
         "Page border" => "Bord de page",
-        "Opacity" => "Opacité",
         "Scale" => "Échelle",
         "Add watermark" => "Ajouter un filigrane",
         "Remove watermark" => "Supprimer le filigrane",
         // Header & footer.
-        "Header & footer" => "En-tête et pied de page",
         "Macros" => "Macros",
         "Page" => "Page",
         "Pages" => "Pages",
@@ -157,7 +151,6 @@ pub fn t(key: &'static str) -> &'static str {
         "Path" => "Chemin",
         "File path" => "Chemin du fichier",
         // Bates numbering.
-        "Bates numbering" => "Numérotation Bates",
         "Prefix" => "Préfixe",
         "Suffix" => "Suffixe",
         "Start number" => "Numéro de départ",
@@ -169,28 +162,23 @@ pub fn t(key: &'static str) -> &'static str {
         "Calibrate" => "Calibrer",
         "Unit" => "Unité",
         // Convert.
-        "Convert…" => "Convertir…",
         "Office" => "Bureautique",
         "Text" => "Texte",
         "Images" => "Images",
         "Long image" => "Image longue",
         // OCR.
-        "OCR…" => "OCR…",
         "Language" => "Langue",
         "Output mode" => "Mode de sortie",
         "Editable" => "Modifiable",
         "Searchable" => "Recherchable",
         "Text & Pictures" => "Texte et images",
         // Create.
-        "Create…" => "Créer…",
         "Blank document" => "Document vierge",
         "From template" => "À partir d'un modèle",
         // Compare.
-        "Compare PDFs…" => "Comparer des PDF…",
         "Choose a PDF…" => "Choisir un PDF…",
         "Compare with the open document" => "Comparer avec le document ouvert",
         // Protect.
-        "Protect…" => "Protéger…",
         "Remove protection" => "Retirer la protection",
         "Password" => "Mot de passe",
         "Permission" => "Permission",
@@ -199,20 +187,14 @@ pub fn t(key: &'static str) -> &'static str {
         "Extract pages" => "Extraire les pages",
         "Commenting and form filling" => "Commentaires et remplissage de formulaires",
         "Any except extracting pages" => "Sauf extraction de pages",
-        "Reduce file size…" => "Réduire la taille…",
         "Screen" => "Écran",
         "Ebook" => "Livre électronique",
         "Print" => "Impression",
-        // Flatten annotations.
-        "Flatten annotations" => "Aplatir les annotations",
         // Mode pills.
-        "Comment" => "Commentaire",
         "Edit" => "Modifier",
         "Form" => "Formulaire",
-        "Redact" => "Caviarder",
         // Additional common labels.
         "OK" => "OK",
-        "Cancel" => "Annuler",
         _ => key,
     }
 }

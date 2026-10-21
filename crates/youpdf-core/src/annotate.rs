@@ -590,8 +590,8 @@ impl Annotation {
 
             AnnotationKind::Polygon | AnnotationKind::PolyLine => {
                 // Fond transparent pour le polygone/polyligne (on se contente
-                /// du trait via BS). Un polygone rempli n'aurait pas de sens
-                /// en PDF, le même que rect fait sans bloc de remplissage.
+                // du trait via BS). Un polygone rempli n'aurait pas de sens
+                // en PDF, le même que rect fait sans bloc de remplissage.
                 let lw = self.style.line_width.clamp(0.5, 12.0);
                 let gs = format!("q /{APPEARANCE_GS_NAME} gs ");
                 let (x1, y1, w, h) = self.frame();
@@ -603,14 +603,14 @@ impl Annotation {
 
             AnnotationKind::Callout => {
                 // Callout : flèche + texte, dessinée avec le trait (BS) et
-                /// un rectangle simple pour le fond du texte.
+                // un rectangle simple pour le fond du texte.
                 let (x1, y1, w, h) = self.frame();
                 let lw = self.style.line_width.clamp(0.5, 12.0);
                 let gs = format!("q /{APPEARANCE_GS_NAME} gs ");
                 let stroke = format!("{:.3} {:.3} {:.3} RG", self.style.color[0] as f32 / 255.0, self.style.color[1] as f32 / 255.0, self.style.color[2] as f32 / 255.0);
                 let fill = format!("{:.3} {:.3} {:.3} rg", self.style.color[0] as f32 / 255.0, self.style.color[1] as f32 / 255.0, self.style.color[2] as f32 / 255.0);
                 // Flèche : simple segment du point 1 au point 2 (on utilise
-                /// les trois points d'encre stockés).
+                // les trois points d'encre stockés).
                 let amp = 2.0_f32.min(h / 3.0);
                 c.extend_from_slice(
                     format!("{gs}{stroke} {lw:.2} w 1 J 1 j {} {} m {} {} l S Q\n", x1, y1, x1, y1 + amp).as_bytes(),
