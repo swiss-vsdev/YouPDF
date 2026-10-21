@@ -66,20 +66,15 @@ pub struct RedactionRegion {
 }
 
 /// Couleur de remplissage d'une zone caviardée.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RedactionFill {
     /// Noir : le comportement par défaut d'un caviardage.
+    #[default]
     Black,
     /// Blanc : pour masquer sans marquer la zone.
     White,
     /// Couleur personnalisée RGB.
     Custom([u8; 3]),
-}
-
-impl Default for RedactionFill {
-    fn default() -> Self {
-        Self::Black
-    }
 }
 
 /// Texte superposé sur une zone caviardée, à la place du contenu effacé.
@@ -244,10 +239,24 @@ impl Document {
             }
         }
 
-        // Le flux réécrit est remis en place.
-        if !outcome.kept.is_empty() || outcome.text_ops_removed > 0 || outcome.vector_ops_removed > 0
-        {
-            surgery::write_back(self, page_id, &outcome.kept)?;
+        // Le flux réécrit est remis en place. Avant, on y ajoute le
+        // remplissage des zones et le texte superposé : sans eux, la page
+        // serait simplement amputée de son texte, ce qui n'est pas un
+        // caviardage.
+        let mut kept = outcome.kept.clone();
+        for mark in marks {
+            let region = geometry::BBox::from_rect(view.page_rect(mark.rect));
+            let painted = surgery::overlay_operations(
+                self,
+                page_id,
+                &region,
+                mark.fill,
+                mark.overlay.as_ref(),
+            )?;
+            kept.extend(painted);
+        }
+        if !kept.is_empty() || outcome.text_ops_removed > 0 || outcome.vector_ops_removed > 0 {
+            surgery::write_back(self, page_id, &kept)?;
             report.pages_sliced += 1;
         }
 

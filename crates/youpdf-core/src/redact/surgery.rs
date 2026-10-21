@@ -8,7 +8,9 @@ use lopdf::content::{Content, Operation};
 use lopdf::Object;
 
 use crate::document::Document;
+use crate::edit::encode_pdf_literal;
 use crate::redact::geometry::{BBox, Interpreter, OpKind, KNOWN_OPERATORS};
+use crate::redact::{RedactionFill, RedactionOverlay};
 
 use youpdf_shared::{Error, Result};
 
@@ -234,6 +236,119 @@ pub(crate) fn set_annots(
 /// Opérateurs que l'interpréteur sait traiter.
 pub(crate) fn is_known_operator(operator: &str) -> bool {
     KNOWN_OPERATORS.contains(&operator)
+}
+
+/// Les instructions qui peintent une zone caviardée et son texte superposé.
+///
+/// Le flux est produit **en repère page** : les coordonnées ont déjà été
+/// converties par l'appelant.
+pub(crate) fn overlay_operations(
+    doc: &mut Document,
+    page_id: lopdf::ObjectId,
+    region: &BBox,
+    fill: RedactionFill,
+    overlay: Option<&RedactionOverlay>,
+) -> Result<Vec<Operation>> {
+    let mut operations = Vec::new();
+
+    // Le remplissage : un rectangle plein à la couleur demandée.
+    let color = match fill {
+        RedactionFill::Black => [0.0, 0.0, 0.0],
+        RedactionFill::White => [1.0, 1.0, 1.0],
+        RedactionFill::Custom(rgb) => [
+            f32::from(rgb[0]) / 255.0,
+            f32::from(rgb[1]) / 255.0,
+            f32::from(rgb[2]) / 255.0,
+        ],
+    };
+    operations.push(Operation {
+        operator: "q".to_string(),
+        operands: Vec::new(),
+    });
+    operations.push(Operation {
+        operator: "rg".to_string(),
+        operands: color.iter().map(|c| Object::Real(*c)).collect(),
+    });
+    operations.push(Operation {
+        operator: "re".to_string(),
+        operands: vec![
+            Object::Real(region.x1),
+            Object::Real(region.y1),
+            Object::Real(region.x2 - region.x1),
+            Object::Real(region.y2 - region.y1),
+        ],
+    });
+    operations.push(Operation {
+        operator: "f".to_string(),
+        operands: Vec::new(),
+    });
+    operations.push(Operation {
+        operator: "Q".to_string(),
+        operands: Vec::new(),
+    });
+
+    // Le texte superposé, posé dans la zone. Il est centré verticalement
+    // dans la boîte : c'est là que l'œil va le chercher.
+    let Some(overlay) = overlay else {
+        return Ok(operations);
+    };
+    if overlay.text.trim().is_empty() {
+        return Ok(operations);
+    }
+    let size = if overlay.size.is_finite() && overlay.size > 0.0 {
+        overlay.size
+    } else {
+        12.0
+    };
+    let (_, font_name) = doc.ensure_patch_font_named(page_id, overlay.font.base_font(false, false))?;
+
+    let text = encode_pdf_literal(&overlay.text);
+    let text_object = Object::String(text, lopdf::StringFormat::Literal);
+    let ink = crate::redact::geometry::estimate_width(&overlay.text, size, "Helvetica");
+    let x = region.x1 + ((region.x2 - region.x1) - ink) / 2.0;
+    let y = region.y1 + ((region.y2 - region.y1) - size * 0.7) / 2.0;
+
+    operations.push(Operation {
+        operator: "q".to_string(),
+        operands: Vec::new(),
+    });
+    operations.push(Operation {
+        operator: "BT".to_string(),
+        operands: Vec::new(),
+    });
+    operations.push(Operation {
+        operator: "rg".to_string(),
+        operands: overlay
+            .color
+            .iter()
+            .map(|c| Object::Real(f32::from(*c) / 255.0))
+            .collect(),
+    });
+    operations.push(Operation {
+        operator: "Tf".to_string(),
+        operands: vec![
+            Object::Name(font_name.into_bytes()),
+            Object::Real(size),
+        ],
+    });
+    operations.push(Operation {
+        operator: "Td".to_string(),
+        operands: vec![Object::Real(x), Object::Real(y)],
+    });
+    operations.push(Operation {
+        operator: "Tj".to_string(),
+        operands: vec![text_object],
+    });
+    operations.push(Operation {
+        operator: "ET".to_string(),
+        operands: Vec::new(),
+    });
+    operations.push(Operation {
+        operator: "Q".to_string(),
+        operands: Vec::new(),
+    });
+
+    Ok(operations)
 }
 
 /// Résout le sous-type d'un XObject (Image/Form) dans les ressources de la

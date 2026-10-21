@@ -1713,6 +1713,19 @@ impl Document {
     /// WinAnsi produit du texte illisible. Une police dédiée garantit
     /// l'encodage et n'écrase rien.
     fn ensure_patch_font(&mut self, page_id: (u32, u16), base_font: &str) -> Result<(u32, u16)> {
+        self.ensure_patch_font_named(page_id, base_font).map(|(id, _)| id)
+    }
+
+    /// Même chose que [`Document::ensure_patch_font`], mais renvoie aussi le
+    /// **nom de ressource** utilisable dans un flux de contenu.
+    ///
+    /// Le caviardage a besoin du nom (`/YouPdfF1`) pour écrire son texte
+    /// superposé, pas seulement de l'identifiant d'objet.
+    pub(crate) fn ensure_patch_font_named(
+        &mut self,
+        page_id: (u32, u16),
+        base_font: &str,
+    ) -> Result<((u32, u16), String)> {
         // Nom libre, ou nom déjà pris par **la même** variante. Le nom seul ne
         // suffit pas : un document peut porter `/YouPdfF1` sur un autre fichier
         // de base (patch d'une version antérieure, outil tiers). Dans ce cas on
@@ -1754,7 +1767,7 @@ impl Document {
                 })
                 .unwrap_or(false);
             if matching {
-                return Ok(id);
+                return Ok((id, name));
             }
             suffix += 1;
             name = format!("{base_name}{suffix}");
@@ -1768,7 +1781,7 @@ impl Document {
         ]);
         let font_id = self.inner_mut().add_object(Object::Dictionary(font));
         self.link_font_to_page(page_id, &name, font_id)?;
-        Ok(font_id)
+        Ok((font_id, name))
     }
 
     /// Enregistre une police dans les ressources `/Font` d'une page.
