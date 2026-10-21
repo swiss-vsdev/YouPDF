@@ -65,7 +65,10 @@ pub use extract::{ExtractedTable, KeyValue};
 pub use forms::{FieldProperties, FormDataFormat, FormField, FormFieldKind, NewFormField};
 pub use measure::{MeasureKind, Measurement};
 pub use metadata::DocumentMetadata;
-pub use ocr::{OcrEngine, OcrMode, OcrResult, TesseractEngine, validate_language};
+pub use ocr::{
+    LANGUAGES, OcrEngine, OcrLanguage, OcrMode, OcrResult, TesseractEngine, combine_languages,
+    language_name, validate_language,
+};
 pub use office::OfficeFormat;
 pub use pdfa::Conformance;
 pub use protect::{EncryptionOptions, EncryptionStrength, Permissions};
