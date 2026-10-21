@@ -9,6 +9,7 @@ use lopdf::Object;
 use youpdf_shared::Result;
 
 use crate::document::Document;
+use crate::units::Unit;
 
 /// Boîte de page écrite par le recadrage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +52,21 @@ impl Default for CropMargins {
             bottom: 18.0,
             right: 18.0,
             top: 18.0,
+        }
+    }
+}
+
+impl CropMargins {
+    /// Marges exprimées dans une autre unité que le point.
+    ///
+    /// La conversion passe par les points : le moteur ne connaît que le
+    /// point, l'unité n'existe qu'à l'interface.
+    pub fn from_unit(left: f32, bottom: f32, right: f32, top: f32, unit: Unit) -> Self {
+        Self {
+            left: unit.to_points(left),
+            bottom: unit.to_points(bottom),
+            right: unit.to_points(right),
+            top: unit.to_points(top),
         }
     }
 }
