@@ -317,7 +317,7 @@ cargo test --workspace
 ```
 
 The suite is mostly integration tests over generated PDFs, so it needs no
-fixtures on disk. `youpdf-core` alone carries 231 integration tests spread
+fixtures on disk. `youpdf-core` alone carries 234 integration tests spread
 across 31 files, covering redaction, encryption, forms, annotations, crop,
 watermark, compression, OCR modes, comparison, extraction, measurement, page
 organisation, PDF/A markers, text export and Office export. The
