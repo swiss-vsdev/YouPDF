@@ -116,7 +116,8 @@ on.
 - **Extract data**: tables and key/value pairs out of the text layer.
 - **Digital signatures at library level**: detached PKCS#7 (`adbe.pkcs7.detached`)
   RSA-SHA-256 signatures, self-signed certificate creation, PKCS#12 import,
-  visual signature placement and signature validation.
+  visual signature placement (the text fallback — a signature *image* is not
+  decoded) and signature validation.
 - **Batch window**: apply export, OCR, compression, protection, flattening,
   watermarks, headers/footers, Bates numbering, backgrounds, page insertion and
   page removal to a whole folder, combine several files into one PDF, or send
