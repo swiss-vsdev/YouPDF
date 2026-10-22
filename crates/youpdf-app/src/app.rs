@@ -984,13 +984,37 @@ const TOOLS_MENU: &[(&str, &str, ToolsEntry)] = &[
 ];
 
 /// Nature du brouillon de texte en cours de saisie.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DraftKind {
     Note,
     FreeText,
     Signature,
     Link,
     Stamp,
+}
+
+/// Type de brouillon demandé par l'outil courant.
+///
+/// L'index de l'outil dépend du mode : le mode Édition n'a pas les mêmes
+/// outils que le mode Commentaire, et le même index ne veut pas dire la même
+/// chose. `Some(3)` est « Comment » en mode Commentaire et « Lien » en mode
+/// Édition.
+fn draft_kind_for(mode: Option<usize>, tool: Option<usize>) -> DraftKind {
+    if mode == Some(1) {
+        return match tool {
+            Some(1) => DraftKind::FreeText,
+            Some(3) => DraftKind::Link,
+            _ => DraftKind::FreeText,
+        };
+    }
+    match tool {
+        Some(2) => DraftKind::FreeText,
+        Some(3) => DraftKind::Note,
+        Some(7) => DraftKind::Link,
+        Some(8) => DraftKind::Stamp,
+        Some(9) => DraftKind::Signature,
+        _ => DraftKind::FreeText,
+    }
 }
 
 /// Mode de la gomme du crayon.
@@ -3653,14 +3677,7 @@ impl YouPdfApp {
 
     /// Type de brouillon pour l'outil courant (texte, note, tampon, lien).
     fn draft_kind(&self) -> DraftKind {
-        match self.annot_tool {
-            Some(2) => DraftKind::FreeText,
-            Some(3) => DraftKind::Note,
-            Some(7) => DraftKind::Link,
-            Some(8) => DraftKind::Stamp,
-            Some(9) => DraftKind::Signature,
-            _ => DraftKind::FreeText,
-        }
+        draft_kind_for(self.mode, self.annot_tool)
     }
 
     /// Ajoute une annotation de type rectangle (surlignage, formes).
@@ -14466,5 +14483,26 @@ mod tests {
         assert!(link_at(&links, [98.5, 710.0]).is_some());
         // Un point plus loin, hors de la tolérance.
         assert!(link_at(&links, [90.0, 710.0]).is_none());
+    }
+
+    /// L'outil Lien du mode Édition ouvre bien « Ajouter un lien ».
+    ///
+    /// Les modes n'ont pas les mêmes outils : l'index 3 est « Comment » en
+    /// mode Commentaire et « Lien » en mode Édition. Sans cette distinction,
+    /// le clic demandait du texte.
+    #[test]
+    fn outil_lien_du_mode_edition_ouvre_un_lien() {
+        assert_eq!(
+            draft_kind_for(Some(1), Some(3)),
+            DraftKind::Link,
+            "l'outil Lien du mode Édition"
+        );
+        assert_eq!(
+            draft_kind_for(Some(0), Some(3)),
+            DraftKind::Note,
+            "l'outil Comment du mode Commentaire"
+        );
+        // L'outil Lien du mode Commentaire reste un lien.
+        assert_eq!(draft_kind_for(Some(0), Some(7)), DraftKind::Link);
     }
 }
