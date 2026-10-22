@@ -12921,7 +12921,7 @@ fn snap_form_rect(
     let mut guides = Vec::new();
     let neighbors: Vec<[f32; 4]> = fields
         .iter()
-        .filter(|field| field.page == Some(page + 1) && field.rect != [0.0; 4])
+        .filter(|field| forms_ui::field_on_page(field.page, page) && field.rect != [0.0; 4])
         .map(|field| field.rect)
         .collect();
     if neighbors.is_empty() || tol <= 0.0 {
@@ -13717,13 +13717,18 @@ mod tests {
         };
         // Bord gauche à 2 pt de celui du voisin : il doit coller.
         let (rect, guides) =
-            snap_form_rect([102.0, 200.0, 130.0, 220.0], &[neighbor], 0, 6.0);
+            snap_form_rect([102.0, 200.0, 130.0, 220.0], &[neighbor.clone()], 1, 6.0);
         assert!((rect[0] - 100.0).abs() < 1e-4, "{rect:?}");
         assert!((rect[2] - 128.0).abs() < 1e-4, "{rect:?}");
         assert!(guides.iter().any(|(vertical, at)| *vertical && (*at - 100.0).abs() < 1e-4));
+        // Un voisin posé sur une autre page n'attire pas le champ.
+        let (other, guides) =
+            snap_form_rect([102.0, 200.0, 130.0, 220.0], &[neighbor.clone()], 2, 6.0);
+        assert_eq!(other, [102.0, 200.0, 130.0, 220.0]);
+        assert!(guides.is_empty());
         // Aucun voisin à portée : rien ne bouge.
         let (far, guides) =
-            snap_form_rect([400.0, 400.0, 450.0, 420.0], &[], 0, 6.0);
+            snap_form_rect([400.0, 400.0, 450.0, 420.0], &[], 1, 6.0);
         assert_eq!(far, [400.0, 400.0, 450.0, 420.0]);
         assert!(guides.is_empty());
     }
