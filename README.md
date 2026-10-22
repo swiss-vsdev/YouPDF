@@ -45,8 +45,8 @@ on.
 - Four working modes — **Comment**, **Edit**, **Form**, **Redact** — each with
   its own tool strip.
 - Edit mode covers in-place text editing (font family — Helvetica, Times or
-  Courier, since the patch is written with a standard-14 font and never
-  reuses the document's own — size, colour, bold, italic, underline,
+  Courier: the patch is written with one of those three, and never reuses
+  the document's own font — size, colour, bold, italic, underline,
   strike-out, alignment and line spacing), image placement (replace, rotate,
   flip, crop, opacity) and hyperlink insertion.
 - **Annotations**: highlight, underline, strike-out, squiggly, note, free text,
@@ -131,7 +131,7 @@ on.
 | Text | Plain, Markdown, HTML, CSV, XML, RTF |
 | Images | PNG, JPEG, TIFF (one file per page), plus one long image with all pages stacked; 36–600 dpi |
 | Embedded images | PNG, one file per image embedded in the document |
-| Office | Word `.docx`, Excel `.xlsx`, PowerPoint `.pptx` — reflowed text, or exact layout for Word (each run positioned), and one slide per page |
+| Office | Word `.docx`, Excel `.xlsx`, PowerPoint `.pptx` — reflowed text, or exact layout for Word (each run positioned), and one slide per page. Excel column detection exists in the library but the "Exact layout" checkbox is only offered for Word |
 | Standards | PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4, PDF/E-1 — declared markers, not validated conformance |
 
 Text export rebuilds the text layer only: images, tables and the page layout are
@@ -358,8 +358,9 @@ redaction and sanitizing, OCR (searchable, text+image, editable) with
 scanned-page detection, measurement with calibration, document comparison with
 a difference navigator, batch processing (convert, OCR, insert, remove,
 watermark, background, header/footer, Bates, compress, protect, flatten,
-combine, print), Office export (Word flow and exact layout with image
-embedding, Excel and PowerPoint flow), preferences with auto-save,
+combine, print), Office export (Word flow and exact layout, Excel and
+PowerPoint flow, page images embedded in Word and PowerPoint),
+preferences with auto-save,
 English/French UI (the Tools dropdown today), and the AI assistant.
 
 ### Closed parity gaps
