@@ -5,6 +5,7 @@
 //! (par ex. vers une implémentation maison) sans impacter l'UI ni l'IA.
 
 use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -31,6 +32,33 @@ pub struct Document {
     /// chaque page rendue coûte O(taille du document) par page, donc
     /// O(n²) pour parcourir un document de n pages.
     snapshot: RefCell<Option<(u64, Rc<Vec<u8>>)>>,
+
+    /// Table des pages et géométrie d'affichage, mémorisées tant que le
+    /// document n'a pas été modifié.
+    page_cache: RefCell<Option<Rc<PageCache>>>,
+
+    /// Nombre de reconstructions de la table des pages.
+    ///
+    /// Sert aux tests : le cache doit servir une table déjà construite au
+    /// lieu d'en reconstruire une à chaque appel.
+    page_map_builds: Cell<u64>,
+}
+
+/// Table des pages et géométrie d'affichage, mémorisées.
+///
+/// `lopdf::Document::get_pages()` reconstruit une `BTreeMap` à chaque appel,
+/// en parcourant tout l'arbre des pages : lire une page y paye le prix du
+/// document entier. Le cache évite de reconstruire cette table, et la
+/// géométrie de chaque page, tant que rien n'a changé.
+struct PageCache {
+    /// Génération du document (compteur de mutations) à la construction.
+    generation: u64,
+    /// Numéro de page (1-indexé) → identifiant d'objet lopdf.
+    pages: BTreeMap<u32, lopdf::ObjectId>,
+    /// Identifiant d'objet lopdf → numéro de page (1-indexé).
+    numbers: HashMap<lopdf::ObjectId, u32>,
+    /// Géométrie d'affichage résolue, calculée à la demande.
+    views: RefCell<HashMap<u32, PageView>>,
 }
 
 /// Rotation ramenée à un multiple de 90 degrés, dans `0..360`.
@@ -224,6 +252,8 @@ impl Document {
             metadata,
             mutation: Cell::new(0),
             snapshot: RefCell::new(None),
+            page_cache: RefCell::new(None),
+            page_map_builds: Cell::new(0),
         })
     }
 
@@ -238,6 +268,8 @@ impl Document {
             metadata,
             mutation: Cell::new(0),
             snapshot: RefCell::new(None),
+            page_cache: RefCell::new(None),
+            page_map_builds: Cell::new(0),
         })
     }
 
@@ -249,8 +281,7 @@ impl Document {
             .map_err(|e| Error::Pdf(format!("sauvegarde {} : {e}", path.display())))?;
         // `lopdf::Document::save` peut normaliser le document (longueurs de
         // flux, renumérotation) : la sérialisation en cache n'est plus sûre.
-        self.mutation.set(self.mutation.get().wrapping_add(1));
-        self.snapshot.borrow_mut().take();
+        self.invalidate();
         Ok(())
     }
 
@@ -298,13 +329,25 @@ impl Document {
             metadata,
             mutation: Cell::new(0),
             snapshot: RefCell::new(None),
+            page_cache: RefCell::new(None),
+            page_map_builds: Cell::new(0),
         }
     }
 
     /// Signale une modification : invalide la sérialisation en cache.
     pub(crate) fn touch(&mut self) {
+        self.invalidate();
+    }
+
+    /// Signale une modification : invalide les caches.
+    ///
+    /// Toute mutation passe par là (ou par [`Document::inner_mut`]) : c'est
+    /// le seul point où la table des pages et la géométrie d'affichage
+    /// mémoïsées deviennent fausses.
+    fn invalidate(&mut self) {
         self.mutation.set(self.mutation.get().wrapping_add(1));
         self.snapshot.borrow_mut().take();
+        self.page_cache.borrow_mut().take();
     }
 
     /// Identifiant du nœud racine de l'arbre des pages.
@@ -322,16 +365,60 @@ impl Document {
 
     /// Résout un numéro de page (1-indexé) en identifiant d'objet lopdf.
     pub(crate) fn page_id(&self, page_number: u32) -> Result<lopdf::ObjectId> {
-        self.inner
-            .get_pages()
+        self.page_cache()
+            .pages
             .get(&page_number)
             .copied()
             .ok_or_else(|| Error::NotFound(format!("page {page_number} introuvable")))
     }
 
+    /// Table des pages, mémorisée tant que le document n'a pas été modifié.
+    ///
+    /// `lopdf::Document::get_pages()` parcourt tout l'arbre des pages et
+    /// alloue une `BTreeMap` neuve à chaque appel ; l'interface l'appelle
+    /// pour chaque fragment de texte d'une recherche, donc O(fragments ×
+    /// pages) reconstructions. La table est reconstruite à la première
+    /// demande après une mutation, puis réutilisée telle quelle.
+    fn page_cache(&self) -> Rc<PageCache> {
+        let generation = self.mutation.get();
+        if let Some(cache) = self.page_cache.borrow().as_ref() {
+            if cache.generation == generation {
+                return Rc::clone(cache);
+            }
+        }
+
+        let pages = self.inner.get_pages();
+        let numbers = pages
+            .iter()
+            .map(|(number, id)| (*id, *number))
+            .collect::<HashMap<_, _>>();
+        let cache = Rc::new(PageCache {
+            generation,
+            pages,
+            numbers,
+            views: RefCell::new(HashMap::new()),
+        });
+        *self.page_cache.borrow_mut() = Some(Rc::clone(&cache));
+        self.page_map_builds.set(self.page_map_builds.get().wrapping_add(1));
+        cache
+    }
+
+    /// Numéro de page (1-indexé) d'un identifiant d'objet, s'il est une page.
+    pub(crate) fn page_number_of(&self, id: lopdf::ObjectId) -> Option<u32> {
+        self.page_cache().numbers.get(&id).copied()
+    }
+
+    /// Nombre de reconstructions de la table des pages.
+    ///
+    /// Exposé pour les tests : il doit rester à 1 entre deux mutations.
+    #[cfg(test)]
+    pub(crate) fn page_map_build_count(&self) -> u64 {
+        self.page_map_builds.get()
+    }
+
     /// Nombre de pages du document.
     pub fn page_count(&self) -> usize {
-        self.inner.get_pages().len()
+        self.page_cache().pages.len()
     }
 
     /// Métadonnées (titre, auteur, dates…).
@@ -424,11 +511,30 @@ impl Document {
     /// l'arbre des pages si besoin ; elle ne part pas forcément de `(0, 0)`.
     /// La rotation reste séparée de la boîte : c'est ce que fait un lecteur,
     /// et c'est ce qui permet de replacer une image sans déformer la page.
+    ///
+    /// La géométrie est mémorisée avec la table des pages : l'interface la
+    /// demande pour chaque fragment de texte d'une recherche, et remonter
+    /// la chaîne des `/Parent` à chaque fois coûte cher sur un grand
+    /// document.
     pub fn page_view(&self, page_number: u32) -> PageView {
-        let Ok(page_id) = self.page_id(page_number) else {
+        // La table des pages d'abord : elle porte le cache des géométries.
+        let cache = self.page_cache();
+        if let Some(view) = cache.views.borrow().get(&page_number).copied() {
+            return view;
+        }
+
+        let Some(&page_id) = cache.pages.get(&page_number) else {
             return PageView::default();
         };
 
+        let view = self.resolve_page_view(page_id);
+        cache.views.borrow_mut().insert(page_number, view);
+        view
+    }
+
+    /// Résout la géométrie d'affichage d'une page, en remontant la chaîne
+    /// des `/Parent` pour les boîtes et la rotation.
+    fn resolve_page_view(&self, page_id: lopdf::ObjectId) -> PageView {
         let mut rotation = 0_i64;
         let mut rotation_known = false;
         let mut current = Some(page_id);
@@ -511,12 +617,62 @@ impl Document {
     ///
     /// invalide le cache de sérialisation : toute modification passe par ici.
     pub(crate) fn inner_mut(&mut self) -> &mut lopdf::Document {
-        self.mutation.set(self.mutation.get().wrapping_add(1));
-        self.snapshot.borrow_mut().take();
+        self.invalidate();
         &mut self.inner
     }
 
     pub(crate) fn inner(&self) -> &lopdf::Document {
         &self.inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::create::blank_document;
+
+    /// La table des pages n'est reconstruite qu'une fois tant que le document
+    /// ne change pas.
+    ///
+    /// L'interface lit le nombre de pages et la géométrie d'une page pour
+    /// chaque fragment de texte d'une recherche : sans cache, chaque lecture
+    /// reconstruisait l'arbre des pages du document entier.
+    #[test]
+    fn table_des_pages_construite_une_seule_fois() {
+        let doc = blank_document(3, 595.0, 842.0).expect("document vide");
+        let first = doc.page_map_build_count();
+        for _ in 0..10 {
+            assert_eq!(doc.page_count(), 3);
+            assert_eq!(doc.page_size(1), (595.0, 842.0));
+            let _ = doc.page_view(2);
+        }
+        assert_eq!(
+            doc.page_map_build_count(),
+            first + 1,
+            "la table est reconstruite une seule fois"
+        );
+    }
+
+    /// Une modification invalide le cache : la table est reconstruite.
+    #[test]
+    fn une_mutation_reconstruit_la_table() {
+        let mut doc = blank_document(2, 595.0, 842.0).expect("document vide");
+        let before = doc.page_map_build_count();
+        doc.touch();
+        let _ = doc.page_count();
+        assert!(
+            doc.page_map_build_count() > before,
+            "la table est reconstruite après une mutation"
+        );
+    }
+
+    /// La géométrie d'une page reste la même d'un appel à l'autre.
+    #[test]
+    fn geometrie_de_page_stable() {
+        let doc = blank_document(2, 595.0, 842.0).expect("document vide");
+        let first = doc.page_view(1);
+        let second = doc.page_view(1);
+        assert_eq!(first.width, second.width);
+        assert_eq!(first.height, second.height);
+        assert_eq!(first.rotation, second.rotation);
     }
 }

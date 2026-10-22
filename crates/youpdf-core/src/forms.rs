@@ -384,7 +384,7 @@ impl Document {
             .get(b"P")
             .ok()
             .and_then(|o| o.as_reference().ok())
-            .and_then(|page_id| self.page_number_of(page_id))
+            .and_then(|page_id| self.page_number_of(page_id).map(|num| num as usize))
             .or(inherited.page);
         let rect = field_rect(dict).or(inherited.rect);
 
@@ -464,7 +464,7 @@ impl Document {
                 .get(b"P")
                 .ok()
                 .and_then(|o| o.as_reference().ok())
-                .and_then(|page_id| self.page_number_of(page_id))
+                .and_then(|page_id| self.page_number_of(page_id).map(|num| num as usize))
                 .or_else(|| self.page_of_annotation(widget_id))
                 .or(page);
             out.push(FormField {
@@ -838,15 +838,6 @@ impl Document {
         }
     }
 
-    /// Trouve le numéro de page (1-indexé) à partir d'une référence de page.
-    fn page_number_of(&self, page_id: (u32, u16)) -> Option<usize> {
-        for (num, id) in self.inner().get_pages() {
-            if id == page_id {
-                return Some(num as usize);
-            }
-        }
-        None
-    }
 }
 
 /// Propriétés modifiables d'un champ de formulaire existant.
