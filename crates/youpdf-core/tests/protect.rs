@@ -7,8 +7,8 @@
 
 use std::path::PathBuf;
 
-use youpdf_core::Document;
 use youpdf_core::protect::{EncryptionOptions, EncryptionStrength, Permissions};
+use youpdf_core::Document;
 
 /// Une page blanche 612×792 avec un peu de texte.
 fn page_blanche() -> Vec<u8> {
@@ -143,5 +143,84 @@ fn sans_mot_de_passe_le_contenu_reste_illisible() {
     assert!(
         !contient(&contenu_page_1(&chiffre), b"YouPDF"),
         "le flux de contenu ne doit pas être en clair"
+    );
+}
+
+/// Un fichier RC4-128 se rouvre avec son mot de passe ; un fichier AES-256
+/// ne peut pas l'être, et l'erreur doit le dire : `lopdf` ne déchiffre que
+/// les révisions 2 et 3.
+#[test]
+fn rouvrir_explique_que_l_aes_256_est_illisible() {
+    let doc = Document::from_bytes(&page_blanche()).expect("ouverture");
+
+    let path_rc4 = chemin("rc4");
+    let mut options_rc4 = options();
+    options_rc4.strength = EncryptionStrength::Rc4_128;
+    doc.save_protected(&path_rc4, &options_rc4)
+        .expect("chiffrement RC4");
+    let relu = Document::open_protected(&path_rc4, "mot-de-passe");
+    let _ = std::fs::remove_file(&path_rc4);
+    assert!(
+        relu.is_ok(),
+        "un fichier RC4-128 doit se rouvrir avec son mot de passe"
+    );
+
+    let path_aes = chemin("aes");
+    doc.save_protected(&path_aes, &options())
+        .expect("chiffrement AES");
+    let message = match Document::open_protected(&path_aes, "mot-de-passe") {
+        Ok(_) => panic!("un fichier AES-256 ne peut pas être rouvert par lopdf"),
+        Err(erreur) => erreur.to_string(),
+    };
+    let _ = std::fs::remove_file(&path_aes);
+    assert!(
+        !message.contains("mot de passe refusé"),
+        "l'erreur ne doit pas accuser le mot de passe : {message}"
+    );
+    assert!(
+        message.contains("AES-256"),
+        "l'erreur doit nommer la cause : {message}"
+    );
+}
+
+/// Un mauvais mot de passe sur un fichier RC4 doit toujours être signalé
+/// comme tel : le message ne vaut que si les deux cas sont distincts.
+#[test]
+fn un_mauvais_mot_de_passe_reste_signale_comme_tel() {
+    let doc = Document::from_bytes(&page_blanche()).expect("ouverture");
+    let mut options = options();
+    options.strength = EncryptionStrength::Rc4_128;
+
+    let path = chemin("mauvais-mot-de-passe");
+    doc.save_protected(&path, &options)
+        .expect("chiffrement RC4");
+    let message = match Document::open_protected(&path, "mauvais") {
+        Ok(_) => panic!("le mauvais mot de passe doit être refusé"),
+        Err(erreur) => erreur.to_string(),
+    };
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        message.contains("mot de passe refusé"),
+        "un mauvais mot de passe doit le dire : {message}"
+    );
+}
+
+/// Le choix affiché dans la fenêtre « Protéger » doit dire ce que l'app sait
+/// faire : seul le RC4 se rouvre ici, l'AES-256 s'ouvre ailleurs.
+#[test]
+fn le_libelle_du_chiffrement_annonce_ce_que_l_app_sait_rouvrir() {
+    assert!(
+        EncryptionStrength::Rc4_128
+            .display_name()
+            .contains("reopenable"),
+        "RC4-128 doit se dire rouvrable : {}",
+        EncryptionStrength::Rc4_128.display_name()
+    );
+    assert!(
+        EncryptionStrength::Aes256
+            .display_name()
+            .contains("another reader"),
+        "AES-256 doit dire qu'il s'ouvre ailleurs : {}",
+        EncryptionStrength::Aes256.display_name()
     );
 }
