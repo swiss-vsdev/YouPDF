@@ -16,9 +16,9 @@ on.
 | | |
 |---|---|
 | ![Home screen](docs/screenshots/home.png) | ![Document view](docs/screenshots/document-view.png) |
-| **Home** — recent files, starred files and the tool shortcuts on one screen. | **Viewer** — a document open with the page sidebar, the canvas and the inspector. |
+| **Home** — recent files, starred files and the tool shortcuts on one screen. | **Viewer** — a document open with the **Pages** panel of previews on the left and the canvas on the right. |
 | ![Document editor](docs/screenshots/document-editor.png) | |
-| **Editor** — a multi-page document rendered through PDFium, thumbnails panel open. | |
+| **Editor** — a multi-page document rendered through PDFium, **Pages** panel open. | |
 
 ## Features
 
@@ -26,12 +26,14 @@ on.
 
 - Tabs, a home screen with **Recents**, **Starred** and **Tools** sections, and
   a file grid or list. Starred files are remembered in `~/.youpdf/starred.txt`.
-- Thumbnails panel, continuous scrolling, zoom (fit width, fit page, actual
-  size), and four page layouts: single, continuous, two pages, and cover.
+- A **Pages** panel of previews on the left (its width and the size of the
+  previews are adjustable), continuous scrolling, zoom (fit width, fit page,
+  actual size), and four page layouts: single, continuous, two pages, and
+  cover.
 - Fullscreen mode, slideshow mode (<kbd>F5</kbd>), and printing through the
   system `lp` command.
-- Side rail with page thumbnails, full-text search, bookmarks, comments, form
-  fields and attachments.
+- Side rail opening the Pages panel, full-text search, bookmarks, comments,
+  form fields and attachments.
 - **Search and replace** over a built text index, with case folding.
 - **Text selection** at character level using PDFium glyph boxes; double-click
   selects a word, triple-click selects a line.
@@ -143,7 +145,7 @@ talk to your own provider and work on the text of the open document:
   settings file.
 - Requests run on a worker thread, so the window stays responsive.
 
-![The editor with the thumbnails panel](docs/screenshots/document-editor.png)
+![The editor with the Pages panel](docs/screenshots/document-editor.png)
 
 ### Interface
 
@@ -264,7 +266,9 @@ icon reads oversized in the Dock.
 1. Launch `youpdf`. The home screen lists your recent files; **Tools** opens
    the tool shortcuts, and the star on a card adds the file to **Starred**.
 2. Open a PDF — by double-clicking a card, dropping a file on the window, or
-   <kbd>⌘O</kbd>. The page sidebar, the canvas and the inspector open.
+   <kbd>⌘O</kbd>. The **Pages** panel of previews opens on the left and the
+   canvas takes the rest of the window. The inspector is a small floating
+   popup: it appears over the element you select, not on open.
 3. Pick a mode in the toolbar: **Comment** to annotate and discuss, **Edit** to
    change text and images, **Form** to fill or build a form, **Redact** to
    black out content for good.
