@@ -31,6 +31,7 @@ pub mod document;
 pub mod edit;
 pub mod extract;
 pub mod forms;
+pub mod links;
 pub mod measure;
 pub mod metadata;
 pub mod organize;
@@ -63,6 +64,7 @@ pub use edit::{
 };
 pub use extract::{ExtractedTable, KeyValue};
 pub use forms::{FieldProperties, FormDataFormat, FormField, FormFieldKind, NewFormField};
+pub use links::{LinkAction, PageLink};
 pub use measure::{MeasureKind, Measurement};
 pub use metadata::DocumentMetadata;
 pub use ocr::{
