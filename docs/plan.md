@@ -7,9 +7,9 @@ Inventory evidence: `./ux-spec.md` + screenshots + `menus-fr.txt` (this director
 
 ## Stack
 
-- Render engine: **PDFium** via `pdfium-render` (BSD-3, prebuilt dylib from bblanchon/pdfium-binaries). App code 100% Rust; PDFium is C++ statically linked. Escape hatch: `DocumentBackend` trait so `hayro` (pure Rust) can swap in later.
-- UI: **egui** + `wgpu` + `winit`. Immediate-mode, dark theme, custom titlebar (traffic lights inset), floating pill toolbars.
-- Structural edits: `lopdf`. Forms: PDFium form API. Icons: Lucide/Phosphor (MIT) restyled; palette from ux-spec §6 (`#303030` / `#282828` / accent `#7A7EF6` / selected tint `#E8E8F8`).
+- Render engine: **PDFium** via `pdfium-render` (BSD-3, prebuilt dylib from bblanchon/pdfium-binaries). App code 100% Rust; PDFium is C++ and linked **dynamically** (the dylib is vendored in `pdfium/` and copied next to the binary by the packaging script). Escape hatch: the `Renderer` trait (`crates/youpdf-core/src/render.rs:112`) so a pure-Rust backend can swap in later.
+- UI: **egui** + **eframe** with the **glow** renderer (`Cargo.toml:52`); wgpu is not a dependency. Immediate-mode, dark theme, custom titlebar, floating pill toolbars.
+- Structural edits: `lopdf`. Forms: `lopdf` (the `/AcroForm` and widget dictionaries are written directly; the PDFium form API is not used). Icons: own hand-drawn vector paths (51 `fn icon_*` in `crates/youpdf-app/src/app.rs`), with Phosphor used in a few places only; palette from ux-spec §6 (`#303030` / `#282828` / accent `#7A7EF6` / selected tint `#E8E8F8`).
 - No telemetry, no auto-updater, no Firebase (unlike target).
 - Deps all MIT/Apache/BSD.
 
@@ -19,29 +19,32 @@ Inventory evidence: `./ux-spec.md` + screenshots + `menus-fr.txt` (this director
 YouPDF/
   Cargo.toml            # workspace
   crates/
+    youpdf-shared/      # error/result, i18n table, theme tokens
     youpdf-core/        # document model, PDFium wrapper, render pipeline, ops
+    youpdf-ai/          # optional AI layer, keyring, settings file
     youpdf-app/         # egui UI, theme, panels, shortcuts
-  assets/icons/         # own SVGs
+  pdfium/               # vendored libpdfium.dylib
+  scripts/              # install-pdfium.sh, build-macos-app.sh, build-macos-icon.sh
   docs/ux-spec.md       # copy of inventory
   LICENSE               # MIT
 ```
 
 ## Phases (first release = 0.1-0.4, per decision)
 
-- **v0.1 Viewer** — window + custom titlebar; tabs (open/close/+); drag-drop; async tiled rendering (worker pool, LRU cache, prefetch); smooth zoom/pan; fit-width default; left rail (8 tools, ux-spec §2); thumbnails panel; outline; search panel (find, next/prev, highlight hits); status/zoom; Cmd shortcuts (⌘O/⌘W/⌘F/⌘±/⌘0-9); dark theme.
+- **v0.1 Viewer** — window + custom titlebar; tabs (open/close/+); drag-drop; tiled rendering on the UI thread with a `(page, step)` √2 render pyramid cached in memory (no worker pool, no LRU eviction, no prefetch); smooth zoom/pan; fit-width default; left rail (8 tools, ux-spec §2); pages panel; outline; search panel (find, next/prev, inline replace-all, funnel filter); status/zoom; Cmd shortcuts (⌘O/⌘W/⌘F/⌘±/⌘0) and Ctrl-1…0 for the Tools menu; dark theme.
 - **v0.2 Read+** — text select/copy, links, rotate, page layouts (single/continuous/two-page/cover), fullscreen.
-- **v0.3 Annotate** — highlight/underline/strikeout, sticky notes, text boxes, ink, shapes, stamps; select/move/delete; presets (color/width); incremental save; flatten. Toolbar mirrors ux-spec §5 Commentaire.
+- **v0.3 Annotate** — highlight/underline/strikeout, sticky notes, text boxes, ink, shapes, stamps; select/delete (there is no path to reposition an existing annotation); presets (color/width); flatten. Saving writes the whole document, not an incremental update. Toolbar mirrors ux-spec §5 Commentaire.
 - **v0.4 Page ops + forms** — Organize Pages surface (tiles, multi-select, rotate, delete, insert, extract, replace, split, merge); watermark/header/footer/page numbers; AcroForm fill + flatten; images↔PDF; compress; export text/HTML; password protect.
 - **v0.5 Content editing (spike first)** — text touch-up via content-stream surgery + font matching; image replace. Fragile on complex PDFs; spike before promising.
-- **v0.6 Stretch** — OCR (bundled tesseract; quality below target's), redaction (two-phase mark→apply, same UX as target), PDF→Word (layout loss), signatures (PAdES), compare, optional local AI (Ollama, off by default).
+- **v0.6 Stretch** — OCR (the **system** tesseract, resolved from `PATH`; quality below target's), redaction (two-phase mark→apply, same UX as target), PDF→Word (layout loss), signatures (detached PKCS#7 / CAdES — not PAdES), compare, optional local AI (Ollama, off by default).
 
 ## Snappy targets
 
-Cold open < 500 ms; 60 fps scroll; no blank frame on zoom (low-res first, refine); render calls on worker pool; page textures cached; target installed size < 50 MB (vs 270 MB target).
+Cold open < 500 ms; 60 fps scroll; no blank frame on zoom (low-res first, refine); page textures cached; target installed size < 50 MB (vs 270 MB target) — a target, not a measurement: the vendored dylib alone is 7.0 MB and nothing in the repo measures the installed size.
 
 ## Packaging
 
-`cargo-bundle` → YouPDF.app, embed pdfium dylib, ad-hoc codesign. macOS first (arm64), Windows/Linux later.
+`scripts/build-macos-app.sh` → YouPDF.app (hand-written `Info.plist`, embedded `.icns` and pdfium dylib, ad-hoc codesign). macOS first (arm64), Windows/Linux later.
 
 ## Added context (found 2026-10-16, after initial plan)
 
@@ -80,15 +83,20 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
 2. Create workspace: `crates/youpdf-shared`, `youpdf-core`, `youpdf-ai`, `youpdf-app` (fewest crates that port cleanly; fold shared into core if it drags no deps).
 3. Port core modules (document, render, search, metadata first; annotate, forms, redact, protect, edit, ocr, convert, compare, signature next), fix imports, `cargo check` + run old tests (`smoke`, `audit_fixes*`) adapted.
 4. Port ai layer (providers, keyring, registry, tasks) with tokio worker.
-5. Rewrite UI from `ux-spec.md`: window chrome, rail (8 tools), panels, mode toolbars, organize surface, theme tokens; i18n framework from first commit (no hard-coded strings).
+5. Rewrite UI from `ux-spec.md`: window chrome, rail (8 tools), panels, mode toolbars, organize surface, theme tokens; i18n framework from first commit (the English string is the translation key, so an untranslated string falls back to English — most of the interface is still an English literal).
 
 ## Open items
 
-1. Home/start page design (recents grid) — not inventoried; design fresh.
-2. i18n framework choice (brief requires no hard-coded strings from first commit; 12+ languages, RTL-ready).
-3. Verify `YouPDF_OLD` compiles as-is before porting (do this on the OLD copy, not in the new repo).
+All three are closed. The home screen exists with its Recents grid, the i18n
+layer is in `crates/youpdf-shared/src/i18n.rs` (English and French, the
+English string is the key), and `YouPDF_OLD` was verified on the OLD copy
+before the port.
 
 ## Session log
+
+The entries below are a dated record: each "still missing" list states what
+was absent **at that date**, not what is absent today. The sections above
+describe the current state.
 
 - 2026-10-16 (UI pass 2): centered thumbnails; full vector icon set rewritten (rail, pills, tools)
   plus 20 new tool icons; per-mode toolbars (Comment/Edit/Form/Redact) that replace the mode pills and
@@ -104,7 +112,7 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
   protection each have a window in the actions menu. Reference-app behaviour notes are in
   `docs/updf-behaviour.md` (labels, option sets, flows, and what could not be confirmed).
 
-  Open questions from that pass:
+  Open questions from that pass (all three were resolved by the passes that follow):
   1. Header and footer share one set of slots and the band is drawn both at the top and at the bottom;
      the number joins the footer centre. The reference app has separate header and footer slots. Either
      extend `HeaderFooter` with a second set of slots, or make the position selectable.
@@ -118,7 +126,8 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
   the engine, and every finding was fixed in its own commit with a regression test where the
   behaviour was testable. The engine fixes: an odd-length `/Names` array no longer panics, a
   cyclic `/Kids` tree no longer multiplies the attachment list, an indirect `/Fields` array keeps
-  the fields already declared (reading and writing), the multi-select flag uses bit 21, redaction
+  the fields already declared (reading and writing), the multi-select flag uses bit 21 (1 << 20,
+  the `/Ff` value 1179648), redaction
   on a turned or cropped page paints and places in the displayed frame, inserting "after the last
   page" appends instead of prepending, inserted pages point at the node that holds them,
   `sanitize` keeps attachments while removing JavaScript, the OCR text layer is written in
@@ -137,10 +146,12 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
   and an unprotected copy written. The interface now reaches all of it from the tools menu and the
   overflow menu, with new windows for crop, background, Bates, compare, OCR and create, a password
   prompt for protected files, print through `lp`, reveal in the file manager, and image export at a
-  chosen resolution. Verified with `cargo clippy --workspace --all-targets` (clean), 75 core tests,
-  and a smoke run that opened every window (no error line, one Tesseract probe).
+  chosen resolution. Verified with `cargo clippy --workspace --all-targets` (clean), 75 core tests
+  (the suite now carries 234 core integration tests), and a smoke run that
+  opened every window (no error line, one Tesseract probe).
 
-  Still missing after this pass, in rough priority order:
+  Still missing after this pass, in rough priority order (all of them were closed
+  by the passes that follow):
   1. Form field properties (name, tooltip, required, read-only, options) and FDF/XFDF/CSV/JSON
      form data import/export.
   2. Batch processing (the reference app's Traitement par lots: convert, OCR, combine, insert,
@@ -173,7 +184,8 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
   conversions (`page_point`, `page_rect`, `display_point`) and the application converts at the
   boundaries. Covered by `tests/page_view.rs`.
 
-  Still missing after this pass, in rough priority order:
+  Still missing after this pass, in rough priority order (items 1-5 were closed by
+  the passes that follow; item 6 is still open):
   1. Word/Excel/PowerPoint export (needs a hand-rolled ZIP/DOCX writer; the `docx-rs` chain is still
      unresolvable).
   2. Themes beyond dark (light, mint, starry) and an i18n layer — the reference app ships 12+
@@ -240,7 +252,8 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
   - Undo always set the dirty flag, so undoing back to the saved state still prompted on close.
     A separate structural flag and an annotation baseline now decide.
   - The theme was hardcoded to Dark and never persisted; the dead per-provider `enabled` field is
-    gone; `AppSettings` derives `Default` as a whole so a partial settings file parses.
+    gone; `AppSettings` carries `#[serde(default)]` and a hand-written `Default` impl so a partial
+    settings file parses.
   - Sizes derived from a PDF are validated or computed in `usize`: `width*height*4` overflowed in
     `u32`; the pdfium page index truncated at 65535 pages; the diff LCS table could allocate
     hundreds of megabytes; a `/FlateDecode` stream could inflate without bound; a JPEG header could
@@ -291,7 +304,7 @@ Sources: `YouPDF/UPDF_Deep.md` (product research), `YouPDF_OLD/Target_Job.md` (f
   `sort_by` yield an unspecified order. It is now a two-pass grouping: sort by ordinate, close a
   group per line, sort each group by x.
 
-  Still open, in rough priority order:
+  Still open, in rough priority order (item 1 was closed later; item 2 is still open):
   1. An i18n layer. `AppSettings.locale` is stored but unused; strings are English literals and the
      reference app ships 12+ languages.
   2. Embedded ICC profile bytes for the declared PDF/A, PDF/X and PDF/E output, and a structure
