@@ -43,9 +43,9 @@ use youpdf_core::{
     AnnotationState, AnnotationStyle, AttachmentInfo, Background, BandSlots, Bates, BatesPosition,
     CommentFormat, ComparisonReport, CompressionExtras, Conformance, CropMargins, DifferenceKind, Document,
     EncryptionOptions, EncryptionStrength, ExtractedTable, FieldProperties, FormDataFormat,
-    FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, MeasureKind,
+    FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, LinkAction, MeasureKind,
     Measurement, NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem,
-    OutlineStyle, ImageCrop, OutlineTarget, PageRange, PageBitmap, PatchFont,
+    OutlineStyle, ImageCrop, OutlineTarget, PageRange, PageBitmap, PageLink, PatchFont,
     PdfiumRenderer, RedactionFill,
     RedactionMark, RedactionOverlay, RedactionReport, RenderOptions, Renderer, SearchIndex,
     SearchOptions, SearchResult, TextFormat,
@@ -3398,6 +3398,69 @@ impl YouPdfApp {
         #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
         let child = std::process::Command::new("xdg-open").arg(path).spawn();
         child.map(|_| ())
+    }
+
+    /// Ouvre une adresse avec l'application par défaut du système.
+    ///
+    /// C'est le pendant de `open_with_system` pour les liens : un clic sur un
+    /// lien `/URI` confie l'adresse au navigateur du système.
+    fn open_url(&self, url: &str) -> std::io::Result<()> {
+        #[cfg(target_os = "macos")]
+        let child = std::process::Command::new("open").arg(url).spawn();
+        #[cfg(target_os = "windows")]
+        let child = std::process::Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(url)
+            .spawn();
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        let child = std::process::Command::new("xdg-open").arg(url).spawn();
+        child.map(|_| ())
+    }
+
+    /// Exécute l'action d'un lien et prévient l'utilisateur du résultat.
+    ///
+    /// Une adresse part dans le navigateur du système, un saut interne change
+    /// de page, une action inconnue est dite telle : mieux vaut l'annoncer que
+    /// laisser croire que le clic n'a rien fait.
+    fn follow_link(&mut self, action: &LinkAction, ctx: &egui::Context) {
+        match action {
+            LinkAction::Uri(url) => match self.open_url(url) {
+                Ok(()) => self.toast(ctx, format!("Opened {url}")),
+                Err(err) => self.toast(ctx, format!("Could not open link: {err}")),
+            },
+            LinkAction::GoTo { page } => {
+                let total = self.tabs.get(self.active).map(|tab| tab.total()).unwrap_or(0);
+                if total == 0 {
+                    return;
+                }
+                let target = (*page).clamp(1, total);
+                self.jump = Some(target);
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.page = target;
+                }
+                self.toast(ctx, format!("Page {target}"));
+            }
+            LinkAction::Unsupported(name) => {
+                self.toast(ctx, format!("Unsupported link action: {name}"));
+            }
+        }
+    }
+
+    /// Suis le lien sous un point, s'il y en a un.
+    ///
+    /// Renvoie `true` quand un lien a été suivi : l'appelant laisse alors le
+    /// clic tranquille, sans sélection ni ouverture d'inspecteur.
+    fn follow_link_at(&mut self, page: usize, point: [f32; 2], ctx: &egui::Context) -> bool {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return false;
+        };
+        let links = tab.doc.page_links(page);
+        let Some(link) = link_at(&links, point) else {
+            return false;
+        };
+        let action = link.action.clone();
+        self.follow_link(&action, ctx);
+        true
     }
 
     /// Panneau Aspect : fond du canevas, ombre, taille des vignettes.
@@ -9008,6 +9071,9 @@ impl YouPdfApp {
         let mut sel_copy = false;
         let mut sel_all = false;
         let mut sel_markup: Option<AnnotationKind> = None;
+        // Un clic suivi sur un lien est exécuté après la trame : l'action
+        // touche le document et le focus, pas le canevas.
+        let mut pending_link: Option<LinkAction> = None;
         let renderer = &*self.renderer;
         let status = &mut self.render_status;
         let last_fit = &mut self.last_fit;
@@ -9857,40 +9923,53 @@ impl YouPdfApp {
                             }
                         }
                         if resp.clicked() {
-                            // Un double-clic prend le mot sous le pointeur, un
-                            // triple-clic la ligne entière. Un clic simple
-                            // efface la sélection.
-                            let expand = if resp.triple_clicked() {
-                                Some(3)
-                            } else if resp.double_clicked() {
-                                Some(2)
+                            // Un clic sur un lien ouvre le lien : le geste
+                            // prime sur la sélection, sinon le lien serait
+                            // impossible à suivre.
+                            let link_point = resp.interact_pointer_pos().map(to_pdf);
+                            let link = link_point.and_then(|point| {
+                                let links = tab.doc.page_links(page as usize);
+                                link_at(&links, point).map(|link| link.action.clone())
+                            });
+                            if let Some(action) = link {
+                                pending_link = Some(action);
+                                sel = None;
                             } else {
-                                None
-                            };
-                            match expand {
-                                Some(clicks) => {
-                                    if !tab.fragments.contains_key(&page) {
-                                        extract_page_fragments(renderer, tab, page);
-                                    }
-                                    let point = resp.interact_pointer_pos().map(to_pdf);
-                                    let span = point
-                                        .and_then(|point| {
-                                            tab.fragments.get(&page).and_then(|frags| {
-                                                text_hit(frags, point).and_then(|hit| {
-                                                    if clicks == 2 {
-                                                        expand_to_word(frags, hit)
-                                                    } else {
-                                                        expand_to_line(frags, hit)
-                                                    }
+                                // Un double-clic prend le mot sous le pointeur, un
+                                // triple-clic la ligne entière. Un clic simple
+                                // efface la sélection.
+                                let expand = if resp.triple_clicked() {
+                                    Some(3)
+                                } else if resp.double_clicked() {
+                                    Some(2)
+                                } else {
+                                    None
+                                };
+                                match expand {
+                                    Some(clicks) => {
+                                        if !tab.fragments.contains_key(&page) {
+                                            extract_page_fragments(renderer, tab, page);
+                                        }
+                                        let point = resp.interact_pointer_pos().map(to_pdf);
+                                        let span = point
+                                            .and_then(|point| {
+                                                tab.fragments.get(&page).and_then(|frags| {
+                                                    text_hit(frags, point).and_then(|hit| {
+                                                        if clicks == 2 {
+                                                            expand_to_word(frags, hit)
+                                                        } else {
+                                                            expand_to_line(frags, hit)
+                                                        }
+                                                    })
                                                 })
-                                            })
+                                            });
+                                        sel = span.map(|(start, end)| TextSel {
+                                            page,
+                                            span: Some((start, end)),
                                         });
-                                    sel = span.map(|(start, end)| TextSel {
-                                        page,
-                                        span: Some((start, end)),
-                                    });
+                                    }
+                                    None => sel = None,
                                 }
-                                None => sel = None,
                             }
                         }
                         let on_page = sel.map(|s| s.page == page).unwrap_or(false);
@@ -10337,13 +10416,8 @@ impl YouPdfApp {
                                 }
                             }
                             ToolAction::None => {
-                                // Mode lecture : un clic peut viser un champ
-                                // de formulaire.
-                                if resp.clicked() {
-                                    if let Some(p) = resp.interact_pointer_pos() {
-                                        pending_hit = Some((page as usize, to_pdf(p)));
-                                    }
-                                }
+                                // Le mode lecture n'a pas d'outil : le clic est
+                                // traité avec la sélection de texte, plus bas.
                             }
                         }
                     }
@@ -10500,7 +10574,16 @@ impl YouPdfApp {
         if let Some((page, from, to)) = pending_erase_segment {
             self.erase_ink_segment(page, from, to, &ctx);
         }
+        if let Some(action) = pending_link {
+            self.follow_link(&action, &ctx);
+        }
         if let Some((page, point)) = pending_hit {
+            // Un lien prime sur tout le reste : c'est le geste attendu du
+            // lecteur, et un clic sur un lien ne doit pas sélectionner autre
+            // chose. Le point est ici en repère page, comme les liens.
+            if self.follow_link_at(page, point, &ctx) {
+                return;
+            }
             // Vérifier d'abord si un champ de formulaire a été touché (mode Lecture).
             if matches!(self.mode, None | Some(0) | Some(2)) {
                 // La liste des champs n'est chargée qu'à la demande : sans
@@ -12143,6 +12226,25 @@ fn point_to_page(doc: &Document, page: usize, point: [f32; 2]) -> [f32; 2] {
 /// Recadre un rectangle du repère page vers le repère affiché.
 fn rect_to_display(doc: &Document, page: usize, rect: [f32; 4]) -> [f32; 4] {
     doc.page_view(page as u32).display_rect(rect)
+}
+
+/// Lien sous un point, en repère page.
+///
+/// La tolérance élargit la boîte du lien : un lien dessiné au pixel près
+/// est difficile à toucher, et le lecteur pardonne le voisinage. Le
+/// dernier lien trouvé l'emporte, comme l'annotation du dessus dans
+/// `hit_test`.
+fn link_at(links: &[PageLink], point: [f32; 2]) -> Option<&PageLink> {
+    const TOLERANCE: f32 = 3.0;
+    links
+        .iter()
+        .rev()
+        .find(|link| {
+            point[0] >= link.rect[0] - TOLERANCE
+                && point[0] <= link.rect[2] + TOLERANCE
+                && point[1] >= link.rect[1] - TOLERANCE
+                && point[1] <= link.rect[3] + TOLERANCE
+        })
 }
 
 /// Bouton-icône 38×38 avec fond sélection/hover.
@@ -14297,4 +14399,72 @@ mod tests {
         assert!(quads[0][1] > quads[1][1], "{quads:?}");
     }
 
+    /// Lien de test : rectangle et action.
+    fn link(rect: [f32; 4], action: LinkAction) -> PageLink {
+        PageLink {
+            page: 1,
+            rect,
+            action,
+        }
+    }
+
+    /// Un clic dans la boîte d'un lien le trouve.
+    #[test]
+    fn lien_sous_le_point_est_trouve() {
+        let links = vec![link(
+            [100.0, 700.0, 300.0, 720.0],
+            LinkAction::Uri("https://example.org".to_owned()),
+        )];
+        let found = link_at(&links, [200.0, 710.0]).expect("le lien");
+        assert_eq!(
+            found.action,
+            LinkAction::Uri("https://example.org".to_owned())
+        );
+    }
+
+    /// Un clic à côté du lien ne le trouve pas.
+    #[test]
+    fn lien_hors_de_la_boite_est_ignore() {
+        let links = vec![link(
+            [100.0, 700.0, 300.0, 720.0],
+            LinkAction::Uri("https://example.org".to_owned()),
+        )];
+        assert!(link_at(&links, [50.0, 710.0]).is_none());
+        assert!(link_at(&links, [200.0, 650.0]).is_none());
+    }
+
+    /// Le lien du dessus l'emporte : c'est celui qu'on voit.
+    #[test]
+    fn lien_du_dessus_lemporte() {
+        let links = vec![
+            link(
+                [100.0, 700.0, 300.0, 720.0],
+                LinkAction::Uri("https://premier.example".to_owned()),
+            ),
+            link(
+                [100.0, 700.0, 300.0, 720.0],
+                LinkAction::Uri("https://second.example".to_owned()),
+            ),
+        ];
+        let found = link_at(&links, [200.0, 710.0]).expect("un lien");
+        assert_eq!(
+            found.action,
+            LinkAction::Uri("https://second.example".to_owned())
+        );
+    }
+
+    /// La tolérance : un lien au pixel près reste touchable.
+    #[test]
+    fn lien_tolere_pres_du_bord() {
+        let links = vec![link(
+            [100.0, 700.0, 300.0, 720.0],
+            LinkAction::Uri("https://example.org".to_owned()),
+        )];
+        // Deux points à l'intérieur du rectangle.
+        assert!(link_at(&links, [102.0, 718.0]).is_some());
+        // Un point juste à côté, dans la tolérance.
+        assert!(link_at(&links, [98.5, 710.0]).is_some());
+        // Un point plus loin, hors de la tolérance.
+        assert!(link_at(&links, [90.0, 710.0]).is_none());
+    }
 }
