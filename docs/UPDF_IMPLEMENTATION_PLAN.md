@@ -479,21 +479,21 @@ Every task is designed to be an atomic, bounded unit of work suitable for autono
 ### Task 8.1: Crop Pages Tool
 - **Files**: `crates/youpdf-core/src/crop.rs`, `crates/youpdf-app/src/app.rs`
 - **Capabilities**:
-  - Visual crop rectangle over page with draggable corner and edge handles.
+  - ~~Visual crop rectangle over page with draggable corner and edge handles.~~ Not done: the crop is driven by margin values, there is no rectangle drawn over the page.
   - Margin control inputs in inspector: Top, Bottom, Left, Right (supports mm, cm, in, pt).
   - Page Box target selector: CropBox, ArtBox, TrimBox, BleedBox.
-  - Page Range selector: Current Page, All Pages, Odd Only, Even Only, Custom Range (e.g. `1-5, 8, 11-14`).
+  - Page Range selector: Current Page, All Pages, Odd Only, Even Only. ~~Custom Range (e.g. `1-5, 8, 11-14`).~~ Not done: there is no custom range such as `1-5, 8, 11-14`.
   - "Auto-Crop / Remove White Margins": scans page content bounds and automatically snugs CropBox to visible text and graphics.
   - "Reset Crop": restores CropBox to MediaBox dimensions.
 
 ### Task 8.2: Split Pages (Tile-Based Visual Splitting)
 - **Files**: `crates/youpdf-core/src/crop.rs`, `crates/youpdf-app/src/app.rs`
 - **Capabilities**:
-  - Interactive split lines over the page:
-    - Add Horizontal Split Line.
-    - Add Vertical Split Line.
-    - Grid Split (e.g. 2×2 grid to turn 1 poster page into 4 standard pages).
-  - Preview split pieces in miniature tiles.
+  - ~~Interactive split lines over the page:~~
+    - ~~Add Horizontal Split Line.~~
+    - ~~Add Vertical Split Line.~~
+    - Grid Split (e.g. 2×2 grid to turn 1 poster page into 4 standard pages), with a gap between the tiles.
+  - ~~Preview split pieces in miniature tiles.~~ Not done: the split is a rows × columns dialog, there is no preview of the pieces.
   - On Apply: creates N new pages in the document corresponding to each split tile rectangle, adjusting MediaBox/CropBox and content stream translations.
 
 ### Task 8.3: Watermark & Background Engine
@@ -537,11 +537,11 @@ Every task is designed to be an atomic, bounded unit of work suitable for autono
 - **Capabilities**:
   - **Document Open Password**:
     - Require password to open and view the document.
-    - Encryption Level: AES-256 (recommended) or AES-128.
+    - ~~Encryption Level: AES-256 (recommended) or AES-128.~~ Not the levels in the app: it offers AES-256 (revision 6) and RC4-128 (revision 3), and only RC4-128 can be reopened by the app.
   - **Permissions Password (Master / Owner Password)**:
     - Restrict editing and printing.
-    - Printing Permission: None, Low Resolution (150 dpi), High Resolution.
-    - Changes Allowed: None, Page insertion/deletion/rotation, Filling form fields and signing, Commenting and form filling, Any except extracting pages.
+    - ~~Printing Permission: None, Low Resolution (150 dpi), High Resolution.~~ Not the form in the app: it offers a "Print" and a "High-quality print" checkbox.
+    - ~~Changes Allowed: None, Page insertion/deletion/rotation, Filling form fields and signing, Commenting and form filling, Any except extracting pages.~~ Not the form in the app: it offers a "Modify", a "Comment" and a "Fill forms" checkbox, plus "Assemble".
     - Enable text/graphic copying checkbox.
     - Enable screen readers / accessibility checkbox.
   - **Decryption & Security Removal**:
@@ -554,7 +554,7 @@ Every task is designed to be an atomic, bounded unit of work suitable for autono
   - Phase 1: Mark for Redaction:
     - User drags rectangles over sensitive areas or uses Search & Redact.
     - Rendered with translucent red fill and dark red border.
-    - Hovering marked area shows black fill preview ("What it will look like").
+    - ~~Hovering marked area shows black fill preview ("What it will look like").~~ Not done: the marked areas are drawn as red overlays, with no hover preview.
     - Redaction properties: Fill color (Black, White, Custom), Overlay text (e.g. `[REDACTED]`, `CONFIDENTIAL`), text font and color.
   - Phase 2: Apply Redaction:
     - Warning modal: *"Applying redactions permanently destroys underlying text and images. This cannot be undone. Continue?"*
@@ -562,24 +562,24 @@ Every task is designed to be an atomic, bounded unit of work suitable for autono
       - Intersects redaction rects with text characters and path vectors, permanently deleting them from content streams.
       - Intersects with images: burns black/white pixels into image bitmaps, recompressing them so no pixel underneath can be recovered.
       - Rasterizes complex vector pages if content cannot be cleanly sliced.
-      - Removes overlapping annotations.
+      - ~~Removes overlapping annotations.~~ Not done: the annotation layer is left alone by the redaction engine.
 - **Document Sanitization**:
-  - Action "Sanitize Document": Strips document metadata, hidden text, embedded files, bookmarks, comments, form field actions, and deleted object revisions.
+  - Action "Sanitize Document": ~~Strips document metadata, hidden text, embedded files, bookmarks, comments, form field actions, and deleted object revisions.~~ Partly done: the engine removes the XMP metadata, the open action, the additional actions, the JavaScript name tree and the document information entries; the embedded files, the bookmarks, the comments and the form field actions are kept.
 
-### Task 9.3: Digital Signatures & Certificates (PAdES / PKCS#7)
+### Task 9.3: Digital Signatures & Certificates (PKCS#7)
 - **Files**: `crates/youpdf-core/src/signature.rs`, `crates/youpdf-app/src/app.rs`
 - **Capabilities**:
   - Digital Certificate Manager:
     - Import PKCS#12 certificate (`.p12` / `.pfx`) with password unlock.
     - Create Self-Signed Certificate: Name, Organization, Email, Country, Validity Period (years).
   - Sign Document:
-    - Place digital signature field on canvas.
-    - Select certificate from manager.
-    - Signature Appearance: Name, Date/Time, Reason, Location, DN info + optional visual signature graphic.
+    - ~~Place digital signature field on canvas.~~ Not done: the engine writes the field, but the interface has no signing window — the "Sign…" entry of the Tools menu opens nothing.
+    - ~~Select certificate from manager.~~ Not done: there is no certificate manager window in the interface.
+    - Signature Appearance: Name, Date/Time, Reason, Location, DN info + optional visual signature graphic. Partly done: the engine carries the name, the reason, the location and the contact; the visual graphic is placed separately by `place_visual_signature`.
     - Hash document with SHA-256, encrypt with private key, embed PKCS#7 signature dictionary into `/ByteRange` stream.
   - Validation:
-    - Open signed document displays notification bar: *"All digital signatures are valid"* (Green) or *"Signature was modified after signing"* (Red).
-    - Certificate details dialog showing validity, issuer, and timestamp.
+    - ~~Open signed document displays notification bar: "All digital signatures are valid" (Green) or "Signature was modified after signing" (Red).~~ Not done: the engine exposes `validate_signatures`, but the interface never calls it, so no banner appears.
+    - ~~Certificate details dialog showing validity, issuer, and timestamp.~~ Not done: the engine exposes the validity, the issuer and the common name of a certificate, but no dialog shows them.
 
 ---
 
@@ -636,9 +636,9 @@ Every task is designed to be an atomic, bounded unit of work suitable for autono
 - **Files**: `crates/youpdf-core/src/ocr.rs`, `crates/youpdf-app/src/app.rs`
 - **Engine Capabilities**:
   - Tesseract CLI / library integration.
-  - Support 38 languages: English, French, German, Spanish, Italian, Portuguese, Dutch, Russian, Chinese (Simplified & Traditional), Japanese, Korean, Arabic, etc.
+  - Support 48 languages: English, French, German, Spanish, Italian, Portuguese, Dutch, Russian, Chinese (Simplified & Traditional), Japanese, Korean, Arabic, etc.
   - Support multi-language documents (e.g. `eng+fra`).
-  - Page range selection (All, Current, Custom Range).
+  - ~~Page range selection (All, Current, Custom Range).~~ Not done: the recognition runs on every page of the document, with no page range.
 
 ### Task 11.2: Three OCR Output Modes
 - **File**: `crates/youpdf-core/src/ocr.rs`
@@ -749,10 +749,10 @@ Every task is designed to be an atomic, bounded unit of work suitable for autono
 ### Task 14.2: Full Localization (i18n) Architecture
 - **Files**: `crates/youpdf-shared/src/i18n.rs` (New file), `crates/youpdf-app/`
 - **Capabilities**:
-  - Extract all user-facing strings into structured language dictionaries (`en.json`, `fr.json`, `de.json`, `es.json`, `it.json`, `zh-Hans.json`, `ja.json`).
-  - Implement macro `t!("string_key")` or `t!("string_key", param = val)`.
-  - Language picker in Settings with instant UI update without application restart.
-  - Match UPDF's exact translations for all menus, tooltips, dialogs, and error messages.
+  - ~~Extract all user-facing strings into structured language dictionaries (`en.json`, `fr.json`, `de.json`, `es.json`, `it.json`, `zh-Hans.json`, `ja.json`).~~ Not done: the dictionary is a Rust match table with English and French only; there are no JSON files and no other language.
+  - ~~Implement macro `t!("string_key")` or `t!("string_key", param = val)`.~~ Partly done: `t()` is a plain function taking a key, without parameters.
+  - Language picker in Settings with instant UI update without application restart. Partly done: the language applies when the Preferences window is saved, without a restart.
+  - ~~Match UPDF's exact translations for all menus, tooltips, dialogs, and error messages.~~ Not done: five call sites reach the dictionary, so the menus, tooltips, dialogs and error messages keep their English labels.
 
 ---
 
