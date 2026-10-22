@@ -2,6 +2,57 @@
 
 use super::*;
 
+/// Un champ est-il posé sur la page `page` du canevas ?
+///
+/// Le numéro de page d'un champ vient du PDF et celui du canevas compte les
+/// pages de la même façon : les deux numérotations se superposent, sans
+/// décalage.
+pub(super) fn field_on_page(field_page: Option<usize>, page: usize) -> bool {
+    field_page == Some(page)
+}
+
+/// Index du champ de la page `page` touché par `point` (repère page).
+///
+/// Le champ trouvé est le dernier de la pile : c'est celui qui passe au-dessus.
+pub(super) fn field_at_point(
+    fields: &[FormField],
+    page: usize,
+    point: [f32; 2],
+) -> Option<usize> {
+    fields
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, f)| {
+            field_on_page(f.page, page)
+                && point[0] >= f.rect[0] - 3.0
+                && point[0] <= f.rect[2] + 3.0
+                && point[1] >= f.rect[1] - 3.0
+                && point[1] <= f.rect[3] + 3.0
+        })
+        .map(|(idx, _)| idx)
+}
+
+/// Index des champs de la page `page` que croise `rect` (repère affiché).
+pub(super) fn fields_in_rect(
+    fields: &[FormField],
+    page: usize,
+    rect: [f32; 4],
+) -> Vec<usize> {
+    fields
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| {
+            field_on_page(field.page, page)
+                && field.rect[0] < rect[2]
+                && field.rect[2] > rect[0]
+                && field.rect[1] < rect[3]
+                && field.rect[3] > rect[1]
+        })
+        .map(|(idx, _)| idx)
+        .collect()
+}
+
 impl YouPdfApp {
     pub(super) fn forms_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         self.ensure_structure();
@@ -634,14 +685,7 @@ impl YouPdfApp {
     /// Renvoie l'index du champ dans `tab.forms`, ou `None`.
     pub(super) fn form_hit_test(&self, page: usize, point: [f32; 2]) -> Option<usize> {
         let tab = self.tabs.get(self.active)?;
-        tab.forms
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, f)| f.page == Some(page + 1) && {
-                point[0] >= f.rect[0] - 3.0 && point[0] <= f.rect[2] + 3.0 && point[1] >= f.rect[1] - 3.0 && point[1] <= f.rect[3] + 3.0
-            })
-            .map(|(idx, _)| idx)
+        field_at_point(&tab.forms, page, point)
     }
 
     /// Valide la saisie d'un champ de formulaire faite sur la page.
@@ -693,19 +737,7 @@ impl YouPdfApp {
             self.form_selection.clear();
             return;
         }
-        let hits: Vec<usize> = tab
-            .forms
-            .iter()
-            .enumerate()
-            .filter(|(_, field)| {
-                field.page == Some(page + 1)
-                    && field.rect[0] < rect[2]
-                    && field.rect[2] > rect[0]
-                    && field.rect[1] < rect[3]
-                    && field.rect[3] > rect[1]
-            })
-            .map(|(idx, _)| idx)
-            .collect();
+        let hits = fields_in_rect(&tab.forms, page, rect);
         self.form_selection = hits.into_iter().collect();
         self.form_editing = None;
         self.form_edit = None;
@@ -845,4 +877,72 @@ pub(super) enum FormAlign {
     DistributeV,
     MatchWidth,
     MatchHeight,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Un champ de test, posé sur la page `page`.
+    fn field(page: usize, rect: [f32; 4]) -> FormField {
+        FormField {
+            object_id: (1, 0),
+            widget_id: (1, 0),
+            name: "a".to_string(),
+            kind: FormFieldKind::Text,
+            value: None,
+            options: Vec::new(),
+            read_only: false,
+            tooltip: String::new(),
+            required: false,
+            multiline: false,
+            page: Some(page),
+            rect,
+            states: Vec::new(),
+            state: None,
+        }
+    }
+
+    /// Le numéro de page d'un champ et celui du canevas se superposent : pas
+    /// de décalage d'une page entre les deux.
+    #[test]
+    fn field_page_matches_the_canvas_page() {
+        assert!(field_on_page(Some(1), 1), "le champ de la page 1 est sur la page 1");
+        assert!(field_on_page(Some(2), 2), "le champ de la page 2 est sur la page 2");
+        assert!(!field_on_page(Some(1), 2), "la page 2 ne porte pas le champ de la page 1");
+        assert!(!field_on_page(Some(2), 1), "la page 1 ne porte pas le champ de la page 2");
+        assert!(!field_on_page(None, 1), "un champ sans page n'est sur aucune page");
+    }
+
+    /// Un clic trouve le champ de la page cliquée, et rien des autres pages.
+    #[test]
+    fn hit_test_finds_the_field_of_the_clicked_page() {
+        let fields = vec![field(1, [10.0, 10.0, 100.0, 30.0])];
+        // Le clic tombe dans le champ de la page 1.
+        assert_eq!(field_at_point(&fields, 1, [50.0, 20.0]), Some(0));
+        // La page 2 n'a pas de champ : le clic ne trouve rien.
+        assert_eq!(field_at_point(&fields, 2, [50.0, 20.0]), None);
+    }
+
+    /// Un clic sur la page 2 ne vise pas le champ posé sur la page 1.
+    #[test]
+    fn hit_test_does_not_reach_a_neighbouring_page() {
+        let fields = vec![field(2, [10.0, 10.0, 100.0, 30.0])];
+        assert_eq!(field_at_point(&fields, 1, [50.0, 20.0]), None);
+        assert_eq!(field_at_point(&fields, 2, [50.0, 20.0]), Some(0));
+    }
+
+    /// L'encadrement ne sélectionne que les champs de la page visée.
+    #[test]
+    fn selection_only_covers_the_selected_page() {
+        let fields = vec![
+            field(1, [10.0, 10.0, 100.0, 30.0]),
+            field(2, [10.0, 10.0, 100.0, 30.0]),
+        ];
+        // L'encadrement englobe les deux champs, mais sur la page 1 seulement.
+        let hits = fields_in_rect(&fields, 1, [0.0, 0.0, 200.0, 200.0]);
+        assert_eq!(hits, vec![0], "le champ de la page 2 ne doit pas être sélectionné");
+        let hits = fields_in_rect(&fields, 2, [0.0, 0.0, 200.0, 200.0]);
+        assert_eq!(hits, vec![1]);
+    }
 }
