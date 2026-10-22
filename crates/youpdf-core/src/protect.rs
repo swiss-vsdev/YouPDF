@@ -33,9 +33,10 @@ use crate::document::Document;
 /// Niveau de chiffrement souhaité.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EncryptionStrength {
-    /// RC4 128 bits (révision 3). Compatible, faible.
+    /// RC4 128 bits (révision 3). Compatible, faible — mais réouvrable ici.
     Rc4_128,
-    /// AES 256 bits (révision 6). Standard actuel, fort.
+    /// AES 256 bits (révision 6). Standard actuel, fort — mais `lopdf` ne le
+    /// déchiffre pas : le fichier produit s'ouvre dans un autre lecteur.
     #[default]
     Aes256,
 }
@@ -43,8 +44,11 @@ pub enum EncryptionStrength {
 impl EncryptionStrength {
     pub fn display_name(&self) -> &'static str {
         match self {
-            EncryptionStrength::Rc4_128 => "RC4-128 (compatibilité)",
-            EncryptionStrength::Aes256 => "AES-256 (recommandé)",
+            EncryptionStrength::Rc4_128 => "RC4-128 (reopenable here)",
+            // L'AES-256 est le plus fort, mais `lopdf` ne sait pas le
+            // déchiffrer : le fichier produit s'ouvre dans un autre lecteur,
+            // pas dans celui-ci.
+            EncryptionStrength::Aes256 => "AES-256 (strongest, reopen in another reader)",
         }
     }
 }
@@ -197,6 +201,11 @@ impl Document {
     ///
     /// Le mot de passe peut être le mot de passe utilisateur ou celui du
     /// propriétaire : `lopdf` accepte les deux.
+    ///
+    /// `lopdf` ne sait déchiffrer que les révisions 2 et 3 (RC4). Un fichier
+    /// en AES-256 (révision 6) — que `encrypt` sait écrire — est donc
+    /// illisible ici : l'erreur le dit, plutôt que de laisser croire à un
+    /// mot de passe erroné.
     pub fn open_protected(path: impl AsRef<Path>, password: &str) -> Result<Self> {
         let path = path.as_ref();
         let mut inner = lopdf::Document::load(path)
@@ -204,7 +213,7 @@ impl Document {
         if inner.is_encrypted() {
             inner
                 .decrypt(password.as_bytes())
-                .map_err(|e| Error::Pdf(format!("mot de passe refusé : {e}")))?;
+                .map_err(|e| Error::Pdf(decrypt_error(e)))?;
         }
         let mut doc = Document::from_lopdf(inner);
         doc.path = Some(path.to_path_buf());
@@ -219,6 +228,25 @@ impl Document {
         let mut copie = Document::from_lopdf(self.inner.clone());
         copie.inner_mut().trailer.remove(b"Encrypt");
         copie.save(path)
+    }
+}
+
+/// Traduit une erreur de déchiffrement en un message qui ne confond pas un
+/// algorithme non supporté avec un mot de passe erroné.
+///
+/// `lopdf` ne déchiffre que les révisions 2 et 3. Un fichier en AES-256
+/// échoue donc sur l'algorithme, jamais sur le mot de passe : dire « mot de
+/// passe refusé » enverrait l'utilisateur sur la mauvaise piste.
+fn decrypt_error(error: lopdf::Error) -> String {
+    match error {
+        lopdf::Error::Decryption(
+            lopdf::encryption::DecryptionError::UnsupportedEncryption
+            | lopdf::encryption::DecryptionError::InvalidKeyLength
+            | lopdf::encryption::DecryptionError::InvalidRevision,
+        ) => "chiffrement AES-256 non lisible par l'application \
+             (seul RC4-128 peut être rouvert ici) : ouvrez le fichier avec un lecteur qui gère l'AES-256"
+            .to_owned(),
+        other => format!("mot de passe refusé : {other}"),
     }
 }
 

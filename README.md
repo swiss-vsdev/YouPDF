@@ -87,7 +87,10 @@ on.
 - **Protection**: RC4-128 (revision 3) and AES-256 (revision 6) encryption with
   an open password and a permissions password, per-permission flags (print,
   copy, modify, annotate), removal of protection, and opening a protected file
-  with its password.
+  with its password. RC4-128 is the strength the app can reopen: the PDF
+  library it builds on decrypts the revisions 2 and 3 only, so an AES-256 file
+  opens in another reader and the app says so instead of blaming the
+  password.
 - **Declared PDF/A and PDF/X markers**: PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4
   and PDF/E-1. The engine writes the XMP packet, `/OutputIntents`, `/MarkInfo`
   and `/ID` the standards ask for, but it does not validate the result — fonts,
