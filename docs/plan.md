@@ -8,8 +8,8 @@ Inventory evidence: `./ux-spec.md` + screenshots + `menus-fr.txt` (this director
 ## Stack
 
 - Render engine: **PDFium** via `pdfium-render` (BSD-3, prebuilt dylib from bblanchon/pdfium-binaries). App code 100% Rust; PDFium is C++ and linked **dynamically** (the dylib is vendored in `pdfium/` and copied next to the binary by the packaging script). Escape hatch: the `Renderer` trait (`crates/youpdf-core/src/render.rs:112`) so a pure-Rust backend can swap in later.
-- UI: **egui** + **eframe** with the **glow** renderer (`Cargo.toml:52`); wgpu is not a dependency. Immediate-mode, dark theme, custom titlebar, floating pill toolbars.
-- Structural edits: `lopdf`. Forms: `lopdf` (the `/AcroForm` and widget dictionaries are written directly; the PDFium form API is not used). Icons: own hand-drawn vector paths (51 `fn icon_*` in `crates/youpdf-app/src/app.rs`), with Phosphor used in a few places only; palette from ux-spec §6 (`#303030` / `#282828` / accent `#7A7EF6` / selected tint `#E8E8F8`).
+- UI: **egui** + **eframe** with the **glow** renderer (`Cargo.toml:52`); wgpu is not a dependency. Immediate-mode, dark theme, custom titlebar with a 76 pt gap reserved for the native traffic lights (`crates/youpdf-app/src/app.rs:4781`), floating pill toolbars.
+- Structural edits: `lopdf`. Forms: `lopdf` (the `/AcroForm` and widget dictionaries are written directly; the PDFium form API is not used). Icons: Phosphor glyphs (MIT) via `egui-phosphor` — 49 of the 51 `fn icon_*` in `crates/youpdf-app/src/app.rs` are one-line Phosphor wrappers; no Lucide, no SVG assets. Palette from ux-spec §6 (`#303030` / `#282828` / accent `#7A7EF6` / selected tint `#E8E8F8`).
 - No telemetry, no auto-updater, no Firebase (unlike target).
 - Deps all MIT/Apache/BSD.
 
@@ -44,7 +44,7 @@ Cold open < 500 ms; 60 fps scroll; no blank frame on zoom (low-res first, refine
 
 ## Packaging
 
-`scripts/build-macos-app.sh` → YouPDF.app (hand-written `Info.plist`, embedded `.icns` and pdfium dylib, ad-hoc codesign). macOS first (arm64), Windows/Linux later.
+`scripts/build-macos-app.sh` → YouPDF.app (hand-written `Info.plist`, embedded `.icns` and pdfium dylib). The bundle itself is not codesigned; the dylib is signed ad-hoc by `scripts/install-pdfium.sh`. macOS first (arm64), Windows/Linux later.
 
 ## Added context (found 2026-10-16, after initial plan)
 
@@ -147,8 +147,8 @@ describe the current state.
   overflow menu, with new windows for crop, background, Bates, compare, OCR and create, a password
   prompt for protected files, print through `lp`, reveal in the file manager, and image export at a
   chosen resolution. Verified with `cargo clippy --workspace --all-targets` (clean), 75 core tests
-  (the suite now carries 234 core integration tests), and a smoke run that
-  opened every window (no error line, one Tesseract probe).
+  (the suite now carries 234 core integration tests and 13 unit tests, 247 in all), and a smoke run
+  that opened every window (no error line, one Tesseract probe).
 
   Still missing after this pass, in rough priority order (all of them were closed
   by the passes that follow):
