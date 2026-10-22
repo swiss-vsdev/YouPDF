@@ -148,9 +148,10 @@ talk to your own provider and work on the text of the open document:
 ### Interface
 
 - **English and French**, switchable at any time from Preferences. The
-  translation table in `youpdf-shared` carries about a hundred entries, but
-  only the **Tools** dropdown is wired to it so far: the rest of the interface
-  still shows its English labels whichever language is selected.
+  translation table in `youpdf-shared` carries 110 entries, but only five
+  places reach it — the **Tools** dropdown and its entries, plus the
+  "Language" label in the Preferences window: the rest of the interface still
+  shows its English labels whichever language is selected.
 - Four themes: Dark, Light, Mint and Starry.
 - **Preferences**: startup view, default zoom, default layout, author name,
   measure unit, auto-save interval, appearance and the AI switch. Edits are
