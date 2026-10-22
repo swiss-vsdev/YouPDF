@@ -44,21 +44,25 @@ on.
 
 - Four working modes — **Comment**, **Edit**, **Form**, **Redact** — each with
   its own tool strip.
-- Edit mode covers in-place text editing (font family, size, colour, bold,
-  italic, underline, strike-out, alignment and line spacing), image
-  placement (replace, rotate, flip, crop, opacity) and hyperlink insertion.
+- Edit mode covers in-place text editing (font family — Helvetica, Times or
+  Courier, since the patch is written with a standard-14 font and never
+  reuses the document's own — size, colour, bold, italic, underline,
+  strike-out, alignment and line spacing), image placement (replace, rotate,
+  flip, crop, opacity) and hyperlink insertion.
 - **Annotations**: highlight, underline, strike-out, squiggly, note, free text,
-  square, circle, line, arrow, ink, stamp, link and callout, with colours and
-  opacity.
+  square, circle, line, arrow, ink, stamp, link and callout, with colours.
+  The opacity slider applies to the four markup tools (highlight, underline,
+  strike-out, squiggly); the other kinds are drawn opaque.
 - **Comments** panel with filters, threaded replies, review states, and export
   to FDF, XFDF, CSV or Markdown.
 - **Forms**: fill existing AcroForm fields (including inherited fields with
   widget-level entries), and build new text fields, checkboxes, radio buttons,
-  dropdowns, list boxes, buttons, date fields, barcodes and signature fields.
-  Form data can be read back and exported.
+  dropdowns, list boxes, buttons, date fields, signature fields and a barcode
+  field — the barcode is a plain text field with a dedicated font, no
+  symbology is encoded. Form data can be read back and exported.
 - **Bookmarks** can be read, generated from the text layer and cleared;
   **attachments** can be listed, extracted, added and removed.
-- Undo and redo on every mutation.
+- Undo and redo on every mutation that the document can be serialised from.
 
 ### Organise pages
 
@@ -105,7 +109,10 @@ on.
   (`eng+fra`), and the list of languages actually installed read from
   `tesseract --list-langs`.
 - **Compare** two documents and browse the differences: added, removed and
-  modified lines, plus pages that were added or removed.
+  modified lines, plus pages that were added or removed. The comparison is
+  text-only and page-by-page in order, so a page inserted in the middle
+  shifts the rest instead of being reported as added; image and formatting
+  changes are not detected.
 - **Extract data**: tables and key/value pairs out of the text layer.
 - **Digital signatures at library level**: detached PKCS#7 (`adbe.pkcs7.detached`)
   RSA-SHA-256 signatures, self-signed certificate creation, PKCS#12 import,
@@ -124,13 +131,13 @@ on.
 | Text | Plain, Markdown, HTML, CSV, XML, RTF |
 | Images | PNG, JPEG, TIFF (one file per page), plus one long image with all pages stacked; 36–600 dpi |
 | Embedded images | PNG, one file per image embedded in the document |
-| Office | Word `.docx`, Excel `.xlsx`, PowerPoint `.pptx` — reflowed text, or exact layout for Word (each run positioned), with Excel column detection and one slide per page |
+| Office | Word `.docx`, Excel `.xlsx`, PowerPoint `.pptx` — reflowed text, or exact layout for Word (each run positioned), and one slide per page |
 | Standards | PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4, PDF/E-1 — declared markers, not validated conformance |
 
 Text export rebuilds the text layer only: images, tables and the page layout are
-left out. The Office exporters rebuild the text as paragraphs, rows or slides
-and carry the page images over; the original geometry is kept only by the
-exact-layout option (Word).
+left out. The Office exporters rebuild the text as paragraphs, rows or slides;
+Word and PowerPoint carry the page images over, Excel is text only. The
+original geometry is kept only by the exact-layout option (Word).
 
 ### AI assistant (optional)
 
@@ -199,8 +206,9 @@ cargo clippy --workspace --all-targets
 ### PDFium
 
 PDFium is the rasteriser used to draw pages; it is a shared library, not a Rust
-crate. A macOS build of `libpdfium.dylib` is vendored in `pdfium/`, and the
-script below downloads the right build for your platform:
+crate. A macOS build of `libpdfium.dylib` is vendored in `pdfium/` — the arm64
+one, so Intel Macs need the script below before their first run. The script
+downloads the right build for your platform:
 
 ```sh
 scripts/install-pdfium.sh                  # default: chromium/6729
@@ -336,7 +344,8 @@ expansion).
 
 ### Shipped
 
-Tabs, home screen with recents and favourites, thumbnails, search and replace,
+Tabs, home screen with recents and favourites, a Pages panel of previews,
+search and replace,
 zoom, continuous scroll, page layouts, slideshow, text selection and copy,
 in-place text and image editing, annotations (markup, ink, shapes, stamps,
 signatures), bookmarks and attachments sidebars, a comment list with filters,
@@ -349,8 +358,8 @@ redaction and sanitizing, OCR (searchable, text+image, editable) with
 scanned-page detection, measurement with calibration, document comparison with
 a difference navigator, batch processing (convert, OCR, insert, remove,
 watermark, background, header/footer, Bates, compress, protect, flatten,
-combine, print), Office export (Word/Excel/PowerPoint, flow and exact layout,
-Excel column detection, Word image embedding), preferences with auto-save,
+combine, print), Office export (Word flow and exact layout with image
+embedding, Excel and PowerPoint flow), preferences with auto-save,
 English/French UI (the Tools dropdown today), and the AI assistant.
 
 ### Closed parity gaps
