@@ -7,7 +7,7 @@
 
 use egui::{pos2, Color32, Painter, Rect, RichText, Rounding, Sense, Shape, Stroke, Vec2};
 use egui_phosphor::regular as ph;
-use youpdf_core::{ImageTransform, PatchFont, TextAlign, TextStyle};
+use youpdf_core::{AnnotationKind, ImageTransform, PatchFont, TextAlign, TextStyle};
 use youpdf_shared::pal;
 
 /// Identificateur d'un bloc de texte dans la page.
@@ -114,6 +114,10 @@ pub const INSPECTOR_HEIGHT: f32 = 38.0;
 /// Hauteur estimée de l'inspecteur de texte (en-tête + ligne de réglages),
 /// avant que son contenu ne soit mesuré.
 pub const TEXT_INSPECTOR_HEIGHT: f32 = 66.0;
+
+/// Hauteur estimée de l'inspecteur de sélection (en-tête + ligne de
+/// boutons de mise en évidence), avant que son contenu ne soit mesuré.
+pub const SELECTION_INSPECTOR_HEIGHT: f32 = 64.0;
 
 /// Hauteur ajoutée par la palette de couleurs dépliée.
 pub const PALETTE_HEIGHT: f32 = 52.0;
@@ -413,6 +417,33 @@ pub fn text_style_row(
         });
     }
     changed
+}
+
+/// Les quatre mises en évidence, avec leur libellé.
+///
+/// Elles se posent sur une sélection de texte : le lecteur choisit la
+/// couleur une fois le texte choisi.
+pub const MARKUP_KINDS: [(AnnotationKind, &str); 4] = [
+    (AnnotationKind::Highlight, "Highlight"),
+    (AnnotationKind::Underline, "Underline"),
+    (AnnotationKind::StrikeOut, "Strikeout"),
+    (AnnotationKind::Squiggly, "Squiggly"),
+];
+
+/// Boutons de mise en évidence d'une sélection de texte.
+///
+/// Rend le type de marque demandé : le lecteur choisit la couleur *après*
+/// avoir choisi le texte, comme dans n'importe quel lecteur de PDF.
+pub fn markup_row(ui: &mut egui::Ui) -> Option<AnnotationKind> {
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        for (kind, label) in MARKUP_KINDS {
+            if ui.small_button(label).clicked() {
+                chosen = Some(kind);
+            }
+        }
+    });
+    chosen
 }
 
 /// Action demandée par l'inspecteur d'image.

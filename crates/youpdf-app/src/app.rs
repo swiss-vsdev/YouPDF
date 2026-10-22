@@ -30,9 +30,10 @@ use youpdf_shared::{i18n, pal, set_palette, t, Language, Theme};
 use crate::ai::AiPanel;
 use crate::home::{self, HomeCategory, HomeView, ViewMode};
 use crate::inspector::{
-    arrow_x, image_controls, paint_arrow, place_inspector, text_style_row, AnnotationId,
+    arrow_x, image_controls, markup_row, paint_arrow, place_inspector, text_style_row, AnnotationId,
     ImageAction, ImageId, InspectorTarget, TextBlockId, TextStyleUi, INSPECTOR_HEIGHT,
-    INSPECTOR_WIDTH, PALETTE_HEIGHT, TEXT_INSPECTOR_HEIGHT,
+    INSPECTOR_WIDTH, MARKUP_KINDS, PALETTE_HEIGHT, SELECTION_INSPECTOR_HEIGHT,
+    TEXT_INSPECTOR_HEIGHT,
 };
 use youpdf_core::compress::CompressionLevel;
 use youpdf_core::render::NullRenderer;
@@ -42,9 +43,10 @@ use youpdf_core::{
     AnnotationState, AnnotationStyle, AttachmentInfo, Background, BandSlots, Bates, BatesPosition,
     CommentFormat, ComparisonReport, CompressionExtras, Conformance, CropMargins, DifferenceKind, Document,
     EncryptionOptions, EncryptionStrength, ExtractedTable, FieldProperties, FormDataFormat,
-    FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, MeasureKind, Measurement,
-    NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem, OutlineStyle,
-    ImageCrop, OutlineTarget, PageRange, PageBitmap, PatchFont, PdfiumRenderer, RedactionFill,
+    FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, MeasureKind,
+    Measurement, NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem,
+    OutlineStyle, ImageCrop, OutlineTarget, PageRange, PageBitmap, PatchFont,
+    PdfiumRenderer, RedactionFill,
     RedactionMark, RedactionOverlay, RedactionReport, RenderOptions, Renderer, SearchIndex,
     SearchOptions, SearchResult, TextFormat,
     TextFragment, TextStyle, Unit, Watermark, STAMP_NAMES, smooth_polyline,
@@ -3879,6 +3881,41 @@ impl YouPdfApp {
         self.toast(ctx, "Copied");
     }
 
+    /// Pose une mise en évidence sur la sélection de texte courante.
+    ///
+    /// C'est le geste du lecteur : on sélectionne le texte, puis on le
+    /// colore. La marque suit les lignes du texte sélectionné — un
+    /// quadrilatère par ligne — et non un rectangle posé à l'aveugle.
+    fn markup_selection(&mut self, kind: AnnotationKind, ctx: &egui::Context) {
+        let Some(sel) = self.text_sel else {
+            return;
+        };
+        // Une sélection sans ancre couvre toute la page : c'est le geste
+        // « tout sélectionner », pas une sélection de lecture.
+        if sel.span.is_none() {
+            self.toast(ctx, "Select some text first");
+            return;
+        }
+        let quads = self
+            .tabs
+            .get(self.active)
+            .and_then(|tab| tab.fragments.get(&sel.page))
+            .map(|frags| hit_quads(frags, sel.span))
+            .unwrap_or_default();
+        if quads.is_empty() {
+            self.toast(ctx, "No text selected");
+            return;
+        }
+        self.add_markup_annot(sel.page as usize, kind, quads);
+        self.text_sel = None;
+        let label = MARKUP_KINDS
+            .iter()
+            .find(|(candidate, _)| *candidate == kind)
+            .map(|(_, label)| *label)
+            .unwrap_or("Mark");
+        self.toast(ctx, format!("{label} added"));
+    }
+
     /// Ouvre la réécriture du bloc de texte touché.
     fn edit_text_at(&mut self, page: usize, point: [f32; 2], ctx: &egui::Context) {
         self.ensure_fragments();
@@ -6848,6 +6885,10 @@ impl YouPdfApp {
         // qu'il n'est laisse un vide, plus bas il recouvre son élément.
         let fallback = if matches!(target, InspectorTarget::TextElement { .. }) {
             vec2(INSPECTOR_WIDTH, TEXT_INSPECTOR_HEIGHT)
+        } else if matches!(target, InspectorTarget::TextSelection { .. }) {
+            // La sélection porte deux lignes : l'en-tête et les quatre
+            // boutons de mise en évidence.
+            vec2(INSPECTOR_WIDTH, SELECTION_INSPECTOR_HEIGHT)
         } else {
             vec2(INSPECTOR_WIDTH, INSPECTOR_HEIGHT)
         };
@@ -6864,6 +6905,7 @@ impl YouPdfApp {
         let mut delete = false;
         let mut delete_id = None;
         let mut image_action = None;
+        let mut markup = None;
         Area::new(Id::new("inspector"))
             .fixed_pos(placement.rect.min)
             .order(Order::Foreground)
@@ -6919,6 +6961,11 @@ impl YouPdfApp {
                                 self.image_crop.is_some(),
                             );
                         }
+                        // Mise en évidence de la sélection de texte : les
+                        // quatre marques, posées sur les lignes choisies.
+                        if matches!(target, InspectorTarget::TextSelection { .. }) {
+                            markup = markup_row(ui);
+                        }
                     });
                 let rect = body.response.rect;
                 measured = Some(rect.size());
@@ -6934,6 +6981,10 @@ impl YouPdfApp {
         self.inspector_size = measured;
         if let Some(action) = image_action {
             self.image_action(action, ctx);
+        }
+        if let Some(kind) = markup {
+            self.markup_selection(kind, ctx);
+            close = true;
         }
         if style_changed {
             // L'aperçu sur la page suit le style : un repaint immédiat évite
@@ -8956,6 +9007,7 @@ impl YouPdfApp {
         let mut sel = self.text_sel;
         let mut sel_copy = false;
         let mut sel_all = false;
+        let mut sel_markup: Option<AnnotationKind> = None;
         let renderer = &*self.renderer;
         let status = &mut self.render_status;
         let last_fit = &mut self.last_fit;
@@ -9886,6 +9938,17 @@ impl YouPdfApp {
                                     sel_all = true;
                                     ui.close_menu();
                                 }
+                                // Les quatre mises en évidence se posent sur
+                                // la sélection courante : c'est le geste du
+                                // lecteur, qui sélectionne puis colore.
+                                if explicit_sel {
+                                    for (kind, label) in MARKUP_KINDS {
+                                        if ui.button(label).clicked() {
+                                            sel_markup = Some(kind);
+                                            ui.close_menu();
+                                        }
+                                    }
+                                }
                             });
                         }
                     }
@@ -10345,6 +10408,9 @@ impl YouPdfApp {
             self.select_page_text();
         } else if sel_copy {
             self.copy_selection(&ctx);
+        }
+        if let Some(kind) = sel_markup {
+            self.markup_selection(kind, &ctx);
         }
 
         if let Some((page, kind, rect)) = pending_rect {
@@ -14180,4 +14246,55 @@ mod tests {
         assert_eq!(end.fragment, 1);
         assert_eq!(end.offset, 7);
     }
+
+    /// La mise en évidence d'une sélection suit les lignes du texte : un
+    /// quadrilatère par ligne, jamais un rectangle posé à l'aveugle.
+    #[test]
+    fn markup_suit_les_lignes_du_texte() {
+        let frags = vec![
+            frag_chars("bonjour", [10.0, 82.0, 55.0, 94.0], 12.0),
+            frag_chars("monde", [60.0, 82.0, 110.0, 94.0], 12.0),
+        ];
+        let span = Some((
+            TextHit {
+                fragment: 0,
+                offset: 0,
+            },
+            TextHit {
+                fragment: 1,
+                offset: 5,
+            },
+        ));
+        let quads = hit_quads(&frags, span);
+        // Une seule ligne visuelle : les deux fragments sont voisins.
+        assert_eq!(quads.len(), 1, "{quads:?}");
+        let quad = quads[0];
+        // Le quadrilatère va du début de « bonjour » à la fin de « monde ».
+        assert!(quad[0] <= 10.1 && quad[0] >= 9.9, "{quad:?}");
+        assert!(quad[2] >= 109.9 && quad[2] <= 110.1, "{quad:?}");
+    }
+
+    /// Une sélection qui traverse deux lignes donne deux quadrilatères.
+    #[test]
+    fn markup_suit_chaque_ligne() {
+        let frags = vec![
+            frag_chars("bonjour", [10.0, 82.0, 55.0, 94.0], 12.0),
+            frag_chars("monde", [10.0, 60.0, 55.0, 72.0], 12.0),
+        ];
+        let span = Some((
+            TextHit {
+                fragment: 0,
+                offset: 0,
+            },
+            TextHit {
+                fragment: 1,
+                offset: 5,
+            },
+        ));
+        let quads = hit_quads(&frags, span);
+        assert_eq!(quads.len(), 2, "{quads:?}");
+        // La ligne du bas est plus basse en repère page.
+        assert!(quads[0][1] > quads[1][1], "{quads:?}");
+    }
+
 }
