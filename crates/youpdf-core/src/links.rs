@@ -66,11 +66,10 @@ impl Document {
     /// Les annotations sans action lisible sont ignorées : un lien sans
     /// destination ne déclenche rien, l'afficher serait du bruit.
     pub fn page_links(&self, page: usize) -> Vec<PageLink> {
-        let pages = self.inner().get_pages();
-        let Some((_, page_id)) = pages.iter().find(|(number, _)| **number as usize == page) else {
+        let Ok(page_id) = self.page_id(page as u32) else {
             return Vec::new();
         };
-        let Ok(page_dict) = self.inner().get_dictionary(*page_id) else {
+        let Ok(page_dict) = self.inner().get_dictionary(page_id) else {
             return Vec::new();
         };
         let Ok(annots) = page_dict.get(b"Annots") else {
@@ -176,20 +175,19 @@ impl Document {
             Object::Reference(_) => dest,
             _ => return None,
         };
-        let pages = self.inner().get_pages();
         // Une référence directe vers un objet page.
         if let Object::Reference(id) = target {
-            if let Some((number, _)) = pages.iter().find(|(_, page_id)| **page_id == *id) {
+            if let Some(number) = self.page_number_of(*id) {
                 return Some(LinkAction::GoTo {
-                    page: *number as usize,
+                    page: number as usize,
                 });
             }
             // La référence peut pointer vers un dictionnaire page.
             if let Ok(dict) = self.inner().get_dictionary(*id) {
                 if let Ok(Object::Reference(page_id)) = dict.get(b"Parent") {
-                    if let Some((number, _)) = pages.iter().find(|(_, pid)| **pid == *page_id) {
+                    if let Some(number) = self.page_number_of(*page_id) {
                         return Some(LinkAction::GoTo {
-                            page: *number as usize,
+                            page: number as usize,
                         });
                     }
                 }
@@ -203,9 +201,9 @@ impl Document {
             Object::Reference(id) => *id,
             _ => return None,
         };
-        let (number, _) = pages.iter().find(|(_, page_id)| **page_id == id)?;
+        let number = self.page_number_of(id)?;
         Some(LinkAction::GoTo {
-            page: *number as usize,
+            page: number as usize,
         })
     }
 
