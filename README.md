@@ -37,6 +37,13 @@ on.
 - **Search and replace** over a built text index, with case folding.
 - **Text selection** at character level using PDFium glyph boxes; double-click
   selects a word, triple-click selects a line.
+- **Highlight, underline, strike-out and squiggly** straight from a selection:
+  pick the text, then colour it, from the floating inspector or the right-click
+  menu. The mark follows the selected lines — one quadrilateral per line — not
+  a box drawn over the text.
+- **Links are followed on click**: a web address opens in the system browser, an
+  internal `/GoTo` destination jumps to the page it names, and an action the
+  app cannot run is reported rather than silently ignored.
 - **Measure tool**: distance, perimeter and area, with a scale you can
   calibrate against a known distance (72 points per inch reads inches at 1:1).
 
@@ -330,16 +337,16 @@ cargo test --workspace
 ```
 
 The suite is mostly integration tests over generated PDFs, so it needs no
-fixtures on disk. `youpdf-core` alone carries 234 integration tests spread
-across 31 files, covering redaction, encryption, forms, annotations, crop,
-watermark, compression, OCR modes, comparison, extraction, measurement, page
-organisation, PDF/A markers, text export and Office export. The
-application crate adds unit tests next to the code: the inspector placement
-and colour parsing, the home screen filter, star and relative time, and the
-internals of the document tab (undo history, form snapping, tab moves,
-bookmarks, page layouts, selection and reading order, comment threads and
-filters, crop fractions, the startup view preference, word and line
-expansion).
+fixtures on disk. `youpdf-core` alone carries 243 integration tests spread
+across 33 files, covering redaction, encryption, forms, annotations, links,
+crop, watermark, compression, OCR modes, comparison, extraction,
+measurement, page organisation, PDF/A markers, text export and Office export.
+The application crate adds unit tests next to the code: the inspector
+placement and colour parsing, the home screen filter, star and relative time,
+and the internals of the document tab (undo history, form snapping, tab moves,
+bookmarks, page layouts, selection and reading order, markup quads, link
+hit-testing, comment threads and filters, crop fractions, the startup view
+preference, word and line expansion).
 
 ## Roadmap
 
@@ -348,6 +355,8 @@ expansion).
 Tabs, home screen with recents and favourites, a Pages panel of previews,
 search and replace,
 zoom, continuous scroll, page layouts, slideshow, text selection and copy,
+text markup (highlight, underline, strike-out, squiggly) from a selection,
+link following on click,
 in-place text and image editing, annotations (markup, ink, shapes, stamps,
 signatures), bookmarks and attachments sidebars, a comment list with filters,
 threads, review states and FDF/XFDF/CSV/Markdown export, canvas themes and page
