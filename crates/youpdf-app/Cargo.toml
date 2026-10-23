@@ -33,3 +33,7 @@ arboard = "3"
 
 # Encodage PNG de cette image avant de la confier au moteur PDF.
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Rastérisation du nom dans « Créer une signature ». `epaint` tire déjà
+# `ab_glyph` pour ses propres polices.
+ab_glyph = "0.2"

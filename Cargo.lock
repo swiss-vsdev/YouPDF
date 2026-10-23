@@ -5139,6 +5139,7 @@ dependencies = [
 name = "youpdf-app"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "arboard",
  "chrono",
  "eframe",
