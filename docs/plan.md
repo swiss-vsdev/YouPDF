@@ -3,7 +3,7 @@
 Free, clean-room Rust PDF editor with a UPDF-like workflow. Repo: `/Users/gabrielzeizer/Documents/GitHub/YouPDF` (LICENSE: MIT).
 Boundary: no UPDF code/assets/strings copied; layout and interaction patterns only, own icons/logo/copy; no license system in YouPDF (nothing to crack, nothing to nag).
 
-Inventory evidence: `./ux-spec.md` + screenshots + `menus-fr.txt` (this directory).
+See `./ux-spec.md` and `menus-fr.txt` (this directory).
 
 ## Stack
 
