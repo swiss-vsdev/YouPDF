@@ -1,7 +1,7 @@
 # Status — YouPDF
 
-- **Last commit**: `45d48f2` feat(edit): drag-to-move and z-order for content elements (Task 4.2)
-- **Branch**: `main` (clean, 3 commits ahead of `origin/main`)
+- **Last commit**: `2c8888d` feat(edit): wire content drag-to-move to the canvas (Task 4.2)
+- **Branch**: `main` (clean, 6 commits ahead of `origin/main`)
 
 ## Verification Commands (authoritative)
 
@@ -23,3 +23,4 @@ python3 scripts/i18n_extract.py --check   # i18n coverage gate
 - **Task 14.2 — i18n** (`f1a6f64`) — all user-facing strings now go through `t()`; 363-entry EN/FR dictionary; coverage gate in `scripts/i18n_extract.py`.
 - **Task 12.2 — Compare view modes** (`98c6a9c`) — side-by-side view with shared page navigation; ignore-whitespace/case options; `compare_with_options()` in the engine.
 - **Task 4.2 — Content element arrange** (`45d48f2`) — drag-to-move for images (`commit_image_move`) and text blocks (`commit_text_block_move`); `set_image_z_order()` in the engine; Bring to front / Send to back in the image inspector.
+- **Task 4.2 — Canvas wiring** (`2c8888d`) — both drag gestures wired into the ScrollArea canvas using the file's take-and-commit-locally pattern; `commit_image_move` body repaired (was a single line of literal `\n` escapes).
