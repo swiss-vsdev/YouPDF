@@ -18,7 +18,7 @@ This document tracks YouPDF's feature parity against **/Applications/UPDF.app** 
 | **01. Window Chrome & Navigation** | REA §01 | ✅ | Tabs (pin/reorder/close), Home screen (Recents/Starred/Tools, grid/list, thumbnails), docked status bar |
 | **02. Left Rail & Side Panels** | REA §02 | ✅ | 8 rail tools (Organize, Search, Thumbnails, Bookmarks, Comments, Forms, Attachments, Aspect) |
 | **03. Floating Inspectors & Mode Toolbars** | REA §03 | ✅ | Mode pills (Comment/Edit/Form/Redact), floating inspector (text, image, annot, form) |
-| **04. Content Editing Engine** | REA §04 | 🟡 | Caret navigation, typing, backspace, replace. **Gap 4.2:** drag-to-move, z-order and corner resize handles are done; free-angle rotation handle still missing |
+| **04. Content Editing Engine** | REA §04 | ✅ | Caret navigation, typing, backspace, replace. Content arrange: drag-to-move, corner resize, free-angle rotation, z-order |
 | **05. Commenting & Annotations** | REA §05 | ✅ | Markup (4 types), smooth ink + 2-mode eraser, callout, 12 dynamic stamps, custom stamp, signature creator |
 | **06. Form Builder & Filling** | REA §06 | 🟡 | Reader fill (text, check, radio, combo), Form Prep canvas, guides, 6-tab properties. Push buttons unhandled, no date picker |
 | **07. Organize Pages Surface** | REA §07 | ✅ | Full-window grid, select odd/even/all, rotate, delete (confirmed), extract, insert, replace, split |
@@ -32,20 +32,18 @@ This document tracks YouPDF's feature parity against **/Applications/UPDF.app** 
 
 ---
 
-## The 3 Open Parity Gaps
+## Open Parity Gaps
 
-These represent all remaining work for total 1-to-1 feature parity:
+The remaining work for total 1-to-1 feature parity:
 
-1. **Task 4.2 — Content Element Arrange**
-   - **Status:** Drag-to-move (images via `set_image_matrix`, text blocks via `replace_text_fragment_at`), z-order (`set_image_z_order`), and corner resize handles (`commit_image_scale`) are implemented and wired to the canvas.
-   - **Missing:** Free-angle rotation handle (the inspector still exposes discrete Rotate 90° CW/CCW buttons).
-
-2. **Task 12.2 — PDF Comparison Engine View Modes**
+1. **Task 12.2 — PDF Comparison Engine View Modes**
    - **Status:** Side-by-side view with shared page navigation, ignore-whitespace/case options, text report.
    - **Missing:** Synchronized scrolling, difference overlay blend mode, side-by-side difference highlights.
 
-3. **Task 14.2 — Full Localization (i18n) Wiring**
-   - **Status:** ✅ Done (`f1a6f64`) — 333 call sites wrapped across 12 modules; 363-entry EN/FR dictionary; coverage gate passes (0 missing, 0 dead).
+Done since the last audit: **Task 4.2** — content element arrange: hit-test
+selection, drag-to-move, corner resize handles, free-angle rotation
+(`rotate_image`), z-order (`set_image_z_order`). **Task 14.2** — i18n
+wiring (`f1a6f64`).
 
 ---
 

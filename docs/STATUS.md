@@ -1,7 +1,7 @@
 # Status — YouPDF
 
-- **Last commit**: `c58ee9d` feat(edit): add corner resize handles for content elements (Task 4.2)
-- **Branch**: `main` (clean, 7 commits ahead of `origin/main`)
+- **Last commit**: `e21c6f6` feat(edit): free-angle rotation handle for images (Task 4.2)
+- **Branch**: `main` (clean, 10 commits ahead of `origin/main`)
 
 ## Verification Commands (authoritative)
 
@@ -14,8 +14,9 @@ python3 scripts/i18n_extract.py --check   # i18n coverage gate
 
 ## Open Parity Tasks (see `docs/GAP.md`)
 
-1. **Task 4.2** — Content element arrange: drag-to-move, z-order and corner
-   resize handles are done; only a free-angle rotation handle remains.
+1. **Task 12.2** — Compare view modes: side-by-side with shared page
+   navigation is done; synchronized scroll, overlay blend and difference
+   highlights remain.
 
 ## Done
 
@@ -24,4 +25,8 @@ python3 scripts/i18n_extract.py --check   # i18n coverage gate
 - **Task 12.2 — Compare view modes** (`98c6a9c`) — side-by-side view with shared page navigation; ignore-whitespace/case options; `compare_with_options()` in the engine.
 - **Task 4.2 — Content element arrange** (`45d48f2`) — drag-to-move for images (`commit_image_move`) and text blocks (`commit_text_block_move`); `set_image_z_order()` in the engine; Bring to front / Send to back in the image inspector.
 - **Task 4.2 — Canvas wiring** (`2c8888d`) — both drag gestures wired into the ScrollArea canvas using the file's take-and-commit-locally pattern; `commit_image_move` body repaired (was a single line of literal `\n` escapes).
-- **Task 4.2 — Corner resize handles** (`c58ee9d`) — four corner handles drag-resize a selected image; the committed matrix is written via `commit_image_scale`, which reuses `set_image_matrix`.
+- **Task 4.2 — Completed (`e21c6f6`)** — canvas drag-to-move wiring, corner resize handles and a free-angle rotation grip (`rotate_image` in the engine: the drawing matrix turns around the box centre, pixels never re-encoded). The engine test `rotation_libre_fait_tourner_autour_du_centre` renders a 45° turn and checks the halves swap vertically.
+
+## Notes
+
+- The canvas code cannot call `self` while it borrows `renderer`/`tabs`: take state out before the `show_viewport` closure, commit into `pending_*` locals, write after the closure.
