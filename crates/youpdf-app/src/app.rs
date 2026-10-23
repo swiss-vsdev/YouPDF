@@ -4842,11 +4842,23 @@ impl YouPdfApp {
                 if page as usize == tab.page && step != THUMBNAIL_STEP && !fast {
                     tab.last_bitmap = Some((page, target_scale, bitmap));
                 }
-                let handle = ctx.load_texture(
-                    format!("p{page}s{step}"),
-                    image,
-                    TextureOptions::LINEAR,
-                );
+                let handle = match tab.cache.get(&key) {
+                    // Ce palier a déjà une texture : on remplace ses pixels
+                    // en gardant le même `TextureId`. `Context::load_texture`,
+                    // lui, alloue toujours une texture neuve (son nom n'est
+                    // qu'une étiquette de débogage) et laisse l'ancienne au
+                    // GPU : chaque zoom en fuyait une.
+                    Some(cached) => {
+                        let mut texture = cached.texture.clone();
+                        texture.set(image, TextureOptions::LINEAR);
+                        texture
+                    }
+                    None => ctx.load_texture(
+                        format!("p{page}s{step}"),
+                        image,
+                        TextureOptions::LINEAR,
+                    ),
+                };
                 tab.cache.insert(
                     key,
                     CachedPage {
@@ -11376,11 +11388,21 @@ impl YouPdfApp {
             ..Default::default()
         };
         let bitmap = self.renderer.render_page(&doc, 1, &options).ok()?;
-        let handle = ctx.load_texture(
-            format!("home-thumb-{}", path.display()),
-            bitmap.to_egui_image(),
-            TextureOptions::LINEAR,
-        );
+        let image = bitmap.to_egui_image();
+        // Même fichier, contenu changé : on réécrit la texture existante
+        // plutôt que d'en allouer une seconde puis de jeter la première.
+        let handle = match self.home_thumbs.get(path) {
+            Some((_, texture)) => {
+                let mut texture = texture.clone();
+                texture.set(image, TextureOptions::LINEAR);
+                texture
+            }
+            None => ctx.load_texture(
+                format!("home-thumb-{}", path.display()),
+                image,
+                TextureOptions::LINEAR,
+            ),
+        };
         // ponytail: borne simple — vider le cache s'il déborde. Un accueil
         // affiche une poignée de vignettes ; au-delà, les re-rendre coûte
         // moins qu'un cache qui grossit sans fin.
@@ -13675,6 +13697,87 @@ mod tests {
             doc: Some(vec![marker; len]),
             annots: Vec::new(),
         }
+    }
+
+    fn un_onglet_vide() -> Tab {
+        Tab {
+            doc: blank_document(1, 200.0, 200.0).expect("page de test"),
+            path: None,
+            title: "test".to_owned(),
+            page: 1,
+            zoom: None,
+            zoom_fit_page: true,
+            cache: HashMap::new(),
+            page_sizes: Vec::new(),
+            last_bitmap: None,
+            dirty: false,
+            structural_dirty: false,
+            annots: Vec::new(),
+            baseline_annots: Vec::new(),
+            annots_loaded: true,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            history_base: None,
+            saved_hash: 0,
+            outline: Vec::new(),
+            forms: Vec::new(),
+            attachments: Vec::new(),
+            fragments: HashMap::new(),
+            structure_loaded: false,
+            pinned: false,
+            protected: false,
+        }
+    }
+
+    /// Un nouveau rendu du même palier réécrit la texture existante : même
+    /// `TextureId`, et un delta de mise à jour à la place d'une allocation.
+    ///
+    /// `Context::load_texture` allouait une texture neuve à chaque rendu ;
+    /// l'ancienne, faute de poignée, restait au GPU. Un zoom en fuyait une
+    /// par palier et par page.
+    #[test]
+    fn un_rendu_reutilise_la_texture_du_palier() {
+        let ctx = egui::Context::default();
+        let renderer = NullRenderer;
+        let mut tab = un_onglet_vide();
+        let mut status = String::new();
+
+        let premier = YouPdfApp::page_texture(
+            &ctx, &renderer, &mut tab, 1, 10, 1.0, 1.0, true, false, &mut status,
+        )
+        .expect("premier rendu");
+        let id = premier.id();
+        assert!(status.is_empty(), "{status}");
+        let textures_avant = ctx.tex_manager().read().num_allocated();
+
+        // Même palier (10), mais 20 % plus grand que la rastérisation en
+        // cache : elle est périmée, donc le rendu repart.
+        let second = YouPdfApp::page_texture(
+            &ctx, &renderer, &mut tab, 1, 10, 1.2, 1.0, true, false, &mut status,
+        )
+        .expect("second rendu");
+        assert_eq!(second.id(), id, "la texture du palier est réutilisée");
+
+        // Le rendu a bien eu lieu : le bitmap fait 240×240 et non 200×200.
+        let delta = ctx.tex_manager().write().take_delta();
+        let mises_a_jour: Vec<_> = delta.set.iter().filter(|(other, _)| *other == id).collect();
+        assert_eq!(mises_a_jour.len(), 1, "un seul delta pour la texture");
+        assert!(
+            mises_a_jour[0].1.is_whole(),
+            "le delta remplace l'image entière"
+        );
+        assert_eq!(mises_a_jour[0].1.image.size(), [240, 240]);
+        assert!(
+            !delta.free.contains(&id),
+            "la texture réutilisée ne doit pas être libérée"
+        );
+
+        // Aucune texture n'a été allouée en plus : uniquement mise à jour.
+        assert_eq!(
+            ctx.tex_manager().read().num_allocated(),
+            textures_avant,
+            "le second rendu ne doit pas allouer de texture"
+        );
     }
 
     #[test]

@@ -83,25 +83,26 @@ impl PageBitmap {
     /// Conversion directe : pdfium produit du BGRA, egui attend du RGBA.
     pub fn to_egui_image(&self) -> egui::ColorImage {
         let expected = self.width as usize * self.height as usize * 4;
+        let size = [self.width as usize, self.height as usize];
         if self.pixels.len() < expected {
-            return egui::ColorImage::new(
-                [self.width as usize, self.height as usize],
-                egui::Color32::from_rgb(240, 240, 240),
-            );
+            return egui::ColorImage::new(size, egui::Color32::from_rgb(240, 240, 240));
         }
         // `PdfBitmap::as_rgba_bytes` normalise DÉJÀ le tampon en RGBA (il
         // retourne le BGRx natif de pdfium dans l'ordre RGBA). On recopiait
         // R et B l'un dans l'autre : un rouge pur (#FF0000) sortait en bleu
         // (#0000FF) à l'écran, et les tampons `PageBitmap::solid` — déjà
         // RGBA — étaient eux aussi inversés.
-        let mut rgba = Vec::with_capacity(expected);
-        for chunk in self.pixels[..expected].chunks_exact(4) {
-            rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
-        }
-        egui::ColorImage::from_rgba_unmultiplied(
-            [self.width as usize, self.height as usize],
-            &rgba,
-        )
+        //
+        // Un `Color32` fait exactement quatre octets : on le construit
+        // directement par pixel, sans tampon RGBA intermédiaire que
+        // `from_rgba_unmultiplied` reparcourrait ensuite. L'alpha reste
+        // forcé à 255 : `as_rgba_bytes` conserve celui de la source (le
+        // quatrième octet d'un BGRx, pas garanti opaque).
+        let pixels = self.pixels[..expected]
+            .chunks_exact(4)
+            .map(|chunk| egui::Color32::from_rgb(chunk[0], chunk[1], chunk[2]))
+            .collect();
+        egui::ColorImage { size, pixels }
     }
 }
 
@@ -448,5 +449,102 @@ impl Renderer for NullRenderer {
 
     fn renders_real_content(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ancienne conversion, conservée comme référence de non-régression :
+    /// elle construisait un tampon RGBA octet par octet puis le faisait
+    /// relire par `ColorImage::from_rgba_unmultiplied`.
+    fn ancienne_conversion(bitmap: &PageBitmap) -> egui::ColorImage {
+        let expected = bitmap.width as usize * bitmap.height as usize * 4;
+        if bitmap.pixels.len() < expected {
+            return egui::ColorImage::new(
+                [bitmap.width as usize, bitmap.height as usize],
+                egui::Color32::from_rgb(240, 240, 240),
+            );
+        }
+        let mut rgba = Vec::with_capacity(expected);
+        for chunk in bitmap.pixels[..expected].chunks_exact(4) {
+            rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
+        }
+        egui::ColorImage::from_rgba_unmultiplied(
+            [bitmap.width as usize, bitmap.height as usize],
+            &rgba,
+        )
+    }
+
+    /// Les pixels produits doivent rester identiques à ceux de l'ancienne
+    /// conversion, octet pour octet, quel que soit l'alpha de la source.
+    #[test]
+    fn conversion_identique_octet_pour_octet() {
+        let entrees = [
+            // Tampon « BGRx » de pdfium : le quatrième octet est un
+            // remplissage, pas un alpha — il ne doit pas ressortir tel quel.
+            PageBitmap {
+                width: 2,
+                height: 2,
+                pixels: vec![
+                    0x00, 0x00, 0xFF, 0x00, 0x00, 0xFF, 0x00, 0x12, 0xFF, 0x00, 0x00, 0xFF,
+                    0x10, 0x20, 0x30, 0x40,
+                ],
+            },
+            // Tampon déjà RGBA (`PageBitmap::solid`) : un rouge pur doit
+            // rester rouge.
+            PageBitmap::solid(3, 1, [0xFF, 0x00, 0x00, 0xFF]),
+            // Six pixels quelconques, alpha variable compris.
+            PageBitmap {
+                width: 3,
+                height: 2,
+                pixels: vec![
+                    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+                    22, 23, 24,
+                ],
+            },
+            // Tampon trop court : repli sur le gris uniforme.
+            PageBitmap {
+                width: 2,
+                height: 2,
+                pixels: vec![1, 2, 3, 4, 5, 6],
+            },
+            // Bitmap vide.
+            PageBitmap {
+                width: 0,
+                height: 0,
+                pixels: Vec::new(),
+            },
+        ];
+        for bitmap in entrees {
+            let attendu = ancienne_conversion(&bitmap);
+            let obtenu = bitmap.to_egui_image();
+            assert_eq!(obtenu.size, attendu.size);
+            assert_eq!(
+                obtenu.pixels, attendu.pixels,
+                "conversion divergente pour {}x{}",
+                bitmap.width, bitmap.height
+            );
+        }
+    }
+
+    /// L'alpha de la source n'est pas recopié : la page reste opaque.
+    #[test]
+    fn alpha_force_a_255() {
+        let bitmap = PageBitmap {
+            width: 1,
+            height: 1,
+            pixels: vec![0x10, 0x20, 0x30, 0x00],
+        };
+        let image = bitmap.to_egui_image();
+        assert_eq!(image.pixels[0].to_array(), [0x10, 0x20, 0x30, 0xFF]);
+    }
+
+    /// Les canaux ne sont pas permutés : un rouge pur ressort rouge.
+    #[test]
+    fn canaux_preserves() {
+        let image = PageBitmap::solid(1, 1, [0xFF, 0x00, 0x00, 0xFF]).to_egui_image();
+        assert_eq!(image.pixels[0].to_array(), [0xFF, 0x00, 0x00, 0xFF]);
     }
 }
