@@ -25,6 +25,7 @@ mod export_ui;
 mod pages_ui;
 mod prefs_ui;
 mod organize_ui;
+mod sign_ui;
 
 use youpdf_shared::{i18n, pal, set_palette, t, Language, Theme};
 use crate::ai::AiPanel;
@@ -1450,6 +1451,8 @@ pub struct YouPdfApp {
     /// Fenêtre « Compresser » : dernier bilan affiché.
     compress_open: bool,
     sign_open: bool,
+    /// Fenêtre « Signer » : certificat chargé, apparence, validation.
+    sign: sign_ui::SignUi,
     compress_report: Option<String>,
     /// Niveau de compression d'image choisi.
     compress_level: CompressionLevel,
@@ -1876,6 +1879,7 @@ impl YouPdfApp {
             export_office_exact: false,
             compress_open: false,
             sign_open: false,
+            sign: sign_ui::SignUi::default(),
             compress_report: None,
             compress_level: CompressionLevel::Ebook,
             compress_extras: CompressionExtras::default(),
@@ -12045,6 +12049,7 @@ impl eframe::App for YouPdfApp {
         self.compare_window(ctx);
         self.ocr_window(ctx);
         self.create_window(ctx);
+        self.sign_window(ctx);
         self.batch_window(ctx);
         self.extract_window(ctx);
         self.measure_window(ctx);
