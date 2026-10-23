@@ -1839,7 +1839,7 @@ pub struct YouPdfApp {
 
 impl YouPdfApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
-        install_fonts(&cc.egui_ctx);
+        crate::fonts::install(&cc.egui_ctx);
         // La configuration est lue une seule fois : le thème en vient, et le
         // panneau IA reçoit le même objet au lieu de relire le fichier.
         let settings = youpdf_ai::AppSettings::load().unwrap_or_default();
@@ -12155,17 +12155,6 @@ impl eframe::App for YouPdfApp {
 // --------------------------------------------------------------------------
 // Thème
 // --------------------------------------------------------------------------
-
-/// Polices de l'application : Phosphor (icônes) puis Hack en repli.
-fn install_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-    // Ubuntu-Light n'a pas ⇧ (U+21E7) : Hack le fournit en repli proportionnel.
-    if let Some(keys) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-        keys.push("Hack".to_owned());
-    }
-    ctx.set_fonts(fonts);
-}
 
 /// Réglages egui d'un thème. La palette et les visuels vivent dans
 /// `youpdf_shared::theme` : un seul endroit définit les couleurs.
