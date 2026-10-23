@@ -1,6 +1,7 @@
 //! Panneau Formulaires et remplissage interactif des champs.
 
 use super::*;
+use youpdf_shared::t;
 
 /// Un champ est-il posé sur la page `page` du canevas ?
 ///
@@ -106,17 +107,17 @@ impl YouPdfApp {
                         }
                     }
                 });
-            if ui.button("Import").clicked() {
+            if ui.button(t("Import")).clicked() {
                 import = true;
             }
-            if ui.button("Export").clicked() {
+            if ui.button(t("Export")).clicked() {
                 export = true;
             }
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.add_space(2.0);
-            ui.checkbox(&mut self.form_highlight, "Highlight fields");
+            ui.checkbox(&mut self.form_highlight, t("Highlight fields"));
         });
         ui.add_space(2.0);
         // Outils d'alignement du mode Préparer un formulaire.
@@ -317,11 +318,11 @@ impl YouPdfApp {
                 match field.kind {
                     FormFieldKind::Checkbox | FormFieldKind::Radio => {
                         ui.horizontal(|ui| {
-                            if ui.button("On").clicked() {
+                            if ui.button(t("On")).clicked() {
                                 buffer = "On".to_owned();
                                 apply = true;
                             }
-                            if ui.button("Off").clicked() {
+                            if ui.button(t("Off")).clicked() {
                                 buffer = "Off".to_owned();
                                 apply = true;
                             }
@@ -334,10 +335,10 @@ impl YouPdfApp {
                         );
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Apply").clicked() {
+                            if ui.button(t("Apply")).clicked() {
                                 apply = true;
                             }
-                            if ui.button("Close").clicked() {
+                            if ui.button(t("Close")).clicked() {
                                 close = true;
                             }
                         });
@@ -369,7 +370,7 @@ impl YouPdfApp {
             .rounding(Rounding::same(8.0))
             .inner_margin(Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
-                ui.label(RichText::new("Properties").size(11.5).color(pal().icon_bright));
+                ui.label(RichText::new(t("Properties")).size(11.5).color(pal().icon_bright));
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| {
                     for (index, label) in [
@@ -398,7 +399,7 @@ impl YouPdfApp {
                         );
                         if props.name.trim().is_empty() {
                             ui.label(
-                                RichText::new("A field needs a name")
+                                RichText::new(t("A field needs a name"))
                                     .size(10.0)
                                     .color(pal().muted),
                             );
@@ -432,11 +433,11 @@ impl YouPdfApp {
                                     }
                                 }
                             });
-                        ui.checkbox(&mut props.required, "Required");
-                        ui.checkbox(&mut props.read_only, "Read only");
+                        ui.checkbox(&mut props.required, t("Required"));
+                        ui.checkbox(&mut props.read_only, t("Read only"));
                     }
                     1 => {
-                        ui.label(RichText::new("Border").size(10.5).color(pal().muted));
+                        ui.label(RichText::new(t("Border")).size(10.5).color(pal().muted));
                         ui.add(
                             egui::Slider::new(&mut props.border_width, 0.0..=8.0)
                                 .text("Width"),
@@ -464,15 +465,15 @@ impl YouPdfApp {
                                 }
                             });
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("Border colour").size(10.5));
+                            ui.label(RichText::new(t("Border colour")).size(10.5));
                             ui.color_edit_button_srgb(&mut props.border_color);
                         });
                         ui.horizontal(|ui| {
-                            ui.checkbox(&mut props.fill, "Fill");
+                            ui.checkbox(&mut props.fill, t("Fill"));
                             ui.color_edit_button_srgb(&mut props.fill_color);
                         });
                         ui.separator();
-                        ui.label(RichText::new("Text").size(10.5).color(pal().muted));
+                        ui.label(RichText::new(t("Text")).size(10.5).color(pal().muted));
                         egui::ComboBox::from_id_salt("form-font")
                             .width(width)
                             .selected_text(props.font.clone())
@@ -491,7 +492,7 @@ impl YouPdfApp {
                                 .text("Size (0 = auto)"),
                         );
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("Text colour").size(10.5));
+                            ui.label(RichText::new(t("Text colour")).size(10.5));
                             ui.color_edit_button_srgb(&mut props.text_color);
                         });
                     }
@@ -520,8 +521,8 @@ impl YouPdfApp {
                                 TextEdit::singleline(&mut props.default_value)
                                     .hint_text("Default value"),
                             );
-                            ui.checkbox(&mut props.multiline, "Multiline");
-                            ui.checkbox(&mut props.password, "Password");
+                            ui.checkbox(&mut props.multiline, t("Multiline"));
+                            ui.checkbox(&mut props.password, t("Password"));
                             ui.add(
                                 egui::Slider::new(&mut props.comb, 0..=20)
                                     .text("Comb cells"),
@@ -543,15 +544,15 @@ impl YouPdfApp {
                                     .filter(|item| !item.is_empty())
                                     .collect();
                             }
-                            if ui.button("Sort options").clicked() {
+                            if ui.button(t("Sort options")).clicked() {
                                 props.options.sort();
                             }
-                            ui.checkbox(&mut props.editable, "Allow custom text");
+                            ui.checkbox(&mut props.editable, t("Allow custom text"));
                         }
                     }
                     3 => {
                         ui.label(
-                            RichText::new("Run JavaScript on click")
+                            RichText::new(t("Run JavaScript on click"))
                                 .size(10.5)
                                 .color(pal().muted),
                         );
@@ -584,7 +585,7 @@ impl YouPdfApp {
                                 }
                             });
                         ui.label(
-                            RichText::new("Format script")
+                            RichText::new(t("Format script"))
                                 .size(10.5)
                                 .color(pal().muted),
                         );
@@ -600,7 +601,7 @@ impl YouPdfApp {
                             .selected_text("Sum / Product / Average")
                             .show_ui(ui, |ui| {
                                 ui.label(
-                                    RichText::new("Source fields, comma separated")
+                                    RichText::new(t("Source fields, comma separated"))
                                         .size(10.0),
                                 );
                                 ui.add_sized(
@@ -630,7 +631,7 @@ impl YouPdfApp {
                                 }
                             });
                         ui.label(
-                            RichText::new("Calculate script")
+                            RichText::new(t("Calculate script"))
                                 .size(10.5)
                                 .color(pal().muted),
                         );

@@ -2,6 +2,7 @@
 //! recadrage, découpage en tuiles, arrière-plan, filigrane Bates.
 
 use super::*;
+use youpdf_shared::t;
 
 impl YouPdfApp {
     /// Fenêtre « Protéger ».
@@ -14,7 +15,7 @@ impl YouPdfApp {
         let mut decrypt = false;
         self.show_modal(ctx, "modal-protect", "Protect", 420.0, &mut open, |app, ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Encryption").size(12.0).color(pal().muted));
+                ui.label(RichText::new(t("Encryption")).size(12.0).color(pal().muted));
                 for strength in [EncryptionStrength::Aes256, EncryptionStrength::Rc4_128] {
                     if ui
                         .selectable_label(
@@ -28,7 +29,7 @@ impl YouPdfApp {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Open password").size(12.0).color(pal().muted));
+                ui.label(RichText::new(t("Open password")).size(12.0).color(pal().muted));
                 ui.add(
                     TextEdit::singleline(&mut app.protect.user_password)
                         .password(true)
@@ -36,7 +37,7 @@ impl YouPdfApp {
                 );
             });
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Permissions password").size(12.0).color(pal().muted));
+                ui.label(RichText::new(t("Permissions password")).size(12.0).color(pal().muted));
                 ui.add(
                     TextEdit::singleline(&mut app.protect.owner_password)
                         .password(true)
@@ -44,24 +45,24 @@ impl YouPdfApp {
                 );
             });
             ui.add_space(6.0);
-            ui.label(RichText::new("Allowed actions").size(12.0).color(pal().muted));
+            ui.label(RichText::new(t("Allowed actions")).size(12.0).color(pal().muted));
             egui::Grid::new("protect-perms")
                 .num_columns(3)
                 .spacing([14.0, 4.0])
                 .show(ui, |ui| {
-                    ui.checkbox(&mut app.protect.permissions.print, "Print");
+                    ui.checkbox(&mut app.protect.permissions.print, t("Print"));
                     ui.checkbox(
                         &mut app.protect.permissions.print_high_quality,
                         "High-quality print",
                     );
-                    ui.checkbox(&mut app.protect.permissions.copy, "Copy text");
+                    ui.checkbox(&mut app.protect.permissions.copy, t("Copy text"));
                     ui.end_row();
-                    ui.checkbox(&mut app.protect.permissions.modify, "Modify");
-                    ui.checkbox(&mut app.protect.permissions.annotate, "Comment");
-                    ui.checkbox(&mut app.protect.permissions.fill_forms, "Fill forms");
+                    ui.checkbox(&mut app.protect.permissions.modify, t("Modify"));
+                    ui.checkbox(&mut app.protect.permissions.annotate, t("Comment"));
+                    ui.checkbox(&mut app.protect.permissions.fill_forms, t("Fill forms"));
                     ui.end_row();
-                    ui.checkbox(&mut app.protect.permissions.assemble, "Assemble");
-                    ui.checkbox(&mut app.protect.permissions.accessibility, "Accessibility");
+                    ui.checkbox(&mut app.protect.permissions.assemble, t("Assemble"));
+                    ui.checkbox(&mut app.protect.permissions.accessibility, t("Accessibility"));
                     ui.end_row();
                 });
             ui.add_space(8.0);
@@ -74,10 +75,10 @@ impl YouPdfApp {
             );
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui.button("Save encrypted copy…").clicked() {
+                if ui.button(t("Save encrypted copy…")).clicked() {
                     run = true;
                 }
-                if ui.button("Remove protection from a file…").clicked() {
+                if ui.button(t("Remove protection from a file…")).clicked() {
                     decrypt = true;
                 }
             });
@@ -206,7 +207,7 @@ impl YouPdfApp {
             ui.add(egui::Slider::new(&mut rows, 1..=8).text("Rows"));
             ui.add(egui::Slider::new(&mut cols, 1..=8).text("Columns"));
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Gap").size(12.0).color(pal().muted));
+                ui.label(RichText::new(t("Gap")).size(12.0).color(pal().muted));
                 ui.add(egui::DragValue::new(&mut gap).range(0.0..=200.0).suffix(" pt"));
             });
             ui.add_space(4.0);
@@ -221,10 +222,10 @@ impl YouPdfApp {
             );
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Split").clicked() {
+                if ui.button(t("Split")).clicked() {
                     apply = true;
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(t("Cancel")).clicked() {
                     app.tile_split_open = false;
                 }
             });
@@ -279,7 +280,7 @@ impl YouPdfApp {
                             self.scan_banner = false;
                             self.scan_banner_off = true;
                         }
-                        if ui.button("Perform OCR").clicked() {
+                        if ui.button(t("Perform OCR")).clicked() {
                             self.ocr_open = true;
                             self.scan_banner = false;
                         }
@@ -307,7 +308,7 @@ impl YouPdfApp {
             );
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Unit").size(11.0).color(pal().muted));
+                ui.label(RichText::new(t("Unit")).size(11.0).color(pal().muted));
                 egui::ComboBox::from_id_salt("crop-unit")
                     .width(64.0)
                     .selected_text(app.crop_unit.suffix())
@@ -321,7 +322,7 @@ impl YouPdfApp {
                             }
                         }
                     });
-                ui.label(RichText::new("Pages").size(11.0).color(pal().muted));
+                ui.label(RichText::new(t("Pages")).size(11.0).color(pal().muted));
                 egui::ComboBox::from_id_salt("crop-range")
                     .width(96.0)
                     .selected_text(
@@ -345,7 +346,7 @@ impl YouPdfApp {
                     });
             });
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Box").size(11.0).color(pal().muted));
+                ui.label(RichText::new(t("Box")).size(11.0).color(pal().muted));
                 egui::ComboBox::from_id_salt("crop-box")
                     .width(120.0)
                     .selected_text(
@@ -397,13 +398,13 @@ impl YouPdfApp {
                 });
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Apply").clicked() {
+                if ui.button(t("Apply")).clicked() {
                     apply = true;
                 }
-                if ui.button("Auto-crop margins").clicked() {
+                if ui.button(t("Auto-crop margins")).clicked() {
                     auto = true;
                 }
-                if ui.button("Reset crop").clicked() {
+                if ui.button(t("Reset crop")).clicked() {
                     reset = true;
                 }
             });
@@ -480,7 +481,7 @@ impl YouPdfApp {
             );
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Colour").size(12.0).color(pal().muted));
+                ui.label(RichText::new(t("Colour")).size(12.0).color(pal().muted));
                 let [mut r, mut g, mut b] = app.background.color;
                 let mut changed = false;
                 changed |= ui
@@ -503,14 +504,14 @@ impl YouPdfApp {
                 );
             });
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Opacity").size(12.0).color(pal().muted));
+                ui.label(RichText::new(t("Opacity")).size(12.0).color(pal().muted));
                 ui.add(
                     egui::Slider::new(&mut app.background.opacity, 0.05..=1.0)
                         .show_value(false),
                 );
             });
             ui.horizontal(|ui| {
-                if ui.button("Choose an image…").clicked() {
+                if ui.button(t("Choose an image…")).clicked() {
                     choose = true;
                 }
                 ui.label(
@@ -528,27 +529,27 @@ impl YouPdfApp {
             });
             if app.background.image.is_some() {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Image scale").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("Image scale")).size(12.0).color(pal().muted));
                     ui.add(egui::Slider::new(&mut app.background.scale, 0.2..=2.0));
                 });
             }
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
+                ui.label(RichText::new(t("Pages")).size(12.0).color(pal().muted));
                 let mut all = app.background_from.is_none();
                 if ui.checkbox(&mut all, format!("All ({total})")).changed() {
                     app.background_from = if all { None } else { Some(1) };
                 }
                 if let Some(from) = app.background_from.as_mut() {
-                    ui.label(RichText::new("from").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("from")).size(12.0).color(pal().muted));
                     ui.add(egui::DragValue::new(from).range(1..=total));
                 }
             });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Apply").clicked() {
+                if ui.button(t("Apply")).clicked() {
                     apply = true;
                 }
-                if ui.button("Remove from the document").clicked() {
+                if ui.button(t("Remove from the document")).clicked() {
                     clear = true;
                 }
             });
@@ -620,36 +621,36 @@ impl YouPdfApp {
                 .num_columns(2)
                 .spacing([8.0, 4.0])
                 .show(ui, |ui| {
-                    ui.label(RichText::new("Prefix").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("Prefix")).size(12.0).color(pal().muted));
                     ui.add(
                         TextEdit::singleline(&mut app.bates.prefix).desired_width(160.0),
                     );
                     ui.end_row();
-                    ui.label(RichText::new("Suffix").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("Suffix")).size(12.0).color(pal().muted));
                     ui.add(
                         TextEdit::singleline(&mut app.bates.suffix).desired_width(160.0),
                     );
                     ui.end_row();
-                    ui.label(RichText::new("Start at").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("Start at")).size(12.0).color(pal().muted));
                     ui.add(egui::DragValue::new(&mut app.bates.start).range(0..=999_999));
                     ui.end_row();
-                    ui.label(RichText::new("Step").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("Step")).size(12.0).color(pal().muted));
                     ui.add(egui::DragValue::new(&mut app.bates.step).range(1..=999_999));
                     ui.end_row();
-                    ui.label(RichText::new("Digits").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("Digits")).size(12.0).color(pal().muted));
                     ui.add(egui::DragValue::new(&mut app.bates.digits).range(1..=12));
                     ui.end_row();
-                    ui.label(RichText::new("Font size").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("Font size")).size(12.0).color(pal().muted));
                     ui.add(
                         egui::DragValue::new(&mut app.bates.font_size).range(4.0..=72.0),
                     );
                     ui.end_row();
-                    ui.label(RichText::new("Margin").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("Margin")).size(12.0).color(pal().muted));
                     ui.add(egui::DragValue::new(&mut app.bates.margin).range(0.0..=200.0));
                     ui.end_row();
                 });
             ui.add_space(4.0);
-            ui.label(RichText::new("Position").size(12.0).color(pal().muted));
+            ui.label(RichText::new(t("Position")).size(12.0).color(pal().muted));
             ui.horizontal_wrapped(|ui| {
                 for (position, label) in BATES_POSITIONS {
                     if ui
@@ -661,22 +662,22 @@ impl YouPdfApp {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
+                ui.label(RichText::new(t("Pages")).size(12.0).color(pal().muted));
                 let mut all = app.bates_from.is_none();
                 if ui.checkbox(&mut all, format!("All ({total})")).changed() {
                     app.bates_from = if all { None } else { Some(1) };
                 }
                 if let Some(from) = app.bates_from.as_mut() {
-                    ui.label(RichText::new("from").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("from")).size(12.0).color(pal().muted));
                     ui.add(egui::DragValue::new(from).range(1..=total));
                 }
             });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Apply").clicked() {
+                if ui.button(t("Apply")).clicked() {
                     apply = true;
                 }
-                if ui.button("Remove from the document").clicked() {
+                if ui.button(t("Remove from the document")).clicked() {
                     clear = true;
                 }
             });

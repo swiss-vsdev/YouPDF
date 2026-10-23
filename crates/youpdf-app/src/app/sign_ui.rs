@@ -6,6 +6,7 @@
 //! s'affichait et aucune fonction de signature n'était appelée.
 
 use super::*;
+use youpdf_shared::t;
 use youpdf_core::signature::{CertificateRequest, SignOptions, SigningIdentity};
 
 /// Vert du bandeau « signature valide ».
@@ -108,7 +109,7 @@ impl YouPdfApp {
     /// Onglet « Signer » : certificat courant, apparence, bouton de signature.
     fn sign_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let pages = self.tabs.get(self.active).map_or(0, |tab| tab.total());
-        ui.label(RichText::new("Certificate").size(11.0).color(pal().muted));
+        ui.label(RichText::new(t("Certificate")).size(11.0).color(pal().muted));
         match &self.sign.certificate {
             Some(cert) => {
                 ui.label(
@@ -128,7 +129,7 @@ impl YouPdfApp {
             }
             None => {
                 ui.label(
-                    RichText::new("No certificate loaded — see the Certificates tab.")
+                    RichText::new(t("No certificate loaded — see the Certificates tab."))
                         .size(11.0)
                         .color(pal().muted),
                 );
@@ -136,24 +137,24 @@ impl YouPdfApp {
         }
 
         ui.add_space(8.0);
-        ui.label(RichText::new("Appearance").size(11.0).color(pal().muted));
+        ui.label(RichText::new(t("Appearance")).size(11.0).color(pal().muted));
         ui.horizontal(|ui| {
-            ui.label("Page");
+            ui.label(t("Page"));
             ui.add(egui::DragValue::new(&mut self.sign.options.page).range(1..=pages.max(1)));
         });
         ui.horizontal(|ui| {
-            ui.label("Name");
+            ui.label(t("Name"));
             ui.add(TextEdit::singleline(&mut self.sign.options.name).desired_width(140.0));
-            ui.label("Reason");
+            ui.label(t("Reason"));
             ui.add(TextEdit::singleline(&mut self.sign.options.reason).desired_width(140.0));
         });
         ui.horizontal(|ui| {
-            ui.label("Location");
+            ui.label(t("Location"));
             ui.add(TextEdit::singleline(&mut self.sign.options.location).desired_width(140.0));
         });
 
         ui.add_space(6.0);
-        ui.label(RichText::new("Signature box").size(11.0).color(pal().muted));
+        ui.label(RichText::new(t("Signature box")).size(11.0).color(pal().muted));
         ui.horizontal(|ui| {
             for (label, index) in [("X1", 0usize), ("Y1", 1), ("X2", 2), ("Y2", 3)] {
                 ui.label(label);
@@ -183,7 +184,7 @@ impl YouPdfApp {
         }
 
         ui.separator();
-        if ui.button("Check signatures").clicked() {
+        if ui.button(t("Check signatures")).clicked() {
             self.refresh_signature_status();
         }
         self.signature_status(ui);
@@ -193,7 +194,7 @@ impl YouPdfApp {
     fn signature_status(&self, ui: &mut egui::Ui) {
         if self.sign.signatures.is_empty() {
             ui.label(
-                RichText::new("No signature found in this document")
+                RichText::new(t("No signature found in this document"))
                     .size(11.0)
                     .color(pal().muted),
             );
@@ -240,44 +241,44 @@ impl YouPdfApp {
 
     /// Onglet « Certificats » : import PKCS#12 et création auto-signée.
     fn certificate_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Import a PKCS#12 file").size(11.0).color(pal().muted));
+        ui.label(RichText::new(t("Import a PKCS#12 file")).size(11.0).color(pal().muted));
         ui.horizontal(|ui| {
-            ui.label("Password");
+            ui.label(t("Password"));
             ui.add(
                 TextEdit::singleline(&mut self.sign.pkcs12_password)
                     .password(true)
                     .desired_width(160.0),
             );
-            if ui.button("Choose .p12…").clicked() {
+            if ui.button(t("Choose .p12…")).clicked() {
                 self.import_pkcs12(ctx);
             }
         });
 
         ui.add_space(10.0);
         ui.label(
-            RichText::new("Or create a self-signed certificate")
+            RichText::new(t("Or create a self-signed certificate"))
                 .size(11.0)
                 .color(pal().muted),
         );
         ui.horizontal(|ui| {
-            ui.label("Name");
+            ui.label(t("Name"));
             ui.add(TextEdit::singleline(&mut self.sign.request.common_name).desired_width(150.0));
-            ui.label("Org");
+            ui.label(t("Org"));
             ui.add(TextEdit::singleline(&mut self.sign.request.organization).desired_width(120.0));
         });
         ui.horizontal(|ui| {
-            ui.label("Email");
+            ui.label(t("Email"));
             ui.add(TextEdit::singleline(&mut self.sign.request.email).desired_width(150.0));
-            ui.label("Country");
+            ui.label(t("Country"));
             ui.add(
                 TextEdit::singleline(&mut self.sign.request.country)
                     .char_limit(2)
                     .desired_width(40.0),
             );
-            ui.label("Years");
+            ui.label(t("Years"));
             ui.add(egui::DragValue::new(&mut self.sign.request.years).range(1..=30));
         });
-        if ui.button("Create self-signed…").clicked() {
+        if ui.button(t("Create self-signed…")).clicked() {
             self.create_self_signed();
         }
     }

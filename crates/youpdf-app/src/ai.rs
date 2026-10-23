@@ -18,7 +18,7 @@ use youpdf_ai::{
     build_provider, AiTask, AppSettings, ChatContext, ChatOptions, Message, ModelInfo, ProviderConfig,
     ProviderKind, SecretStore,
 };
-use youpdf_shared::pal;
+use youpdf_shared::{t, pal};
 
 /// Demande envoyée au fil de travail.
 ///
@@ -339,7 +339,7 @@ impl AiPanel {
         self.poll();
 
         let mut open = self.open;
-        egui::Window::new("AI assistant")
+        egui::Window::new(t("AI assistant"))
             .open(&mut open)
             .default_size([560.0, 640.0])
             .min_width(420.0)
@@ -358,7 +358,7 @@ impl AiPanel {
         doc_pages: Option<usize>,
     ) {
         let mut enabled = self.settings.ai_enabled;
-        if ui.checkbox(&mut enabled, "Enable AI features").changed() {
+        if ui.checkbox(&mut enabled, t("Enable AI features")).changed() {
             self.settings.ai_enabled = enabled;
             if !enabled {
                 self.disable();
@@ -390,14 +390,14 @@ impl AiPanel {
         }
 
         ui.label(
-            RichText::new("Bring your own provider. No telemetry. Nothing leaves this machine unless you press a button.")
+            RichText::new(t("Bring your own provider. No telemetry. Nothing leaves this machine unless you press a button."))
                 .size(11.5)
                 .color(pal().muted),
         );
         ui.separator();
 
         // --- Choix du fournisseur -----------------------------------------
-        ui.label(RichText::new("Provider").strong());
+        ui.label(RichText::new(t("Provider")).strong());
         let mut chosen: Option<String> = None;
         for config in &self.settings.providers {
             let active = self.settings.active_provider.as_deref() == Some(config.id.as_str());
@@ -445,7 +445,7 @@ impl AiPanel {
                 ProviderKind::Ollama | ProviderKind::OpenAiCompat | ProviderKind::Gemini
             ) {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Base URL").size(11.5).color(pal().muted));
+                    ui.label(RichText::new(t("Base URL")).size(11.5).color(pal().muted));
                     let mut url = config.base_url.clone().unwrap_or_default();
                     if ui
                         .add(TextEdit::singleline(&mut url).desired_width(330.0))
@@ -462,7 +462,7 @@ impl AiPanel {
             }
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Model").size(11.5).color(pal().muted));
+                ui.label(RichText::new(t("Model")).size(11.5).color(pal().muted));
                 let mut model = self.settings.active_model.clone().unwrap_or_default();
                 if ui
                     .add(
@@ -479,31 +479,31 @@ impl AiPanel {
                     };
                     changed = true;
                 }
-                if ui.button("List models").clicked() {
+                if ui.button(t("List models")).clicked() {
                     do_list = true;
                 }
             });
 
             // Clé API : écrite dans le trousseau système, jamais dans le fichier.
             ui.horizontal(|ui| {
-                ui.label(RichText::new("API key").size(11.5).color(pal().muted));
+                ui.label(RichText::new(t("API key")).size(11.5).color(pal().muted));
                 ui.add(
                     TextEdit::singleline(&mut self.key_input)
                         .password(true)
                         .desired_width(200.0)
                         .hint_text("stored in the OS keyring"),
                 );
-                if ui.button("Save").clicked() {
+                if ui.button(t("Save")).clicked() {
                     do_save_key = true;
                 }
-                if ui.button("Forget").clicked() {
+                if ui.button(t("Forget")).clicked() {
                     do_forget_key = true;
                 }
             });
 
             if config.kind == ProviderKind::Ollama {
                 ui.label(
-                    RichText::new("Ollama runs locally and needs no API key.")
+                    RichText::new(t("Ollama runs locally and needs no API key."))
                         .size(11.0)
                         .color(pal().muted),
                 );
@@ -562,7 +562,7 @@ impl AiPanel {
         // --- Tâche --------------------------------------------------------
         ui.add_space(6.0);
         ui.separator();
-        ui.label(RichText::new("Task").strong());
+        ui.label(RichText::new(t("Task")).strong());
         ui.horizontal_wrapped(|ui| {
             for task in [
                 AiTask::Chat,
@@ -583,7 +583,7 @@ impl AiPanel {
         });
         if self.task == AiTask::Translate {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Translate to").size(11.5).color(pal().muted));
+                ui.label(RichText::new(t("Translate to")).size(11.5).color(pal().muted));
                 ui.add(TextEdit::singleline(&mut self.target_language).desired_width(160.0));
             });
         }
@@ -601,7 +601,7 @@ impl AiPanel {
                     .size(11.0)
                     .color(pal().muted),
             );
-            if !doc_text.is_empty() && ui.button("Clear").clicked() {
+            if !doc_text.is_empty() && ui.button(t("Clear")).clicked() {
                 self.turns.clear();
             }
         });
@@ -630,7 +630,7 @@ impl AiPanel {
                         .hint_text("Ask about the document… (⌘⏎ to send)"),
                 );
                 let _ = response;
-                ui.button("Send").clicked()
+                ui.button(t("Send")).clicked()
             })
             .inner;
         if clicked || enter {
@@ -640,7 +640,7 @@ impl AiPanel {
         if self.busy {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(RichText::new("Working…").size(11.0).color(pal().muted));
+                ui.label(RichText::new(t("Working…")).size(11.0).color(pal().muted));
             });
         }
         if let Some(status) = &self.status {

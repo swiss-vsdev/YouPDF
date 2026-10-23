@@ -2618,19 +2618,19 @@ impl YouPdfApp {
                     .color(pal().icon_bright),
             );
             ui.label(
-                RichText::new("Closing now would lose them.")
+                RichText::new(t("Closing now would lose them."))
                     .size(11.0)
                     .color(pal().muted),
             );
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Save and close").clicked() {
+                if ui.button(t("Save and close")).clicked() {
                     choice = Some(0);
                 }
-                if ui.button("Discard and close").clicked() {
+                if ui.button(t("Discard and close")).clicked() {
                     choice = Some(1);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(t("Cancel")).clicked() {
                     choice = Some(2);
                 }
             });
@@ -3032,29 +3032,29 @@ impl YouPdfApp {
                         drag_stopped = true;
                     }
                     resp.context_menu(|ui| {
-                        if ui.button("Add Bookmark").clicked() {
+                        if ui.button(t("Add Bookmark")).clicked() {
                             request = Some(BookmarkRequest::Add(None, Some(current_page)));
                             ui.close_menu();
                         }
-                        if ui.button("Add Sub-Bookmark").clicked() {
+                        if ui.button(t("Add Sub-Bookmark")).clicked() {
                             request =
                                 Some(BookmarkRequest::Add(Some(key.clone()), Some(current_page)));
                             ui.close_menu();
                         }
-                        if ui.button("Rename").clicked() {
+                        if ui.button(t("Rename")).clicked() {
                             rename_key = Some(key.clone());
                             rename_text = title.clone();
                             request_focus = true;
                             ui.close_menu();
                         }
-                        if ui.button("Set Destination to This Page").clicked() {
+                        if ui.button(t("Set Destination to This Page")).clicked() {
                             request = Some(BookmarkRequest::SetDestination(
                                 key.clone(),
                                 Some(current_page),
                             ));
                             ui.close_menu();
                         }
-                        if ui.button("Delete Bookmark").clicked() {
+                        if ui.button(t("Delete Bookmark")).clicked() {
                             request = Some(BookmarkRequest::Delete(key.clone()));
                             ui.close_menu();
                         }
@@ -3247,7 +3247,7 @@ impl YouPdfApp {
         let mut add = false;
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            if ui.button(RichText::new("Add Attachment").size(11.0)).clicked() {
+            if ui.button(RichText::new(t("Add Attachment")).size(11.0)).clicked() {
                 add = true;
             }
             ui.label(
@@ -3330,16 +3330,16 @@ impl YouPdfApp {
                         action = Some(AttachmentAction::Open(idx));
                     }
                     resp.context_menu(|ui| {
-                        if ui.button("Open").clicked() {
+                        if ui.button(t("Open")).clicked() {
                             action = Some(AttachmentAction::Open(idx));
                             ui.close_menu();
                         }
-                        if ui.button("Save As…").clicked() {
+                        if ui.button(t("Save As…")).clicked() {
                             action = Some(AttachmentAction::SaveAs(idx));
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button("Delete").clicked() {
+                        if ui.button(t("Delete")).clicked() {
                             action = Some(AttachmentAction::Delete(idx));
                             ui.close_menu();
                         }
@@ -3544,7 +3544,7 @@ impl YouPdfApp {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.add_space(12.0);
-            ui.label(RichText::new("Background").size(11.5).color(pal().muted));
+            ui.label(RichText::new(t("Background")).size(11.5).color(pal().muted));
         });
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
@@ -3574,7 +3574,7 @@ impl YouPdfApp {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             ui.add_space(12.0);
-            ui.label(RichText::new("Page tint").size(11.5).color(pal().muted));
+            ui.label(RichText::new(t("Page tint")).size(11.5).color(pal().muted));
         });
         ui.add_space(6.0);
         // Aperçu : chaque pastille montre la teinte posée sur du blanc,
@@ -3608,7 +3608,7 @@ impl YouPdfApp {
         ui.horizontal(|ui| {
             ui.add_space(12.0);
             let mut border = self.page_border;
-            if ui.checkbox(&mut border, "Page border").changed() {
+            if ui.checkbox(&mut border, t("Page border")).changed() {
                 self.page_border = border;
             }
         });
@@ -3617,7 +3617,7 @@ impl YouPdfApp {
         ui.horizontal(|ui| {
             ui.add_space(12.0);
             let mut shadow = self.page_shadow;
-            if ui.checkbox(&mut shadow, "Page shadow").changed() {
+            if ui.checkbox(&mut shadow, t("Page shadow")).changed() {
                 self.page_shadow = shadow;
             }
         });
@@ -3625,7 +3625,7 @@ impl YouPdfApp {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.add_space(12.0);
-            ui.label(RichText::new("Thumbnails").size(11.5).color(pal().muted));
+            ui.label(RichText::new(t("Thumbnails")).size(11.5).color(pal().muted));
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -3641,7 +3641,7 @@ impl YouPdfApp {
         ui.horizontal(|ui| {
             ui.add_space(12.0);
             ui.label(
-                RichText::new("Notation")
+                RichText::new(t("Notation"))
                     .size(11.0)
                     .color(pal().muted),
             );
@@ -3650,7 +3650,7 @@ impl YouPdfApp {
         ui.horizontal(|ui| {
             ui.add_space(12.0);
             ui.label(
-                RichText::new("Colours come from the current tool presets.")
+                RichText::new(t("Colours come from the current tool presets."))
                     .size(10.5)
                     .color(pal().muted),
             );
@@ -4227,10 +4227,10 @@ impl YouPdfApp {
                     confirm = true;
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("Add").clicked() {
+                    if ui.button(t("Add")).clicked() {
                         confirm = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(t("Cancel")).clicked() {
                         cancel = true;
                     }
                 });
@@ -4315,7 +4315,7 @@ impl YouPdfApp {
                         if tool != 3 && tool != 8 {
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new("Width").size(11.0).color(pal().muted));
+                                ui.label(RichText::new(t("Width")).size(11.0).color(pal().muted));
                                 ui.add(
                                     egui::Slider::new(&mut self.annot_width, 0.5..=12.0)
                                         .fixed_decimals(1),
@@ -4325,19 +4325,19 @@ impl YouPdfApp {
                         if tool == 10 {
                             ui.add_space(4.0);
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new("Eraser").size(11.0).color(pal().muted));
+                                ui.label(RichText::new(t("Eraser")).size(11.0).color(pal().muted));
                                 let stroke = self.eraser_mode == EraseMode::Stroke;
-                                if ui.selectable_label(stroke, "Stroke").clicked() {
+                                if ui.selectable_label(stroke, t("Stroke")).clicked() {
                                     self.eraser_mode = EraseMode::Stroke;
                                 }
-                                if ui.selectable_label(!stroke, "Segment").clicked() {
+                                if ui.selectable_label(!stroke, t("Segment")).clicked() {
                                     self.eraser_mode = EraseMode::Segment;
                                 }
                             });
                         }
                         if wants_opacity {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new("Opacity").size(11.0).color(pal().muted));
+                                ui.label(RichText::new(t("Opacity")).size(11.0).color(pal().muted));
                                 ui.add(
                                     egui::Slider::new(&mut self.annot_opacity, 0.1..=1.0)
                                         .fixed_decimals(2),
@@ -4346,7 +4346,7 @@ impl YouPdfApp {
                         }
                         if tool == 8 {
                             ui.label(
-                                RichText::new("Stamp").size(11.0).color(pal().muted),
+                                RichText::new(t("Stamp")).size(11.0).color(pal().muted),
                             );
                             let mut picked = None;
                             egui::Grid::new("stamp-palette")
@@ -4370,7 +4370,7 @@ impl YouPdfApp {
                                             ui.end_row();
                                         }
                                     }
-                                    let custom = RichText::new("Custom…")
+                                    let custom = RichText::new(t("Custom…"))
                                         .size(10.5)
                                         .color(pal().icon);
                                     if ui.selectable_label(false, custom).clicked() {
@@ -4384,12 +4384,12 @@ impl YouPdfApp {
                         }
                         if wants_text {
                             ui.label(
-                                RichText::new("Color applies to new text")
+                                RichText::new(t("Color applies to new text"))
                                     .size(10.0)
                                     .color(pal().muted),
                             );
                         }
-                        if ui.button("Done").clicked() {
+                        if ui.button(t("Done")).clicked() {
                             self.preset_open = false;
                         }
                     });
@@ -5146,19 +5146,19 @@ impl YouPdfApp {
                         }
 
                         resp.context_menu(|ui| {
-                            if ui.button("Close Tab").clicked() {
+                            if ui.button(t("Close Tab")).clicked() {
                                 tab_action = Some(TabAction::Close(idx));
                                 ui.close_menu();
                             }
-                            if ui.button("Close Other Tabs").clicked() {
+                            if ui.button(t("Close Other Tabs")).clicked() {
                                 tab_action = Some(TabAction::CloseOthers(idx));
                                 ui.close_menu();
                             }
-                            if ui.button("Close Tabs to the Right").clicked() {
+                            if ui.button(t("Close Tabs to the Right")).clicked() {
                                 tab_action = Some(TabAction::CloseRight(idx));
                                 ui.close_menu();
                             }
-                            if ui.button("Close All Tabs").clicked() {
+                            if ui.button(t("Close All Tabs")).clicked() {
                                 tab_action = Some(TabAction::CloseAll);
                                 ui.close_menu();
                             }
@@ -5168,16 +5168,16 @@ impl YouPdfApp {
                                 tab_action = Some(TabAction::TogglePin(idx));
                                 ui.close_menu();
                             }
-                            if ui.button("Duplicate Tab").clicked() {
+                            if ui.button(t("Duplicate Tab")).clicked() {
                                 tab_action = Some(TabAction::Duplicate(idx));
                                 ui.close_menu();
                             }
                             ui.separator();
-                            if ui.button("Reveal in Finder").clicked() {
+                            if ui.button(t("Reveal in Finder")).clicked() {
                                 tab_action = Some(TabAction::Reveal(idx));
                                 ui.close_menu();
                             }
-                            if ui.button("Copy File Path").clicked() {
+                            if ui.button(t("Copy File Path")).clicked() {
                                 tab_action = Some(TabAction::CopyPath(idx));
                                 ui.close_menu();
                             }
@@ -5283,13 +5283,13 @@ impl YouPdfApp {
             ui.add_space(14.0);
             ui.vertical_centered(|ui| {
                 ui.label(
-                    RichText::new("No annotations yet")
+                    RichText::new(t("No annotations yet"))
                         .size(12.0)
                         .color(pal().muted),
                 );
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new("Use Comment mode to add one")
+                    RichText::new(t("Use Comment mode to add one"))
                         .size(11.0)
                         .color(pal().muted),
                 );
@@ -5323,7 +5323,7 @@ impl YouPdfApp {
 
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            ui.menu_button(RichText::new("Export Comments").size(11.0), |ui| {
+            ui.menu_button(RichText::new(t("Export Comments")).size(11.0), |ui| {
                 for format in CommentFormat::ALL {
                     if ui.button(format.display_name()).clicked() {
                         action = Some(CommentAction::Export(format));
@@ -5348,7 +5348,7 @@ impl YouPdfApp {
                 .selected_text(filter.kind.map_or("All types", annot_label))
                 .show_ui(ui, |ui| {
                     if ui
-                        .selectable_label(filter.kind.is_none(), "All types")
+                        .selectable_label(filter.kind.is_none(), t("All types"))
                         .clicked()
                     {
                         filter.kind = None;
@@ -5367,7 +5367,7 @@ impl YouPdfApp {
                 .selected_text(filter.author.as_deref().unwrap_or("All authors"))
                 .show_ui(ui, |ui| {
                     if ui
-                        .selectable_label(filter.author.is_none(), "All authors")
+                        .selectable_label(filter.author.is_none(), t("All authors"))
                         .clicked()
                     {
                         filter.author = None;
@@ -5386,7 +5386,7 @@ impl YouPdfApp {
                 .selected_text(filter.color.map_or_else(|| "All colors".to_owned(), hex_color))
                 .show_ui(ui, |ui| {
                     if ui
-                        .selectable_label(filter.color.is_none(), "All colors")
+                        .selectable_label(filter.color.is_none(), t("All colors"))
                         .clicked()
                     {
                         filter.color = None;
@@ -5420,7 +5420,7 @@ impl YouPdfApp {
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             ui.add_space(4.0);
-            ui.label(RichText::new("Sort").size(10.0).color(pal().muted));
+            ui.label(RichText::new(t("Sort")).size(10.0).color(pal().muted));
             for (choice, name) in [
                 (CommentSort::Page, "Page"),
                 (CommentSort::Date, "Date"),
@@ -5442,7 +5442,7 @@ impl YouPdfApp {
             ui.add_space(10.0);
             ui.vertical_centered(|ui| {
                 ui.label(
-                    RichText::new("No comment matches")
+                    RichText::new(t("No comment matches"))
                         .size(11.0)
                         .color(pal().muted),
                 );
@@ -5559,7 +5559,7 @@ impl YouPdfApp {
                                             },
                                         );
                                         if ui
-                                            .button(RichText::new("Reply").size(9.5))
+                                            .button(RichText::new(t("Reply")).size(9.5))
                                             .clicked()
                                         {
                                             action =
@@ -5582,7 +5582,7 @@ impl YouPdfApp {
                                                     i.key_pressed(egui::Key::Enter)
                                                 });
                                             let send = ui
-                                                .button(RichText::new("Send").size(9.5))
+                                                .button(RichText::new(t("Send")).size(9.5))
                                                 .clicked();
                                             if send || entered {
                                                 action = Some(CommentAction::Send(
@@ -5600,11 +5600,11 @@ impl YouPdfApp {
                                 action = Some(CommentAction::Jump(row.page));
                             }
                             card.context_menu(|ui| {
-                                if ui.button("Reply").clicked() {
+                                if ui.button(t("Reply")).clicked() {
                                     action = Some(CommentAction::Reply(row.id.clone()));
                                     ui.close_menu();
                                 }
-                                if ui.button("Delete").clicked() {
+                                if ui.button(t("Delete")).clicked() {
                                     action = Some(CommentAction::Delete(row.id.clone()));
                                     ui.close_menu();
                                 }
@@ -5893,22 +5893,22 @@ impl YouPdfApp {
                                 |ui| {
                                     ui.set_min_width(150.0);
                                     ui.label(
-                                        RichText::new("Search options")
+                                        RichText::new(t("Search options"))
                                             .size(11.0)
                                             .color(pal().muted),
                                     );
                                     ui.add_space(4.0);
                                     refilter |= ui
-                                        .checkbox(&mut self.search_case, "Case sensitive")
+                                        .checkbox(&mut self.search_case, t("Case sensitive"))
                                         .changed();
                                     refilter |= ui
-                                        .checkbox(&mut self.search_word, "Whole words")
+                                        .checkbox(&mut self.search_word, t("Whole words"))
                                         .changed();
                                     refilter |= ui
-                                        .checkbox(&mut self.search_bookmarks, "Include bookmarks")
+                                        .checkbox(&mut self.search_bookmarks, t("Include bookmarks"))
                                         .changed();
                                     refilter |= ui
-                                        .checkbox(&mut self.search_comments, "Include comments")
+                                        .checkbox(&mut self.search_comments, t("Include comments"))
                                         .changed();
                                 },
                             );
@@ -6108,11 +6108,11 @@ impl YouPdfApp {
                             selected.clear();
                             selected.insert(page as usize);
                         }
-                        if ui.button("Rotate Clockwise").clicked() {
+                        if ui.button(t("Rotate Clockwise")).clicked() {
                             action = Some(PageAction::Rotate(90));
                             ui.close_menu();
                         }
-                        if ui.button("Rotate Counter-Clockwise").clicked() {
+                        if ui.button(t("Rotate Counter-Clockwise")).clicked() {
                             action = Some(PageAction::Rotate(-90));
                             ui.close_menu();
                         }
@@ -6125,24 +6125,24 @@ impl YouPdfApp {
                                 }
                             }
                         });
-                        if ui.button("Insert from File…").clicked() {
+                        if ui.button(t("Insert from File…")).clicked() {
                             action = Some(PageAction::InsertFile);
                             ui.close_menu();
                         }
-                        if ui.button("Extract Selected Pages…").clicked() {
+                        if ui.button(t("Extract Selected Pages…")).clicked() {
                             action = Some(PageAction::Extract);
                             ui.close_menu();
                         }
-                        if ui.button("Duplicate Pages").clicked() {
+                        if ui.button(t("Duplicate Pages")).clicked() {
                             action = Some(PageAction::Duplicate);
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button("Page Properties…").clicked() {
+                        if ui.button(t("Page Properties…")).clicked() {
                             action = Some(PageAction::Properties(page as usize));
                             ui.close_menu();
                         }
-                        if ui.button("Delete Pages").clicked() {
+                        if ui.button(t("Delete Pages")).clicked() {
                             action = Some(PageAction::Delete);
                             ui.close_menu();
                         }
@@ -6368,7 +6368,7 @@ impl YouPdfApp {
                 }
                 if !any {
                     ui.label(
-                        RichText::new("No page boxes declared")
+                        RichText::new(t("No page boxes declared"))
                             .size(11.0)
                             .color(pal().muted),
                     );
@@ -6484,7 +6484,7 @@ impl YouPdfApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.add_space(12.0);
-                if ui.button("Replace all").clicked() {
+                if ui.button(t("Replace all")).clicked() {
                     replace_now = true;
                 }
             });
@@ -6513,7 +6513,7 @@ impl YouPdfApp {
                     }
                     ui.horizontal(|ui| {
                         ui.add_space(12.0);
-                        ui.label(RichText::new("History").size(12.0).strong());
+                        ui.label(RichText::new(t("History")).size(12.0).strong());
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.add_space(10.0);
                             let (rect, resp) =
@@ -6785,7 +6785,7 @@ impl YouPdfApp {
                 );
                 ui.add_space(8.0);
 
-                ui.label(RichText::new("Fill").size(11.0).color(pal().muted));
+                ui.label(RichText::new(t("Fill")).size(11.0).color(pal().muted));
                 ui.horizontal(|ui| {
                     ui.selectable_value(
                         &mut app.redact_fill,
@@ -6811,7 +6811,7 @@ impl YouPdfApp {
                     );
                     ui.horizontal(|ui| {
                         ui.color_edit_button_srgba(&mut color);
-                        if ui.button("Use colour").clicked() {
+                        if ui.button(t("Use colour")).clicked() {
                             app.redact_custom_color = [color.r(), color.g(), color.b()];
                             app.redact_fill = RedactionFill::Custom(app.redact_custom_color);
                         }
@@ -6819,7 +6819,7 @@ impl YouPdfApp {
                 }
 
                 ui.add_space(8.0);
-                ui.label(RichText::new("Overlay text").size(11.0).color(pal().muted));
+                ui.label(RichText::new(t("Overlay text")).size(11.0).color(pal().muted));
                 ui.add(
                     egui::TextEdit::singleline(&mut app.redact_overlay_text)
                         .hint_text("[REDACTED]")
@@ -6844,12 +6844,12 @@ impl YouPdfApp {
 
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(t("Cancel")).clicked() {
                         cancel = true;
                     }
                     if ui
                         .add(
-                            egui::Button::new(RichText::new("Continue").color(Color32::WHITE))
+                            egui::Button::new(RichText::new(t("Continue")).color(Color32::WHITE))
                                 .fill(pal().accent),
                         )
                         .clicked()
@@ -6878,12 +6878,12 @@ impl YouPdfApp {
                 );
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Back").clicked() {
+                    if ui.button(t("Back")).clicked() {
                         app.redact_phase = RedactPhase::Marking;
                     }
                     if ui
                         .add(
-                            egui::Button::new(RichText::new("Apply").color(Color32::WHITE))
+                            egui::Button::new(RichText::new(t("Apply")).color(Color32::WHITE))
                                 .fill(pal().redact_red),
                         )
                         .clicked()
@@ -7790,7 +7790,7 @@ impl YouPdfApp {
                                         if ui
                                             .selectable_label(
                                                 self.fullscreen,
-                                                RichText::new("Fullscreen").size(12.0),
+                                                RichText::new(t("Fullscreen")).size(12.0),
                                             )
                                             .clicked()
                                         {
@@ -8139,7 +8139,7 @@ impl YouPdfApp {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned());
-        egui::Window::new("Compare PDFs")
+        egui::Window::new(t("Compare PDFs"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -8147,7 +8147,7 @@ impl YouPdfApp {
             .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("Choose a PDF…").clicked() {
+                    if ui.button(t("Choose a PDF…")).clicked() {
                         pick = true;
                     }
                     ui.label(
@@ -8159,7 +8159,7 @@ impl YouPdfApp {
                     );
                 });
                 ui.add_space(6.0);
-                if ui.button("Compare with the open document").clicked() {
+                if ui.button(t("Compare with the open document")).clicked() {
                     run = true;
                 }
                 if let Some(report) = &self.compare_report {
@@ -8297,7 +8297,7 @@ impl YouPdfApp {
             );
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Language").size(12.0).color(pal().muted));
+                ui.label(RichText::new(t("Language")).size(12.0).color(pal().muted));
                 ui.add(TextEdit::singleline(&mut app.ocr_language).desired_width(90.0));
                 if !languages.is_empty() {
                     let mut picked: Option<String> = None;
@@ -8323,7 +8323,7 @@ impl YouPdfApp {
             // de chaque langue, même quand le paquet n'est pas installé.
             if !app.ocr_extra_languages.is_empty() {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Also").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("Also")).size(12.0).color(pal().muted));
                     for code in app.ocr_extra_languages.clone() {
                         ui.label(
                             RichText::new(language_name(&code))
@@ -8361,7 +8361,7 @@ impl YouPdfApp {
                     });
                 });
             ui.add_space(6.0);
-            ui.label(RichText::new("Output").size(12.0).color(pal().muted));
+            ui.label(RichText::new(t("Output")).size(12.0).color(pal().muted));
             for &(mode, label, detail) in OcrMode::ALL {
                 if ui
                     .selectable_label(app.ocr_mode == mode, format!("{label} — {detail}"))
@@ -8445,18 +8445,18 @@ impl YouPdfApp {
         let mut make_blank = false;
         let mut images = false;
         self.show_modal(ctx, "modal-create", "Create", 380.0, &mut open, |app, ui| {
-            ui.label(RichText::new("Blank document").size(12.0).color(pal().muted));
+            ui.label(RichText::new(t("Blank document")).size(12.0).color(pal().muted));
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Pages").size(12.0).color(pal().muted));
+                ui.label(RichText::new(t("Pages")).size(12.0).color(pal().muted));
                 ui.add(egui::DragValue::new(&mut app.create_pages).range(1..=500));
-                if ui.button("Create blank").clicked() {
+                if ui.button(t("Create blank")).clicked() {
                     make_blank = true;
                 }
             });
             ui.add_space(10.0);
             ui.separator();
             ui.add_space(10.0);
-            ui.label(RichText::new("From images").size(12.0).color(pal().muted));
+            ui.label(RichText::new(t("From images")).size(12.0).color(pal().muted));
             ui.label(
                 RichText::new(
                     "One page per image, in the order chosen. PNG and JPEG are read.",
@@ -8465,7 +8465,7 @@ impl YouPdfApp {
                 .color(pal().muted),
             );
             ui.add_space(4.0);
-            if ui.button("Choose images…").clicked() {
+            if ui.button(t("Choose images…")).clicked() {
                 images = true;
             }
         });
@@ -8677,10 +8677,10 @@ impl YouPdfApp {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("OK").clicked() {
+                if ui.button(t("OK")).clicked() {
                     submit = true;
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(t("Cancel")).clicked() {
                     cancel = true;
                 }
             });
@@ -8821,7 +8821,7 @@ impl YouPdfApp {
                                 .color(Color32::WHITE),
                         );
                         ui.label(
-                            RichText::new("← → to turn, Esc to leave")
+                            RichText::new(t("← → to turn, Esc to leave"))
                                 .size(10.5)
                                 .color(Color32::from_gray(170)),
                         );
@@ -8857,9 +8857,9 @@ impl YouPdfApp {
         let mut open = true;
         let mut clear = false;
         self.show_modal(ctx, "modal-measure", "Measure", 340.0, &mut open, |app, ui| {
-            ui.checkbox(&mut app.measure_active, "Draw on the page");
+            ui.checkbox(&mut app.measure_active, t("Draw on the page"));
             ui.add_space(6.0);
-            ui.label(RichText::new("Kind").size(12.0).color(pal().muted));
+            ui.label(RichText::new(t("Kind")).size(12.0).color(pal().muted));
             for kind in [
                 MeasureKind::Distance,
                 MeasureKind::Perimeter,
@@ -8877,19 +8877,19 @@ impl YouPdfApp {
                 .num_columns(2)
                 .spacing([8.0, 4.0])
                 .show(ui, |ui| {
-                    ui.label(RichText::new("Scale").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("Scale")).size(12.0).color(pal().muted));
                     ui.add(
                         egui::DragValue::new(&mut app.measure_scale)
                             .range(0.01..=10_000.0)
                             .speed(1.0),
                     );
                     ui.end_row();
-                    ui.label(RichText::new("Unit").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("Unit")).size(12.0).color(pal().muted));
                     ui.add(
                         TextEdit::singleline(&mut app.measure_unit).desired_width(80.0),
                     );
                     ui.end_row();
-                    ui.label(RichText::new("Known").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("Known")).size(12.0).color(pal().muted));
                     ui.horizontal(|ui| {
                         ui.add(
                             egui::DragValue::new(&mut app.measure_known)
@@ -8932,7 +8932,7 @@ impl YouPdfApp {
                 .color(pal().muted),
             );
             ui.add_space(8.0);
-            if ui.button("Remove all measurements").clicked() {
+            if ui.button(t("Remove all measurements")).clicked() {
                 clear = true;
             }
         });
@@ -9064,7 +9064,7 @@ impl YouPdfApp {
         let mut scan = false;
         let mut export_tables = false;
         let mut export_pairs = false;
-        egui::Window::new("Extract data")
+        egui::Window::new(t("Extract data"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -9073,7 +9073,7 @@ impl YouPdfApp {
             .show(ctx, |ui| {
                 ui.set_max_width(560.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Scan the document").clicked() {
+                    if ui.button(t("Scan the document")).clicked() {
                         scan = true;
                     }
                     if ui
@@ -10208,11 +10208,11 @@ impl YouPdfApp {
                         }
                         if on_page {
                             resp.context_menu(|ui| {
-                                if ui.button("Copy").clicked() {
+                                if ui.button(t("Copy")).clicked() {
                                     sel_copy = true;
                                     ui.close_menu();
                                 }
-                                if ui.button("Select all").clicked() {
+                                if ui.button(t("Select all")).clicked() {
                                     sel_all = true;
                                     ui.close_menu();
                                 }
@@ -10989,16 +10989,16 @@ impl YouPdfApp {
                 // En-tête.
                 ui.add_space(34.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new("YouPDF").size(30.0).strong());
+                    ui.label(RichText::new(t("YouPDF")).size(30.0).strong());
                     ui.add_space(4.0);
                     ui.label(
-                        RichText::new("Free, local-first PDF editing")
+                        RichText::new(t("Free, local-first PDF editing"))
                             .size(12.5)
                             .color(pal().muted),
                     );
                     ui.add_space(16.0);
                     ui.label(
-                        RichText::new("or drop a file anywhere")
+                        RichText::new(t("or drop a file anywhere"))
                             .size(11.0)
                             .color(pal().muted),
                     );
@@ -11017,14 +11017,14 @@ impl YouPdfApp {
                     if ui
                         .add_sized(
                             vec2(96.0, 28.0),
-                            Button::new(RichText::new("Open File").size(12.5)).fill(pal().accent),
+                            Button::new(RichText::new(t("Open File")).size(12.5)).fill(pal().accent),
                         )
                         .clicked()
                     {
                         open_dialog = true;
                     }
                     if ui
-                        .add_sized(vec2(76.0, 28.0), Button::new(RichText::new("Batch").size(12.5)))
+                        .add_sized(vec2(76.0, 28.0), Button::new(RichText::new(t("Batch")).size(12.5)))
                         .clicked()
                     {
                         tool = Some("batch");
@@ -11308,11 +11308,11 @@ impl YouPdfApp {
         }
 
         resp.context_menu(|ui| {
-            if ui.button("Open").clicked() {
+            if ui.button(t("Open")).clicked() {
                 *open = Some(path.to_path_buf());
                 ui.close_menu();
             }
-            if ui.button("Open in New Tab").clicked() {
+            if ui.button(t("Open in New Tab")).clicked() {
                 *open_new = Some(path.to_path_buf());
                 ui.close_menu();
             }
@@ -11323,15 +11323,15 @@ impl YouPdfApp {
                 *star = Some(path.to_path_buf());
                 ui.close_menu();
             }
-            if ui.button("Reveal in Finder").clicked() {
+            if ui.button(t("Reveal in Finder")).clicked() {
                 *reveal = Some(path.to_path_buf());
                 ui.close_menu();
             }
-            if ui.button("Remove from Recents").clicked() {
+            if ui.button(t("Remove from Recents")).clicked() {
                 *forget = Some(path.to_path_buf());
                 ui.close_menu();
             }
-            if ui.button("Delete File…").clicked() {
+            if ui.button(t("Delete File…")).clicked() {
                 *delete = Some(path.to_path_buf());
                 ui.close_menu();
             }
@@ -11439,23 +11439,23 @@ impl YouPdfApp {
                 }
 
                 resp.context_menu(|ui| {
-                    if ui.button("Open").clicked() {
+                    if ui.button(t("Open")).clicked() {
                         *open = Some(path.clone());
                         ui.close_menu();
                     }
-                    if ui.button("Open in New Tab").clicked() {
+                    if ui.button(t("Open in New Tab")).clicked() {
                         *open_new = Some(path.clone());
                         ui.close_menu();
                     }
-                    if ui.button("Reveal in Finder").clicked() {
+                    if ui.button(t("Reveal in Finder")).clicked() {
                         *reveal = Some(path.clone());
                         ui.close_menu();
                     }
-                    if ui.button("Remove from Recents").clicked() {
+                    if ui.button(t("Remove from Recents")).clicked() {
                         *forget = Some(path.clone());
                         ui.close_menu();
                     }
-                    if ui.button("Delete File…").clicked() {
+                    if ui.button(t("Delete File…")).clicked() {
                         *delete = Some(path.clone());
                         ui.close_menu();
                     }
@@ -11608,7 +11608,7 @@ impl YouPdfApp {
         let mut open = true;
         let mut clear = false;
 
-        egui::Window::new("Activity")
+        egui::Window::new(t("Activity"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -11617,7 +11617,7 @@ impl YouPdfApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("What YouPDF just did")
+                        RichText::new(t("What YouPDF just did"))
                             .size(11.0)
                             .color(pal().muted),
                     );
@@ -11630,7 +11630,7 @@ impl YouPdfApp {
                 ui.add_space(4.0);
                 if self.activity.is_empty() {
                     ui.label(
-                        RichText::new("Nothing yet.")
+                        RichText::new(t("Nothing yet."))
                             .size(11.5)
                             .color(pal().muted),
                     );
@@ -11796,7 +11796,7 @@ impl YouPdfApp {
                             Button::new(RichText::new(&text).size(11.0).color(pal().muted))
                                 .frame(false),
                         )
-                        .on_hover_text("Zoom presets");
+                        .on_hover_text(t("Zoom presets"));
                     if zoom_resp.clicked() {
                         ui.memory_mut(|m| m.toggle_popup(Id::new("zoom_menu")));
                     }

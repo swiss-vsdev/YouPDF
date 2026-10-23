@@ -1,6 +1,7 @@
 //! Fenêtre d'export et écriture des formats de sortie.
 
 use super::*;
+use youpdf_shared::t;
 
 impl YouPdfApp {
     /// Fenêtre « Exporter » : choix du format de sortie.
@@ -11,7 +12,7 @@ impl YouPdfApp {
         let mut open = true;
         let mut run = false;
         self.show_modal(ctx, "modal-export", "Export", 380.0, &mut open, |app, ui| {
-            ui.label(RichText::new("Text").size(12.0).color(pal().muted));
+            ui.label(RichText::new(t("Text")).size(12.0).color(pal().muted));
             for format in [
                 TextFormat::Plain,
                 TextFormat::Markdown,
@@ -32,7 +33,7 @@ impl YouPdfApp {
                 }
             }
             ui.add_space(6.0);
-            ui.label(RichText::new("Images").size(12.0).color(pal().muted));
+            ui.label(RichText::new(t("Images")).size(12.0).color(pal().muted));
             for (format, label) in [
                 (ImageFormat::Png, "PNG (one file per page)"),
                 (ImageFormat::Jpeg, "JPEG (one file per page)"),
@@ -61,7 +62,7 @@ impl YouPdfApp {
             }
             if matches!(app.export_mode, ExportMode::Image | ExportMode::LongImage) {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Resolution").size(12.0).color(pal().muted));
+                    ui.label(RichText::new(t("Resolution")).size(12.0).color(pal().muted));
                     ui.add(
                         egui::DragValue::new(&mut app.export_dpi)
                             .range(36.0..=600.0)
@@ -70,7 +71,7 @@ impl YouPdfApp {
                 });
             }
             ui.add_space(6.0);
-            ui.label(RichText::new("Embedded images").size(12.0).color(pal().muted));
+            ui.label(RichText::new(t("Embedded images")).size(12.0).color(pal().muted));
             if ui
                 .selectable_label(
                     app.export_mode == ExportMode::Embedded,
@@ -81,7 +82,7 @@ impl YouPdfApp {
                 app.export_mode = ExportMode::Embedded;
             }
             ui.add_space(6.0);
-            ui.label(RichText::new("Office").size(12.0).color(pal().muted));
+            ui.label(RichText::new(t("Office")).size(12.0).color(pal().muted));
             for format in OfficeFormat::ALL {
                 if ui
                     .selectable_label(
@@ -132,7 +133,7 @@ impl YouPdfApp {
                 .color(pal().muted),
             );
             ui.add_space(8.0);
-            if ui.button("Export…").clicked() {
+            if ui.button(t("Export…")).clicked() {
                 run = true;
             }
         });
