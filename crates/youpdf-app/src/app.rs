@@ -1419,8 +1419,6 @@ struct ContentElement {
 #[derive(Clone, Debug)]
 enum ContentDrag {
     Move { start: [f32; 2], offset: [f32; 2] },
-    Scale { start: [f32; 2], original_matrix: [f32; 6] },
-    Rotate { start_angle: f32, original_matrix: [f32; 6] },
 }
 
 /// Le curseur couramment utilisé par l'éditeur de texte.
@@ -10464,12 +10462,9 @@ impl YouPdfApp {
                                             list.into_iter()
                                                 .find(|i| i.resource_name == image.name)
                                         });
-                                    let [a, b, c, d, e, f] = match info.and_then(|i| {
+                                    let [a, b, c, d, e, f] = info.and_then(|i| {
                                         tab.doc.image_matrix(&i).ok().flatten()
-                                    }) {
-                                        Some(m) => m,
-                                        None => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-                                    };
+                                    }).unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
                                     // La poignée fixe le coin qui reste collé au curseur :
                                     // la largeur et la hauteur se mesurent à partir de
                                     // ce coin, pas toujours du haut-gauche.

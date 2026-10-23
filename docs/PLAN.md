@@ -54,9 +54,11 @@ Cold open < 500 ms; 60 fps scroll; no blank frame on zoom (low-res first, refine
 
 The three open gaps, in `docs/GAP.md`:
 
-1. **Task 4.2** — content element arrange: hit-test dispatch, resize/rotation handles, drag-to-move/scale, z-order. Foundation only so far.
-2. **Task 12.2** — PDF comparison view modes.
-3. **Task 14.2** — Full localization (i18n) wiring.
+1. **Task 4.2** — content element arrange: drag-to-move, z-order and corner
+   resize handles are done. Only a free-angle rotation handle remains.
+2. **Task 12.2** — PDF comparison view modes: side-by-side with shared page
+   navigation is done; synchronized scroll and overlay blend remain.
+3. **Task 14.2** — Full localization (i18n) wiring: done (`f1a6f64`).
 
 ## Open items
 
