@@ -21,6 +21,7 @@ use egui_phosphor::regular as ph;
 mod batch_ui;
 mod forms_ui;
 mod decor_ui;
+mod marks_ui;
 mod export_ui;
 mod pages_ui;
 mod prefs_ui;
@@ -52,11 +53,11 @@ use youpdf_core::{
     PdfiumRenderer, RedactionFill,
     RedactionMark, RedactionOverlay, RedactionReport, RenderOptions, Renderer, SearchIndex,
     SearchOptions, SearchResult, TextFormat,
-    TextFragment, TextStyle, Unit, Watermark, STAMP_NAMES, smooth_polyline,
+    TextFragment, TextStyle, Unit, Watermark, smooth_polyline,
 };
 use youpdf_core::{LANGUAGES, combine_languages, language_name};
 
-use youpdf_core::annotate::BorderDash;
+use youpdf_core::annotate::{BorderDash, STAMP_TEMPLATES};
 
 // --------------------------------------------------------------------------
 // Palette
@@ -962,6 +963,10 @@ enum ToolsEntry {
     Flatten,
     /// Signature numérique.
     Sign,
+    /// Fenêtre de création d'une signature visuelle.
+    CreateSignature,
+    /// Fenêtre de tampon personnalisé.
+    CustomStamp,
 }
 
 /// Entrées du menu `Outils` : libellé, raccourci, action.
@@ -989,6 +994,8 @@ const TOOLS_MENU: &[(&str, &str, ToolsEntry)] = &[
     ("Reduce file size…", "", ToolsEntry::Compress),
     ("Flatten annotations", "", ToolsEntry::Flatten),
     ("Sign…", "", ToolsEntry::Sign),
+    ("Create signature…", "", ToolsEntry::CreateSignature),
+    ("Custom stamp…", "", ToolsEntry::CustomStamp),
 ];
 
 /// Nature du brouillon de texte en cours de saisie.
@@ -1454,6 +1461,8 @@ pub struct YouPdfApp {
     sign_open: bool,
     /// Fenêtre « Signer » : certificat chargé, apparence, validation.
     sign: sign_ui::SignUi,
+    /// Fenêtres « Tampon personnalisé » et « Créer une signature ».
+    marks: marks_ui::MarksUi,
     compress_report: Option<String>,
     /// Niveau de compression d'image choisi.
     compress_level: CompressionLevel,
@@ -1889,6 +1898,7 @@ impl YouPdfApp {
             compress_open: false,
             sign_open: false,
             sign: sign_ui::SignUi::default(),
+            marks: marks_ui::MarksUi::default(),
             compress_report: None,
             compress_level: CompressionLevel::Ebook,
             compress_extras: CompressionExtras::default(),
@@ -3749,8 +3759,13 @@ impl YouPdfApp {
         let mut annot = Annotation::new(page, kind, rect);
         annot.style = self.annot_style(kind);
         if kind == AnnotationKind::Stamp {
-            let label = STAMP_NAMES[self.stamp_choice.min(STAMP_NAMES.len() - 1)];
-            annot.content = label.to_owned();
+            let template = &STAMP_TEMPLATES[self.stamp_choice.min(STAMP_TEMPLATES.len() - 1)];
+            let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+            let author = self.comment_author.clone().unwrap_or_default();
+            annot.content = youpdf_core::annotate::dynamic_stamp_text(template, &author, &date);
+            annot.style.color = template.color;
+            annot.style.font_size = youpdf_core::annotate::STAMP_FONT_SIZE;
+            annot.stamp = Some(template.id.to_string());
         }
         self.push_annot(annot);
     }
@@ -3782,6 +3797,13 @@ impl YouPdfApp {
     fn open_draft(&mut self, page: usize, point: [f32; 2]) {
         let kind = self.draft_kind();
         let draft_kind = self.draft_kind();
+        if draft_kind == DraftKind::Signature {
+            // Une signature visuelle est une image, pas une annotation : le
+            // créateur la fabrique et la pose au point cliqué.
+            self.marks.signature_at = Some((page, point));
+            self.marks.signature_open = true;
+            return;
+        }
         let (annot_kind, rect, buffer) = match draft_kind {
             DraftKind::Note => (
                 AnnotationKind::Note,
@@ -3789,11 +3811,14 @@ impl YouPdfApp {
                 String::new(),
             ),
             DraftKind::Stamp => {
-                let label = STAMP_NAMES[self.stamp_choice.min(STAMP_NAMES.len() - 1)];
+                let template = &STAMP_TEMPLATES[self.stamp_choice.min(STAMP_TEMPLATES.len() - 1)];
+                let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+                let author = self.comment_author.clone().unwrap_or_default();
+                let text = youpdf_core::annotate::dynamic_stamp_text(template, &author, &date);
                 (
                     AnnotationKind::Stamp,
-                    [point[0], point[1] - 20.0, point[0] + 130.0, point[1] + 20.0],
-                    label.to_owned(),
+                    [point[0], point[1] - 26.0, point[0] + 150.0, point[1] + 26.0],
+                    text,
                 )
             }
             DraftKind::Link => (
@@ -4320,14 +4345,42 @@ impl YouPdfApp {
                             });
                         }
                         if tool == 8 {
-                            ui.horizontal(|ui| {
-                                for (idx, name) in STAMP_NAMES.iter().take(3).enumerate() {
-                                    if ui.selectable_label(self.stamp_choice == idx, *name).clicked()
-                                    {
-                                        self.stamp_choice = idx;
+                            ui.label(
+                                RichText::new("Stamp").size(11.0).color(pal().muted),
+                            );
+                            let mut picked = None;
+                            egui::Grid::new("stamp-palette")
+                                .num_columns(3)
+                                .spacing([4.0, 4.0])
+                                .show(ui, |ui| {
+                                    for (idx, template) in STAMP_TEMPLATES.iter().enumerate() {
+                                        let selected = self.stamp_choice == idx;
+                                        let colour = Color32::from_rgb(
+                                            template.color[0],
+                                            template.color[1],
+                                            template.color[2],
+                                        );
+                                        let text = RichText::new(template.label)
+                                            .size(10.5)
+                                            .color(if selected { colour } else { pal().icon });
+                                        if ui.selectable_label(selected, text).clicked() {
+                                            picked = Some(idx);
+                                        }
+                                        if idx % 3 == 2 {
+                                            ui.end_row();
+                                        }
                                     }
-                                }
-                            });
+                                    let custom = RichText::new("Custom…")
+                                        .size(10.5)
+                                        .color(pal().icon);
+                                    if ui.selectable_label(false, custom).clicked() {
+                                        self.marks.stamp_open = true;
+                                    }
+                                    ui.end_row();
+                                });
+                            if let Some(idx) = picked {
+                                self.stamp_choice = idx;
+                            }
                         }
                         if wants_text {
                             ui.label(
@@ -7465,6 +7518,8 @@ impl YouPdfApp {
                     ToolsEntry::Compress => self.compress_open = true,
                     ToolsEntry::Flatten => self.flatten_annotations(ctx),
                     ToolsEntry::Sign => self.sign_open = true,
+                    ToolsEntry::CreateSignature => self.marks.signature_open = true,
+                    ToolsEntry::CustomStamp => self.marks.stamp_open = true,
                 }
             }
         }
@@ -12078,6 +12133,8 @@ impl eframe::App for YouPdfApp {
         self.ocr_window(ctx);
         self.create_window(ctx);
         self.sign_window(ctx);
+        self.stamp_window(ctx);
+        self.signature_window(ctx);
         self.batch_window(ctx);
         self.extract_window(ctx);
         self.measure_window(ctx);
@@ -13773,13 +13830,25 @@ fn draw_annots(
             }
             AnnotationKind::Stamp => {
                 painter.rect_stroke(r, 3.0, Stroke::new((2.0 * scale).max(1.0), color));
-                painter.text(
-                    r.center(),
-                    Align2::CENTER_CENTER,
-                    &annot.content,
-                    FontId::proportional(font.max(9.0)),
-                    color,
-                );
+                let lines: Vec<&str> = annot
+                    .content
+                    .lines()
+                    .filter(|line| !line.is_empty())
+                    .collect();
+                let first = font.max(9.0);
+                let leading = first * 1.15;
+                let block = leading * lines.len() as f32;
+                let top = r.center().y - block / 2.0 + leading / 2.0;
+                for (index, line) in lines.iter().enumerate() {
+                    let size = if index == 0 { first } else { first * 0.72 };
+                    painter.text(
+                        pos2(r.center().x, top + index as f32 * leading),
+                        Align2::CENTER_CENTER,
+                        *line,
+                        FontId::proportional(size),
+                        color,
+                    );
+                }
             }
             AnnotationKind::Circle => {
                 painter.add(Shape::circle_stroke(

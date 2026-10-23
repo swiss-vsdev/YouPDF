@@ -238,6 +238,153 @@ pub const STAMP_NAMES: &[&str] = &[
     "Personnalisé",   // Custom stamp
 ];
 
+/// Modèle de tampon proposé par la palette.
+///
+/// Le libellé est celui du bouton, `pdf_name` celui du `/Name` écrit dans
+/// l'annotation : un lecteur tiers affiche le sien, pas le nôtre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StampTemplate {
+    /// Identifiant stable, utilisé par la palette et la configuration.
+    pub id: &'static str,
+    /// Libellé affiché.
+    pub label: &'static str,
+    /// Nom standard PDF (`/Name`).
+    pub pdf_name: &'static str,
+    /// Couleur du cadre et du texte.
+    pub color: [u8; 3],
+    /// Ajouter la date et l'auteur sous le libellé.
+    pub dynamic: bool,
+}
+
+/// Les douze tampons de la palette, dans l'ordre d'affichage.
+pub const STAMP_TEMPLATES: &[StampTemplate] = &[
+    StampTemplate {
+        id: "approved",
+        label: "Approved",
+        pdf_name: "Approved",
+        color: [32, 132, 92],
+        dynamic: true,
+    },
+    StampTemplate {
+        id: "not_approved",
+        label: "Not Approved",
+        pdf_name: "NotApproved",
+        color: [186, 58, 58],
+        dynamic: true,
+    },
+    StampTemplate {
+        id: "draft",
+        label: "Draft",
+        pdf_name: "Draft",
+        color: [120, 120, 128],
+        dynamic: true,
+    },
+    StampTemplate {
+        id: "final",
+        label: "Final",
+        pdf_name: "Final",
+        color: [32, 96, 176],
+        dynamic: true,
+    },
+    StampTemplate {
+        id: "confidential",
+        label: "Confidential",
+        pdf_name: "Confidential",
+        color: [176, 40, 48],
+        dynamic: true,
+    },
+    StampTemplate {
+        id: "expired",
+        label: "Expired",
+        pdf_name: "Expired",
+        color: [128, 96, 40],
+        dynamic: true,
+    },
+    StampTemplate {
+        id: "for_comment",
+        label: "For Comment",
+        pdf_name: "Draft",
+        color: [96, 96, 168],
+        dynamic: true,
+    },
+    StampTemplate {
+        id: "sign_here",
+        label: "Sign Here",
+        pdf_name: "SignHere",
+        color: [32, 96, 176],
+        dynamic: false,
+    },
+    StampTemplate {
+        id: "initial_here",
+        label: "Initial Here",
+        pdf_name: "InitialHere",
+        color: [32, 96, 176],
+        dynamic: false,
+    },
+    StampTemplate {
+        id: "witness",
+        label: "Witness",
+        pdf_name: "Witness",
+        color: [72, 72, 80],
+        dynamic: true,
+    },
+    StampTemplate {
+        id: "reviewed",
+        label: "Reviewed",
+        pdf_name: "Approved",
+        color: [32, 132, 92],
+        dynamic: true,
+    },
+    StampTemplate {
+        id: "void",
+        label: "Void",
+        pdf_name: "NotApproved",
+        color: [186, 58, 58],
+        dynamic: true,
+    },
+];
+
+/// Modèle correspondant à un identifiant ; le premier par défaut.
+pub fn stamp_template(id: &str) -> &'static StampTemplate {
+    STAMP_TEMPLATES
+        .iter()
+        .find(|template| template.id == id)
+        .unwrap_or(&STAMP_TEMPLATES[0])
+}
+
+/// Identifiant du modèle qui écrit un `/Name` donné.
+///
+/// Plusieurs modèles partagent un `/Name` (`Draft` sert à « Draft » et à
+/// « For Comment ») : on renvoie le premier, la nuance n'existant qu'à
+/// l'écran.
+pub fn stamp_id_for_pdf_name(name: &str) -> Option<String> {
+    STAMP_TEMPLATES
+        .iter()
+        .find(|template| template.pdf_name == name)
+        .map(|template| template.id.to_string())
+}
+
+/// Taille de police d'un tampon, en points.
+pub const STAMP_FONT_SIZE: f32 = 14.0;
+
+/// Texte d'un tampon dynamique : libellé, puis auteur et date s'ils sont
+/// fournis. Une ligne vide n'est jamais ajoutée, pour qu'un tampon posé
+/// sans auteur ne réserve pas de place dans sa boîte.
+pub fn dynamic_stamp_text(template: &StampTemplate, author: &str, date: &str) -> String {
+    let mut lines = vec![template.label.to_string()];
+    if template.dynamic {
+        let author = author.trim();
+        if !author.is_empty() {
+            lines.push(author.to_string());
+        }
+        let date = date.trim();
+        if !date.is_empty() {
+            lines.push(date.to_string());
+        }
+    }
+    lines.join("\n")
+}
+
 /// Associe un libellé de tampon au nom standard PDF (`/Name`).
 pub fn stamp_name(label: &str) -> &'static [u8] {
     match label.trim().to_ascii_lowercase().as_str() {
@@ -474,6 +621,10 @@ pub struct Annotation {
     /// `/NM` de l'annotation à laquelle celle-ci répond (`/IRT`).
     #[serde(default)]
     pub reply_to: Option<String>,
+    /// Tampon : modèle choisi dans la palette (vide pour un tampon importé
+    /// ou créé à la main, qui n'a pas de libellé dynamique).
+    #[serde(default)]
+    pub stamp: Option<String>,
 }
 
 /// Date PDF (`D:AAAAMMJJHHmmSSZ`) pour l'entrée `/M`.
@@ -797,21 +948,39 @@ impl Annotation {
 
             AnnotationKind::Stamp => {
                 let size = self.style.font_size.clamp(6.0, 48.0);
-                let chars = self.content.chars().count() as f32;
-                // Largeur approchée de l'Helvetica (0.5 cadratin par
-                // caractère) : le centrage ne peut pas être mesuré sans
-                // analyser la police.
-                let text_w = chars * size * 0.5;
-                let (x, y) = (((w - text_w) / 2.0).max(2.0), (h / 2.0) - size * 0.35);
+                // Le libellé est centré, la date et l'auteur dessous en plus
+                // petit : un tampon dynamique tient donc sur trois lignes
+                // dans la même boîte.
+                let lines: Vec<&str> = self.content.lines().filter(|l| !l.is_empty()).collect();
+                let lines: Vec<&str> = if lines.is_empty() {
+                    vec![""]
+                } else {
+                    lines
+                };
+                let leading = size * 1.15;
+                let block = leading * lines.len() as f32;
+                let top = (h + block) / 2.0 - leading + size * 0.28;
                 c.extend_from_slice(
-                    format!(
-                        "q {stroke} {lw:.2} w 0 0 {w:.2} {h:.2} re S\n\
-                         BT /{APPEARANCE_FONT_NAME} {size:.2} Tf {fill} 1 0 0 1 {x:.2} {y:.2} Tm\n"
-                    )
-                    .as_bytes(),
+                    format!("q {stroke} {lw:.2} w 0 0 {w:.2} {h:.2} re S\nBT\n").as_bytes(),
                 );
-                push_text_literal(&mut c, &self.content);
-                c.extend_from_slice(b" Tj ET Q\n");
+                for (index, line) in lines.iter().enumerate() {
+                    let line_size = if index == 0 { size } else { size * 0.72 };
+                    // Largeur approchée de l'Helvetica (0.5 cadratin par
+                    // caractère) : le centrage ne peut pas être mesuré sans
+                    // analyser la police.
+                    let text_w = line.chars().count() as f32 * line_size * 0.5;
+                    let x = ((w - text_w) / 2.0).max(2.0);
+                    let y = top - index as f32 * leading;
+                    c.extend_from_slice(
+                        format!(
+                            "/{APPEARANCE_FONT_NAME} {line_size:.2} Tf {fill} 1 0 0 1 {x:.2} {y:.2} Tm "
+                        )
+                        .as_bytes(),
+                    );
+                    push_text_literal(&mut c, line);
+                    c.extend_from_slice(b" Tj\n");
+                }
+                c.extend_from_slice(b"ET Q\n");
             }
         }
 
@@ -886,6 +1055,46 @@ impl Annotation {
             created_at: chrono::Utc::now().to_rfc3339(),
             state: AnnotationState::None,
             reply_to: None,
+            stamp: None,
+        }
+    }
+
+    /// Crée un tampon dynamique : libellé, auteur et date du modèle.
+    ///
+    /// `date` est le texte affiché (déjà formaté par l'appelant), de sorte
+    /// que la même annotation se reproduise à l'identique dans un test.
+    pub fn stamp(page: usize, rect: [f32; 4], template_id: &str, author: &str, date: &str) -> Self {
+        let template = stamp_template(template_id);
+        let mut annot = Self::new(page, AnnotationKind::Stamp, rect);
+        annot.content = dynamic_stamp_text(template, author, date);
+        annot.style.color = template.color;
+        annot.style.font_size = STAMP_FONT_SIZE;
+        if !author.trim().is_empty() {
+            annot.author = author.trim().to_string();
+        }
+        annot.stamp = Some(template.id.to_string());
+        annot
+    }
+
+    /// Vrai si c'est un tampon dynamique : le texte se régénère à partir du
+    /// modèle, de l'auteur et de la date.
+    pub fn is_dynamic_stamp(&self) -> bool {
+        self.kind == AnnotationKind::Stamp
+            && self
+                .stamp
+                .as_deref()
+                .map(|id| stamp_template(id).dynamic)
+                .unwrap_or(false)
+    }
+
+    /// Met à jour le texte d'un tampon dynamique sans toucher au reste.
+    pub fn refresh_stamp(&mut self, author: &str, date: &str) {
+        let Some(id) = self.stamp.clone() else {
+            return;
+        };
+        let template = stamp_template(&id);
+        if template.dynamic {
+            self.content = dynamic_stamp_text(template, author, date);
         }
     }
 
@@ -1167,7 +1376,14 @@ impl Annotation {
             }
 
             AnnotationKind::Stamp => {
-                d.set("Name", Object::Name(stamp_name(&self.content).to_vec()));
+                // Le `/Name` vient du modèle quand l'annotation en a un :
+                // le contenu porte désormais l'auteur et la date, que
+                // `stamp_name` ne saurait pas interpréter.
+                let pdf_name = match self.stamp.as_deref() {
+                    Some(id) => stamp_template(id).pdf_name.as_bytes(),
+                    None => stamp_name(&self.content),
+                };
+                d.set("Name", Object::Name(pdf_name.to_vec()));
                 if !self.content.is_empty() {
                     d.set("Contents", Object::string_literal(self.content.as_str()));
                 }
@@ -1992,6 +2208,14 @@ fn parse_annotation(dict: &Dictionary, id: &str, page: usize) -> Option<Annotati
         // `/IRT` est une référence indirecte : elle est résolue par
         // `read_annotations`, qui seule a accès au document.
         reply_to: None,
+        // Un tampon relu garde son `/Name` : c'est lui qui dit si le texte
+        // vient d'un modèle dynamique.
+        stamp: dict
+            .get(b"Name")
+            .ok()
+            .and_then(|o| o.as_name().ok())
+            .and_then(|name| std::str::from_utf8(name).ok())
+            .and_then(stamp_id_for_pdf_name),
     })
 }
 
