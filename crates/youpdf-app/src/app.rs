@@ -121,6 +121,16 @@ enum PageLayout {
     Cover,
 }
 
+/// Affichage d'une comparaison de deux documents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum CompareView {
+    /// Rapport de différences de texte (défaut).
+    #[default]
+    Report,
+    /// Les deux documents côte à côte, défilement synchronisé.
+    SideBySide,
+}
+
 impl PageLayout {
     /// Toutes les dispositions, dans l'ordre du menu.
     const ALL: [PageLayout; 4] = [
@@ -1280,6 +1290,45 @@ struct Tab {
 }
 
 impl Tab {
+    /// Construit un onglet à partir d'un document déjà ouvert, sans entrer
+    /// dans le tableau des onglets. Servira un jour à la vue de comparaison
+    /// côte à côte, qui doit afficher un deuxième document sans ajouter
+    /// d'onglet visible.
+    fn from_document(doc: Document, path: Option<PathBuf>) -> Tab {
+        let title = doc.display_name();
+        let annots = annots_to_display(&doc, doc.read_annotations());
+        let baseline_annots = annots.clone();
+        let history_base = doc.to_bytes().ok();
+        let saved_hash = history_base.as_deref().map(fingerprint).unwrap_or(0);
+        Tab {
+            doc,
+            path,
+            title,
+            page: 1,
+            zoom: None,
+            zoom_fit_page: true,
+            cache: HashMap::new(),
+            page_sizes: Vec::new(),
+            last_bitmap: None,
+            dirty: false,
+            structural_dirty: false,
+            annots,
+            baseline_annots,
+            annots_loaded: true,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            history_base,
+            saved_hash,
+            outline: Vec::new(),
+            forms: Vec::new(),
+            attachments: Vec::new(),
+            fragments: HashMap::new(),
+            structure_loaded: false,
+            pinned: false,
+            protected: false,
+        }
+    }
+
     fn total(&self) -> usize {
         self.doc.page_count()
     }
@@ -1513,6 +1562,17 @@ pub struct YouPdfApp {
     /// Fenêtre « Comparer » : fichier choisi et rapport affiché.
     compare_open: bool,
     compare_path: Option<PathBuf>,
+    /// Affichage de la comparaison : rapport texte, ou deux documents côte à côte.
+    compare_view: CompareView,
+    /// Onglet temporaire contenant le document choisi, pour la vue côte à côte.
+    /// Il n'apparaît pas dans la barre d'onglets.
+    compare_tab: Option<Tab>,
+    /// Page courante dans la vue côte à côte (1-indexée).
+    compare_page: usize,
+    /// Options de comparaison : ignorer les espaces.
+    compare_ignore_ws: bool,
+    /// Options de comparaison : ignorer la casse.
+    compare_ignore_case: bool,
     /// Callout en cours : les points déjà posés par les clics successifs.
     /// L'outil prend trois clics (départ, genou, coin du texte) : l'état
     /// doit survivre d'une trame à l'autre, sinon chaque clic repart de zéro.
@@ -1927,6 +1987,11 @@ impl YouPdfApp {
             bates_from: None,
             compare_open: false,
             compare_path: None,
+            compare_view: CompareView::default(),
+            compare_tab: None,
+            compare_page: 1,
+            compare_ignore_ws: false,
+            compare_ignore_case: false,
             compare_report: None,
             ocr_open: false,
             ocr_language: "eng".to_owned(),
@@ -8134,93 +8199,83 @@ impl YouPdfApp {
         let mut pick = false;
         let mut run = false;
         let mut jump: Option<usize> = None;
-        let name = self
-            .compare_path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned());
         egui::Window::new(t("Compare PDFs"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
-            .default_size(vec2(560.0, 440.0))
+            .default_size(vec2(900.0, 600.0))
             .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.button(t("Choose a PDF…")).clicked() {
-                        pick = true;
-                    }
-                    ui.label(
-                        RichText::new(
-                            name.clone().unwrap_or_else(|| "No file chosen".to_owned()),
-                        )
-                        .size(12.0)
-                        .color(if name.is_some() { pal().icon_bright } else { pal().muted }),
-                    );
-                });
-                ui.add_space(6.0);
-                if ui.button(t("Compare with the open document")).clicked() {
-                    run = true;
+                self.compare_controls(ui, &mut pick, &mut run);
+                ui.add_space(8.0);
+                // La vue côte à côte n'apparaît qu'une fois les deux documents chargés.
+                if self.compare_tab.is_some() {
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    self.compare_split_view(ui);
                 }
                 if let Some(report) = &self.compare_report {
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(format!(
-                            "{} page(s) vs {} page(s) — {} difference(s), \
-                             {} identical line(s)",
-                            report.pages_a,
-                            report.pages_b,
-                            report.differences.len(),
-                            report.identical_lines
-                        ))
-                        .size(12.0)
-                        .color(pal().icon_bright),
-                    );
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        for (label, color) in [
-                            ("Inserted", ADDED_GREEN),
-                            ("Deleted", REMOVED_RED),
-                            ("Modified", MODIFIED_AMBER),
-                        ] {
-                            ui.label(
-                                RichText::new(format!("\u{25a0} {label}"))
-                                    .size(10.5)
-                                    .color(color),
-                            );
-                        }
-                    });
-                    ui.add_space(4.0);
-                    ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                        for diff in report.differences.iter().take(300) {
-                            let (tag, color) = match diff.kind {
-                                DifferenceKind::Added => ("+", ADDED_GREEN),
-                                DifferenceKind::Removed => ("-", REMOVED_RED),
-                                DifferenceKind::Modified => ("~", MODIFIED_AMBER),
-                                DifferenceKind::PageAdded => ("+ page", ADDED_GREEN),
-                                DifferenceKind::PageRemoved => ("- page", REMOVED_RED),
-                            };
-                            let text = diff
-                                .after
-                                .clone()
-                                .or_else(|| diff.before.clone())
-                                .unwrap_or_default();
-                            let page = diff.page_b.or(diff.page_a).unwrap_or(0);
-                            if ui
-                                .selectable_label(
-                                    false,
-                                    RichText::new(format!("{tag}  p{page}  {text}"))
-                                        .size(11.0)
+                    if self.compare_view == CompareView::Report {
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(format!(
+                                "{} page(s) vs {} page(s) — {} difference(s), \
+                                 {} identical line(s)",
+                                report.pages_a,
+                                report.pages_b,
+                                report.differences.len(),
+                                report.identical_lines
+                            ))
+                            .size(12.0)
+                            .color(pal().icon_bright),
+                        );
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            for (label, color) in [
+                                ("Inserted", ADDED_GREEN),
+                                ("Deleted", REMOVED_RED),
+                                ("Modified", MODIFIED_AMBER),
+                            ] {
+                                ui.label(
+                                    RichText::new(format!("\u{25a0} {label}"))
+                                        .size(10.5)
                                         .color(color),
-                                )
-                                .clicked()
-                            {
-                                jump = Some(page);
+                                );
                             }
-                        }
-                    });
+                        });
+                        ui.add_space(4.0);
+                        ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                            for diff in report.differences.iter().take(300) {
+                                let (tag, color) = match diff.kind {
+                                    DifferenceKind::Added => ("+", ADDED_GREEN),
+                                    DifferenceKind::Removed => ("-", REMOVED_RED),
+                                    DifferenceKind::Modified => ("~", MODIFIED_AMBER),
+                                    DifferenceKind::PageAdded => ("+ page", ADDED_GREEN),
+                                    DifferenceKind::PageRemoved => ("- page", REMOVED_RED),
+                                };
+                                let text = diff
+                                    .after
+                                    .clone()
+                                    .or_else(|| diff.before.clone())
+                                    .unwrap_or_default();
+                                let page = diff.page_b.or(diff.page_a).unwrap_or(0);
+                                if ui
+                                    .selectable_label(
+                                        false,
+                                        RichText::new(format!("{tag}  p{page}  {text}"))
+                                            .size(11.0)
+                                            .color(color),
+                                    )
+                                    .clicked()
+                                {
+                                    jump = Some(page);
+                                }
+                            }
+                        });
+                    }
                 }
             });
 
@@ -8244,11 +8299,20 @@ impl YouPdfApp {
                         let report = self
                             .tabs
                             .get(self.active)
-                            .map(|tab| tab.doc.compare_with(&other));
+                            .map(|tab| {
+                            tab.doc.compare_with_options(
+                                &other,
+                                self.compare_ignore_ws,
+                                self.compare_ignore_case,
+                            )
+                        });
                         match report {
                             Some(Ok(report)) => {
                                 let identical = report.is_identical();
                                 self.compare_report = Some(report);
+                                self.compare_tab = Some(Tab::from_document(other, Some(path)));
+                                self.compare_view = CompareView::SideBySide;
+                                self.compare_page = 1;
                                 if identical {
                                     self.toast(ctx, "The two documents match");
                                 }
@@ -8265,6 +8329,217 @@ impl YouPdfApp {
         if !open {
             self.compare_open = false;
         }
+    }
+
+    /// Barre de contrôle de la fenêtre de comparaison.
+    fn compare_controls(&mut self, ui: &mut egui::Ui, pick: &mut bool, run: &mut bool) {
+        let name = self
+            .compare_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned());
+        ui.horizontal(|ui| {
+            if ui.button(t("Choose a PDF…")).clicked() {
+                *pick = true;
+            }
+            ui.label(
+                RichText::new(
+                    name.clone().unwrap_or_else(|| "No file chosen".to_owned()),
+                )
+                .size(12.0)
+                .color(if name.is_some() { pal().icon_bright } else { pal().muted }),
+            );
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.button(t("Compare with the open document")).clicked() {
+                *run = true;
+            }
+            ui.add_space(10.0);
+            egui::ComboBox::from_id_salt("compare-view")
+                .selected_text(match self.compare_view {
+                    CompareView::Report => t("Text report"),
+                    CompareView::SideBySide => t("Side by side"),
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.compare_view,
+                        CompareView::Report,
+                        t("Text report"),
+                    );
+                    ui.selectable_value(
+                        &mut self.compare_view,
+                        CompareView::SideBySide,
+                        t("Side by side"),
+                    );
+                });
+            ui.add_space(10.0);
+            if ui.checkbox(&mut self.compare_ignore_ws, t("Ignore whitespace")).changed() {
+                self.compare_report = None;
+                self.compare_tab = None;
+            }
+            if ui.checkbox(&mut self.compare_ignore_case, t("Ignore case")).changed() {
+                self.compare_report = None;
+                self.compare_tab = None;
+            }
+        });
+    }
+
+    /// Vue côte à côte des deux documents, navigation par page.
+    fn compare_split_view(&mut self, ui: &mut egui::Ui) {
+        // Les totaux sont lus avant d'emprunter `self` mutablement : les
+        // closures du ScrollArea ont besoin de `&mut self` pour rastériser
+        // chaque panneau, et deux emprunts mutables côte à côte ne coexistent
+        // pas.
+        let total_a = self
+            .tabs
+            .get(self.active)
+            .map(|t| t.total())
+            .unwrap_or(0);
+        let total_b = self
+            .compare_tab
+            .as_ref()
+            .map(|t| t.total())
+            .unwrap_or(0);
+        let total = total_a.max(total_b);
+        if total == 0 {
+            return;
+        }
+
+        // Page courante bornée.
+        self.compare_page = self.compare_page.clamp(1, total);
+
+        // Contrôles de navigation.
+        ui.horizontal(|ui| {
+            if ui.small_button(t("First")).clicked() {
+                self.compare_page = 1;
+            }
+            if ui.small_button(t("Prev")).clicked() {
+                self.compare_page = self.compare_page.saturating_sub(1);
+            }
+            let resp = ui.add(
+                egui::DragValue::new(&mut self.compare_page)
+                    .speed(1.0)
+                    .range(1..=total)
+                    .prefix(""),
+            );
+            if resp.changed() {
+                self.compare_page = self.compare_page.clamp(1, total);
+            }
+            if ui.small_button(t("Next")).clicked() {
+                self.compare_page = (self.compare_page + 1).min(total);
+            }
+            if ui.small_button(t("Last")).clicked() {
+                self.compare_page = total;
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.small_button(t("Text report")).clicked() {
+                    self.compare_view = CompareView::Report;
+                }
+            });
+        });
+        ui.add_space(4.0);
+        ui.separator();
+        ui.add_space(4.0);
+
+        // Deux panneaux côte à côte, même hauteur.
+        let available = ui.available_size();
+        let pane_width = available.x / 2.0;
+        let scroll_height = available.y;
+
+        ui.horizontal(|ui| {
+            // Panneau A — document actif
+            ui.allocate_ui_with_layout(
+                vec2(pane_width, scroll_height),
+                Layout::top_down(Align::Center),
+                |ui| {
+                    ui.label(
+                        RichText::new(t("Document A"))
+                            .size(12.0)
+                            .color(pal().icon_bright),
+                    );
+                    let page_a = self.compare_page.min(total_a);
+                    if page_a >= 1 {
+                        let Some(tab) = self.tabs.get_mut(self.active) else { return };
+                        let zoom = tab.zoom.unwrap_or(1.0);
+                        let ppp = ui.ctx().pixels_per_point();
+                        let mut status = String::new();
+                        if let Some(tex) = YouPdfApp::page_texture(
+                            ui.ctx(),
+                            &*self.renderer,
+                            tab,
+                            page_a as u32,
+                            render_step(zoom, ppp),
+                            zoom,
+                            ppp,
+                            true,
+                            false,
+                            &mut status,
+                        ) {
+                            let sz = tex.size_vec2();
+                            let max_w = pane_width * 0.95;
+                            let scale = (max_w / sz.x).min(1.0);
+                            let img_rect = Rect::from_min_max(
+                                pos2(0.0, 0.0),
+                                pos2(sz.x * scale, sz.y * scale),
+                            );
+                            ui.painter().image(
+                                tex.id(),
+                                img_rect,
+                                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                                Color32::WHITE,
+                            );
+                        }
+                    }
+                },
+            );
+            ui.add_space(4.0);
+            // Panneau B — document comparé
+            ui.allocate_ui_with_layout(
+                vec2(pane_width, scroll_height),
+                Layout::top_down(Align::Center),
+                |ui| {
+                    ui.label(
+                        RichText::new(t("Document B"))
+                            .size(12.0)
+                            .color(pal().icon_bright),
+                    );
+                    let page_b = self.compare_page.min(total_b);
+                    if page_b >= 1 {
+                        let Some(tab) = self.compare_tab.as_mut() else { return };
+                        let zoom = tab.zoom.unwrap_or(1.0);
+                        let ppp = ui.ctx().pixels_per_point();
+                        let mut status = String::new();
+                        if let Some(tex) = YouPdfApp::page_texture(
+                            ui.ctx(),
+                            &*self.renderer,
+                            tab,
+                            page_b as u32,
+                            render_step(zoom, ppp),
+                            zoom,
+                            ppp,
+                            true,
+                            false,
+                            &mut status,
+                        ) {
+                            let sz = tex.size_vec2();
+                            let max_w = pane_width * 0.95;
+                            let scale = (max_w / sz.x).min(1.0);
+                            let img_rect = Rect::from_min_max(
+                                pos2(0.0, 0.0),
+                                pos2(sz.x * scale, sz.y * scale),
+                            );
+                            ui.painter().image(
+                                tex.id(),
+                                img_rect,
+                                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                                Color32::WHITE,
+                            );
+                        }
+                    }
+                },
+            );
+        });
     }
 
     /// Fenêtre « OCR » : rend le document consultable par Tesseract.

@@ -80,6 +80,20 @@ impl ComparisonReport {
 impl Document {
     /// Compare ce document avec un autre.
     pub fn compare_with(&self, other: &Document) -> Result<ComparisonReport> {
+        self.compare_with_options(other, false, false)
+    }
+
+    /// Compare ce document avec un autre, avec options.
+    ///
+    /// `ignore_whitespace` écarte les lignes vides et les différences
+    /// d'espaces ; `ignore_case` compare en minuscules. Les deux options
+    /// ne changent pas le classement des pages, seulement le texte comparé.
+    pub fn compare_with_options(
+        &self,
+        other: &Document,
+        ignore_whitespace: bool,
+        ignore_case: bool,
+    ) -> Result<ComparisonReport> {
         let pages_a = self.page_count();
         let pages_b = other.page_count();
 
@@ -93,16 +107,8 @@ impl Document {
             let text_a = self.page_text(page as u32).unwrap_or_default();
             let text_b = other.page_text(page as u32).unwrap_or_default();
 
-            let lines_a: Vec<String> = text_a
-                .lines()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            let lines_b: Vec<String> = text_b
-                .lines()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
+            let lines_a = normalize_lines(&text_a, ignore_whitespace, ignore_case);
+            let lines_b = normalize_lines(&text_b, ignore_whitespace, ignore_case);
 
             compare_lines(
                 &lines_a,
@@ -347,4 +353,30 @@ fn compute_lcs(a: &[String], b: &[String]) -> Vec<Vec<usize>> {
     }
 
     table
+}
+
+/// Découpe un texte en lignes comparables, selon les options de comparaison.
+///
+/// Les lignes vides sont toujours écartées. `ignore_whitespace` retire les
+/// espaces de début et de fin de chaque ligne, `ignore_case` les met en
+/// minuscules. Les deux options ne changent pas le classement des pages,
+/// seulement le texte comparé.
+fn normalize_lines(text: &str, ignore_whitespace: bool, ignore_case: bool) -> Vec<String> {
+    text.lines()
+        .map(|s| {
+            if ignore_whitespace {
+                s.trim_matches(|c: char| c.is_whitespace())
+            } else {
+                s.trim()
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            if ignore_case {
+                s.to_lowercase()
+            } else {
+                s.to_string()
+            }
+        })
+        .collect()
 }

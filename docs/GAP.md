@@ -28,7 +28,7 @@ This document tracks YouPDF's feature parity against **/Applications/UPDF.app** 
 | **11. OCR Engine** | REA §11 | ✅ | Tesseract (48 languages), 3 output modes (Searchable, Editable, Text+Image), scanned PDF auto-detect banner |
 | **12. Measurement & Compare** | REA §12 | 🟡 | Distance/perimeter/area drag box, scale calibration. **Gap 12.2:** Compare is a text-diff report only |
 | **13. Batch Processing** | REA §13 | ✅ | File queue table (progress, ETA, cancel), 12 operations (convert, OCR, combine, insert, watermark, etc.) |
-| **14. Settings & Localization** | REA §14 | 🟡 | Prefs window (General, Appearance, Document, AI). **Gap 14.2:** `i18n::t()` table present, 5 call sites only |
+| **14. Settings & Localization** | REA §14 | ✅ | Prefs window (General, Appearance, Document, AI). `t()` wired across the whole UI (351-entry EN/FR dictionary, coverage gate in `scripts/i18n_extract.py`) |
 
 ---
 
