@@ -8,6 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use youpdf_shared::{Error, Result};
 
@@ -23,6 +24,14 @@ pub struct Document {
 
     /// Métadonnées extraites à l'ouverture.
     metadata: DocumentMetadata,
+
+    /// Identifiant unique de cette instance.
+    ///
+    /// Le compteur de mutations repart de zéro pour chaque document : sans
+    /// identifiant d'instance, le renderer confondrait le document A modifié
+    /// avec un document B neuf (tous deux à la génération 0), et servirait
+    /// les pages de l'ancien.
+    id: u64,
 
     /// Compteur d'invalidations : incrémenté à chaque accès mutable.
     mutation: Cell<u64>,
@@ -236,6 +245,14 @@ impl PageView {
     }
 }
 
+/// Compteur d'identifiants d'instance, partagé par tout le processus.
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Identifiant d'instance pour un nouveau [`Document`].
+fn next_document_id() -> u64 {
+    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
+
 impl Document {
     /// Ouvre un PDF depuis le disque.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -250,6 +267,7 @@ impl Document {
             inner,
             path: Some(path),
             metadata,
+            id: next_document_id(),
             mutation: Cell::new(0),
             snapshot: RefCell::new(None),
             page_cache: RefCell::new(None),
@@ -266,6 +284,7 @@ impl Document {
             inner,
             path: None,
             metadata,
+            id: next_document_id(),
             mutation: Cell::new(0),
             snapshot: RefCell::new(None),
             page_cache: RefCell::new(None),
@@ -327,11 +346,30 @@ impl Document {
             inner,
             path: None,
             metadata,
+            id: next_document_id(),
             mutation: Cell::new(0),
             snapshot: RefCell::new(None),
             page_cache: RefCell::new(None),
             page_map_builds: Cell::new(0),
         }
+    }
+
+    /// Génération de contenu du document.
+    ///
+    /// Incrémentée à chaque mutation (annotation, rotation, édition…). Un
+    /// cache qui dépend du contenu — comme le document pdfium déjà parsé du
+    /// renderer — la compare à celle qu'il a mémorisée pour savoir si sa
+    /// copie est encore valable.
+    pub fn generation(&self) -> u64 {
+        self.mutation.get()
+    }
+
+    /// Identifiant d'instance, distinct pour chaque [`Document`] du processus.
+    ///
+    /// À comparer avec `generation` : deux documents différents peuvent être
+    /// tous deux à la génération 0.
+    pub(crate) fn instance_id(&self) -> u64 {
+        self.id
     }
 
     /// Signale une modification : invalide la sérialisation en cache.

@@ -9,8 +9,11 @@
 //! présente à côté du binaire ou dans le `PATH`. Voir le README pour
 //! l'installation.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use pdfium_render::prelude::*;
 
@@ -140,13 +143,63 @@ pub trait Renderer {
     }
 }
 
+/// Bibliothèque pdfium du processus.
+///
+/// pdfium s'initialise **une fois** pour tout le processus : un second appel
+/// à `FPDF_InitLibrary` laisserait le mutex global de `pdfium-render`
+/// verrouillé, et le processus entier se figerait (vérifié : deux
+/// `PdfiumRenderer` vivants simultanément bloquaient indéfiniment). Les
+/// renderers partagent donc cette instance unique, jamais libérée.
+static PDFIUM: OnceLock<std::result::Result<Pdfium, String>> = OnceLock::new();
+
+/// Sérialise les appels à pdfium.
+///
+/// L'option `thread_safe` de `pdfium-render` ne verrouille que
+/// `FPDF_InitLibrary` / `FPDF_DestroyLibrary` : les autres appels ne sont
+/// pas protégés. Ce verrou global prend le relais pour tous les renderers
+/// (fil d'interface, fil d'arrière-plan, tests), qui peuvent être sur des
+/// threads différents même si chacun reste `!Sync`.
+static PDFIUM_LOCK: Mutex<()> = Mutex::new(());
+
+/// Emprunte le mutex global des appels pdfium.
+///
+/// Un thread tombé en panique peut avoir empoisonné le verrou : l'état
+/// qu'il protège n'est qu'un jeton d'exclusion, on le récupère tel quel.
+fn pdfium_lock() -> MutexGuard<'static, ()> {
+    PDFIUM_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Charge (une seule fois) la bibliothèque pdfium du processus.
+fn shared_pdfium() -> Result<&'static Pdfium> {
+    let loaded = PDFIUM.get_or_init(|| {
+        let bindings = PdfiumRenderer::bind_pdfium().map_err(|e| e.to_string())?;
+        tracing::info!("pdfium chargé avec succès");
+        Ok(Pdfium::new(bindings))
+    });
+    match loaded {
+        Ok(pdfium) => Ok(pdfium),
+        Err(msg) => Err(Error::Config(msg.clone())),
+    }
+}
+
 /// Implémentation pdfium.
 ///
-/// pdfium n'est **pas** thread-safe : le handle est protégé par un
+/// pdfium n'est **pas** thread-safe : le parseur en cache est protégé par un
 /// `RefCell` et `PdfiumRenderer` n'est donc **pas** `Sync`. On l'utilise
-/// uniquement depuis le thread d'interface (egui est mono-thread côté rendu).
+/// depuis le fil d'interface ou depuis un fil de travail, mais les appels à
+/// pdfium passent tous par [`PDFIUM_LOCK`].
+///
+/// Le document parsé par pdfium est conservé d'un appel à l'autre : le
+/// reparsing complet à chaque page rendue coûtait O(taille du document) par
+/// page, donc O(n²) pour un document de n pages. La clé du cache est le
+/// couple (identité du document, génération) : deux `Document` distincts
+/// partent tous deux de la génération 0.
 pub struct PdfiumRenderer {
-    pdfium: RefCell<Pdfium>,
+    pdfium: &'static Pdfium,
+    parsed: RefCell<Option<((u64, u64), PdfDocument<'static>)>>,
+    /// Nombre de parsings effectués (tests : le cache doit servir).
+    #[cfg(test)]
+    parses: Cell<u64>,
 }
 
 impl PdfiumRenderer {
@@ -155,11 +208,67 @@ impl PdfiumRenderer {
     /// Cherche dans l'ordre (voir [`Self::search_dirs`]) puis se rabat sur
     /// les chemins système (`PATH`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`).
     pub fn load() -> Result<Self> {
-        let bindings = Self::bind_pdfium()?;
-        tracing::info!("pdfium chargé avec succès");
+        let pdfium = shared_pdfium()?;
         Ok(Self {
-            pdfium: RefCell::new(Pdfium::new(bindings)),
+            pdfium,
+            parsed: RefCell::new(None),
+            #[cfg(test)]
+            parses: Cell::new(0),
         })
+    }
+
+    /// Exécute `with` sur le document pdfium de `doc`, reparsé seulement si
+    /// la révision a changé.
+    ///
+    /// `PdfDocument` emprunte la bibliothèque ; le renderer ne peut donc pas
+    /// exposer une référence empruntée depuis `&self` (elle vivrait dans un
+    /// `RefCell`). Le rendu se fait dans la fermeture, tant que le parseur
+    /// est accessible.
+    fn with_parsed<T>(
+        &self,
+        doc: &Document,
+        with: impl FnOnce(&PdfDocument<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let key = (doc.instance_id(), doc.generation());
+
+        // Sérialisation hors du verrou pdfium : elle ne touche pas à la
+        // bibliothèque et peut être longue sur un gros document. Le cache
+        // appartient à ce renderer seul, il ne peut pas changer entre-temps.
+        let needs_parse = self.parsed.borrow().as_ref().map(|(k, _)| *k) != Some(key);
+        let bytes = if needs_parse {
+            Some(doc.snapshot()?.as_ref().clone())
+        } else {
+            None
+        };
+
+        let _lock = pdfium_lock();
+        let mut parsed = self.parsed.borrow_mut();
+        if let Some(bytes) = bytes {
+            // `load_pdf_from_byte_vec` prend possession des octets : pdfium
+            // peut alors lire le document sans copie intermédiaire.
+            let pdf = self
+                .pdfium
+                .load_pdf_from_byte_vec(bytes, None)
+                .map_err(|e| Error::Pdf(format!("chargement pdfium : {e}")))?;
+            *parsed = Some((key, pdf));
+            #[cfg(test)]
+            self.parses.set(self.parses.get() + 1);
+        }
+        let (_, pdf) = parsed.as_ref().expect("parseur pdfium en cache");
+        with(pdf)
+    }
+
+    /// Page `page_number` (1-indexée) du document parsé.
+    fn page<'a>(pdf: &'a PdfDocument<'_>, page_number: u32) -> Result<PdfPage<'a>> {
+        let pages = pdf.pages();
+        // pdfium indexe les pages sur 16 bits : au-delà, la conversion
+        // tronquerait et rendrait la mauvaise page.
+        let index = u16::try_from(page_number.saturating_sub(1)).map_err(|_| {
+            Error::InvalidInput(format!("numéro de page hors limites : {page_number}"))
+        })?;
+        pages
+            .get(index)
+            .map_err(|e| Error::Pdf(format!("page {page_number} introuvable : {e}")))
     }
 
     /// Répertoires candidats, dans l'ordre de priorité.
@@ -273,87 +382,73 @@ impl PdfiumRenderer {
     /// hexadécimales, illisibles pour un simple lecteur de flux. Les
     /// rectangles sont en repère page (origine en bas à gauche), comme
     /// [`TextFragment::rect`].
-    fn fragments_from_pdfium(
-        &self,
-        doc: &Document,
-        page_number: u32,
-    ) -> Result<Vec<TextFragment>> {
-        let bytes = doc.snapshot()?;
-        let pdfium = self.pdfium.borrow();
-        let pdf = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| Error::Pdf(format!("chargement pdfium : {e}")))?;
+    fn fragments_from_pdfium(&self, doc: &Document, page_number: u32) -> Result<Vec<TextFragment>> {
+        self.with_parsed(doc, |pdf| {
+            let page = Self::page(pdf, page_number)?;
+            let text = page
+                .text()
+                .map_err(|e| Error::Pdf(format!("texte de la page {page_number} : {e}")))?;
 
-        let pages = pdf.pages();
-        let index = u16::try_from(page_number.saturating_sub(1)).map_err(|_| {
-            Error::InvalidInput(format!("numéro de page hors limites : {page_number}"))
-        })?;
-        let page = pages
-            .get(index)
-            .map_err(|e| Error::Pdf(format!("page {page_number} introuvable : {e}")))?;
-        let text = page
-            .text()
-            .map_err(|e| Error::Pdf(format!("texte de la page {page_number} : {e}")))?;
-
-        let mut fragments = Vec::new();
-        for segment in text.segments().iter() {
-            // pdfium peut fusionner deux lignes visuelles dans un même
-            // segment : on garde le saut de ligne, normalisé.
-            let content = segment.text().replace("\r\n", "\n").replace('\r', "\n");
-            if content.trim().is_empty() {
-                continue;
-            }
-            let bounds = segment.bounds();
-            // Taille de police : celle du premier caractère du segment. Le
-            // rectangle sert de repli quand pdfium ne la donne pas.
-            let font_size = segment
-                .chars()
-                .ok()
-                .and_then(|chars| chars.iter().next().map(|c| c.scaled_font_size().value))
-                .filter(|size| *size > 0.0)
-                .unwrap_or_else(|| bounds.height().value);
-            // Boîtes réelles des glyphes : la sélection peut alors s'arrêter
-            // au caractère au lieu de prendre le segment entier.
-            let chars: Vec<TextChar> = segment
-                .chars()
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(|item| {
-                            let ch = item.unicode_char()?;
-                            if ch == '\r' || ch == '\n' {
-                                return None;
-                            }
-                            let box_ = item.tight_bounds().ok()?;
-                            Some(TextChar {
-                                ch,
-                                rect: [
-                                    box_.left().value,
-                                    box_.bottom().value,
-                                    box_.right().value,
-                                    box_.top().value,
-                                ],
+            let mut fragments = Vec::new();
+            for segment in text.segments().iter() {
+                // pdfium peut fusionner deux lignes visuelles dans un même
+                // segment : on garde le saut de ligne, normalisé.
+                let content = segment.text().replace("\r\n", "\n").replace('\r', "\n");
+                if content.trim().is_empty() {
+                    continue;
+                }
+                let bounds = segment.bounds();
+                // Taille de police : celle du premier caractère du segment. Le
+                // rectangle sert de repli quand pdfium ne la donne pas.
+                let font_size = segment
+                    .chars()
+                    .ok()
+                    .and_then(|chars| chars.iter().next().map(|c| c.scaled_font_size().value))
+                    .filter(|size| *size > 0.0)
+                    .unwrap_or_else(|| bounds.height().value);
+                // Boîtes réelles des glyphes : la sélection peut alors s'arrêter
+                // au caractère au lieu de prendre le segment entier.
+                let chars: Vec<TextChar> = segment
+                    .chars()
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| {
+                                let ch = item.unicode_char()?;
+                                if ch == '\r' || ch == '\n' {
+                                    return None;
+                                }
+                                let box_ = item.tight_bounds().ok()?;
+                                Some(TextChar {
+                                    ch,
+                                    rect: [
+                                        box_.left().value,
+                                        box_.bottom().value,
+                                        box_.right().value,
+                                        box_.top().value,
+                                    ],
+                                })
                             })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            fragments.push(TextFragment {
-                page: page_number as usize,
-                chars,
-                text: content,
-                rect: [
-                    bounds.left().value,
-                    bounds.bottom().value,
-                    bounds.right().value,
-                    bounds.top().value,
-                ],
-                font: None,
-                font_size: font_size.max(1.0),
-                color: [0, 0, 0],
-            });
-        }
-        Ok(fragments)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                fragments.push(TextFragment {
+                    page: page_number as usize,
+                    chars,
+                    text: content,
+                    rect: [
+                        bounds.left().value,
+                        bounds.bottom().value,
+                        bounds.right().value,
+                        bounds.top().value,
+                    ],
+                    font: None,
+                    font_size: font_size.max(1.0),
+                    color: [0, 0, 0],
+                });
+            }
+            Ok(fragments)
+        })
     }
 }
 
@@ -364,44 +459,29 @@ impl Renderer for PdfiumRenderer {
         page_number: u32,
         options: &RenderOptions,
     ) -> Result<PageBitmap> {
-        // Octets partagés via `Rc` : pas de re-sérialisation ni de copie
-        // complète du document à chaque page.
-        let bytes = doc.snapshot()?;
-        let pdfium = self.pdfium.borrow();
+        self.with_parsed(doc, |pdf| {
+            let page = Self::page(pdf, page_number)?;
 
-        let pdf = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| Error::Pdf(format!("chargement pdfium : {e}")))?;
+            let config = PdfRenderConfig::new()
+                .set_target_width((page.width().value * options.scale) as i32)
+                .set_maximum_height((page.height().value * options.scale) as i32)
+                .render_form_data(true)
+                .render_annotations(options.render_annotations)
+                .use_lcd_text_rendering(options.antialias);
 
-        let pages = pdf.pages();
-        // pdfium indexe les pages sur 16 bits : au-delà, la conversion
-        // tronquerait et rendrait la mauvaise page.
-        let index = u16::try_from(page_number.saturating_sub(1)).map_err(|_| {
-            Error::InvalidInput(format!("numéro de page hors limites : {page_number}"))
-        })?;
-        let page = pages
-            .get(index)
-            .map_err(|e| Error::Pdf(format!("page {page_number} introuvable : {e}")))?;
+            let bitmap = page
+                .render_with_config(&config)
+                .map_err(|e| Error::Pdf(format!("rendu de la page {page_number} : {e}")))?;
 
-        let config = PdfRenderConfig::new()
-            .set_target_width((page.width().value * options.scale) as i32)
-            .set_maximum_height((page.height().value * options.scale) as i32)
-            .render_form_data(true)
-            .render_annotations(options.render_annotations)
-            .use_lcd_text_rendering(options.antialias);
+            let width = bitmap.width() as u32;
+            let height = bitmap.height() as u32;
+            let pixels = bitmap.as_rgba_bytes();
 
-        let bitmap = page
-            .render_with_config(&config)
-            .map_err(|e| Error::Pdf(format!("rendu de la page {page_number} : {e}")))?;
-
-        let width = bitmap.width() as u32;
-        let height = bitmap.height() as u32;
-        let pixels = bitmap.as_rgba_bytes();
-
-        Ok(PageBitmap {
-            width,
-            height,
-            pixels,
+            Ok(PageBitmap {
+                width,
+                height,
+                pixels,
+            })
         })
     }
 
@@ -412,6 +492,18 @@ impl Renderer for PdfiumRenderer {
         match self.fragments_from_pdfium(doc, page_number) {
             Ok(fragments) if !fragments.is_empty() => Ok(fragments),
             _ => doc.extract_text_fragments(page_number),
+        }
+    }
+}
+
+impl Drop for PdfiumRenderer {
+    fn drop(&mut self) {
+        // Libérer le document parsé appelle `FPDF_CloseDocument` : c'est un
+        // appel pdfium comme un autre, à sérialiser avec les rendus des
+        // autres renderers.
+        if self.parsed.borrow().is_some() {
+            let _lock = pdfium_lock();
+            self.parsed.borrow_mut().take();
         }
     }
 }
@@ -455,6 +547,7 @@ impl Renderer for NullRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Annotation, AnnotationKind};
 
     /// Ancienne conversion, conservée comme référence de non-régression :
     /// elle construisait un tampon RGBA octet par octet puis le faisait
@@ -546,5 +639,129 @@ mod tests {
     fn canaux_preserves() {
         let image = PageBitmap::solid(1, 1, [0xFF, 0x00, 0x00, 0xFF]).to_egui_image();
         assert_eq!(image.pixels[0].to_array(), [0xFF, 0x00, 0x00, 0xFF]);
+    }
+
+    /// Page 612×792 portant un texte, pour que le rendu ne soit pas vide.
+    fn page_avec_texte() -> Vec<u8> {
+        use lopdf::{dictionary, Document as LopdfDoc, Object, Stream};
+
+        let mut doc = LopdfDoc::with_version("1.7");
+        let font = doc.add_object(dictionary! {
+            "Type" => Object::Name(b"Font".to_vec()),
+            "Subtype" => Object::Name(b"Type1".to_vec()),
+            "BaseFont" => Object::Name(b"Helvetica".to_vec()),
+        });
+        let content = doc.add_object(Stream::new(
+            dictionary! {},
+            b"BT /F1 24 Tf 60 700 Td (YouPDF) Tj ET".to_vec(),
+        ));
+        let page = doc.add_object(dictionary! {
+            "Type" => Object::Name(b"Page".to_vec()),
+            "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+            "Contents" => content,
+            "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+        });
+        let pages = doc.add_object(dictionary! {
+            "Type" => Object::Name(b"Pages".to_vec()),
+            "Kids" => Object::Array(vec![page.into()]),
+            "Count" => 1,
+        });
+        let catalog = doc.add_object(dictionary! {
+            "Type" => Object::Name(b"Catalog".to_vec()),
+            "Pages" => pages,
+        });
+        doc.trailer.set("Root", Object::Reference(catalog));
+        let mut out = Vec::new();
+        doc.save_to(&mut out).expect("écriture du PDF de test");
+        out
+    }
+
+    /// Pixels franchement jaunes : la trace du surlignage.
+    fn pixels_jaunes(bitmap: &PageBitmap) -> usize {
+        bitmap
+            .pixels
+            .chunks_exact(4)
+            .filter(|px| px[0] as i32 - px[2] as i32 > 40 && px[1] as i32 - px[2] as i32 > 30)
+            .count()
+    }
+
+    /// Renderer pdfium, ou `None` si la bibliothèque manque (test ignoré).
+    fn renderer() -> Option<PdfiumRenderer> {
+        match PdfiumRenderer::load() {
+            Ok(renderer) => Some(renderer),
+            Err(e) => {
+                eprintln!("pdfium indisponible : test ignoré ({e})");
+                None
+            }
+        }
+    }
+
+    /// Le document ne doit être parsé qu'une fois par révision : rendu et
+    /// extraction de texte successifs réutilisent le même `PdfDocument`.
+    #[test]
+    fn le_parseur_pdfium_est_reutilise() {
+        let Some(renderer) = renderer() else {
+            return;
+        };
+        let doc = Document::from_bytes(&page_avec_texte()).expect("ouverture");
+        let options = RenderOptions::default();
+
+        renderer
+            .render_page(&doc, 1, &options)
+            .expect("premier rendu");
+        assert_eq!(renderer.parses.get(), 1, "le premier rendu doit parser");
+
+        renderer
+            .render_page(&doc, 1, &options)
+            .expect("second rendu");
+        renderer.page_fragments(&doc, 1).expect("fragments");
+        assert_eq!(
+            renderer.parses.get(),
+            1,
+            "le document a été reparsé à révision constante"
+        );
+    }
+
+    /// Une modification du document doit invalider le parseur en cache : le
+    /// rendu suivant doit montrer le nouveau contenu, sous peine d'afficher
+    /// l'ancien document à l'écran.
+    #[test]
+    fn une_modification_invalide_le_parseur() {
+        let Some(renderer) = renderer() else {
+            return;
+        };
+        let mut doc = Document::from_bytes(&page_avec_texte()).expect("ouverture");
+        let options = RenderOptions::default();
+
+        let avant = renderer
+            .render_page(&doc, 1, &options)
+            .expect("rendu avant");
+        assert_eq!(pixels_jaunes(&avant), 0, "page déjà marquée ?");
+        assert_eq!(renderer.parses.get(), 1);
+
+        let generation = doc.generation();
+        doc.apply_annotations(&[Annotation::new(
+            1,
+            AnnotationKind::Highlight,
+            [100.0, 400.0, 400.0, 440.0],
+        )])
+        .expect("annotation");
+        assert!(
+            doc.generation() > generation,
+            "une mutation doit incrémenter la génération"
+        );
+
+        let apres = renderer
+            .render_page(&doc, 1, &options)
+            .expect("rendu après");
+        assert_eq!(
+            renderer.parses.get(),
+            2,
+            "le document modifié doit être reparsé"
+        );
+        assert!(
+            pixels_jaunes(&apres) > 0,
+            "le rendu ne reflète pas l'annotation ajoutée : parseur périmé"
+        );
     }
 }

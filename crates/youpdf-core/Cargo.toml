@@ -28,7 +28,14 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 flate2 = "1"
 
 # Rendu réel via pdfium (binaire embarqué).
-pdfium-render = { version = "0.8", features = ["bindings"] }
+#
+# `sync` rend `Pdfium` `Send + Sync`, ce qui permet de le garder dans un
+# `static OnceLock` : pdfium ne s'initialise qu'une fois par processus. Un
+# second `FPDF_InitLibrary` laisserait le mutex interne de `pdfium-render`
+# verrouillé et figerait le processus. La sécurité des appels concurrents
+# est assurée par notre propre verrou (`render::PDFIUM_LOCK`), pas par
+# cette option.
+pdfium-render = { version = "0.8", features = ["bindings", "sync"] }
 
 # Empaquetage des parties OOXML pour l'export Word / Excel / PowerPoint.
 # `deflate` suffit : les fichiers `.docx`/`.xlsx`/`.pptx` sont des ZIP
