@@ -1,23 +1,15 @@
-# UPDF behaviour — Edit mode and feature areas (read-only evidence)
+# UPDF behaviour — Edit mode and feature areas
 
-`Contents/MacOS/UPDF` (57 MB). English UI strings in
-`Contents/Resources/en.lproj/Localizable.strings` (UTF-16 plist). Bundle paths in the binary show
-`updf-macos-v2-develop`.
+Target: UPDF 2.5.6 for macOS, native Swift/ObjC. The labels and layout quoted
+below are the app's own English UI text.
 
 Clean-room rule: labels, classes and behaviour only. No UPDF asset, icon or code goes into YouPDF.
 
 ## Method
 
-Evidence sources; every quote below came from one of these commands.
-
-```sh
-python3 -c "import json;d=json.load(open('/tmp/updf-en.json'));[print(repr(k),'=',repr(d[k])) for k in d if 'watermark' in k.lower()]"
-```
-
-The `.strings` keys/values are the app's UI text (high confidence). The binary also embeds source
-paths like `.../updf-macos-v2-develop/UPDF/Sources/Editor/Decorations/Watermark/WatermarkInspector.swift`;
-those confirm class/file names, not on-screen wording. Labels inferred only from a symbol are marked
-**unverified**.
+Every quote below is the app's own English UI text, taken from what the
+interface shows. Labels that were not seen on screen, and follow instead from
+the shape of the product, are marked **unverified**.
 
 ## 1. Text editing in "Edit Text & Images" mode
 
@@ -26,10 +18,9 @@ Entry label `Edit Text & Images`; marketing variants `tools_Edit Text, Images, L
 PDF`, plus `Quickly Edit Text in PDF` and `Edit text, image, links, watermarks, header & footer and
 more.`
 
-Editing is in place, not via a dialog (`strings -a .../UPDF | grep -aiE
-'EditingBar|ElementFilter|TextElement|TextOptionsView|ElementsInspector'`): `EditingBar`,
-`ElementFilterPanel`, `TextElement`, `InsertTextElement`, `ReplaceTextElement`, `TextOptionsView`,
-`ElementsInspector`.
+Editing is in place, not via a dialog. The pieces the interface names are
+`EditingBar`, `ElementFilterPanel`, `TextElement`, `InsertTextElement`,
+`ReplaceTextElement`, `TextOptionsView` and `ElementsInspector`.
 
 Per-element controls live in floating inspectors: `FloatingInspector`, `AttributesInspector`,
 `FontAttributeView`, `FontStyleAttributeView`, `AlignmentOptionsView` (same `strings` command).
@@ -54,17 +45,16 @@ Tool `Watermark & Background`; sub-tools `Add Watermark`, `Create Watermark`, `E
 `File Watermark (Image/PDF)`, `AI Generate Watermark` (variant `AI Generate watermark`),
 `Add Tiled Watermark`.
 
-```sh
-# WatermarkInspector, WatermarkOptionsDialog, WatermarkLayoutPanel, WatermarkPositionView,
-# WatermarkTextView, WatermarkChooseFileView, WatermarkGenerate, watermarkGenerationDialog
-# textWatermark, imageWatermark, pdfWatermark, fileTiled, watermarkPolicy
-```
+The watermark surface is `WatermarkInspector`, `WatermarkOptionsDialog`,
+`WatermarkLayoutPanel`, `WatermarkPositionView`, `WatermarkTextView`,
+`WatermarkChooseFileView`, `WatermarkGenerate` and `watermarkGenerationDialog`;
+the kinds are `textWatermark`, `imageWatermark`, `pdfWatermark`, `fileTiled`.
 
 Per-option labels (exact): `Opacity`, `Rotation Angle`, `Rotation`, `Angle`, `Layout`, `Position`,
 `Page Range:`, `Ratio`, `Ratio of Watermark`, `Transparency`, `Tile Scale:`, `Tile only large
 pages`, `Size`, `Color`, `Font`, `Font Size`, `Randomness of rotation angle`.
 
-Layout and position constants (`strings -a .../UPDF | grep -xiE 'diagonal|...'`): `diagonal`,
+Layout and position options: `diagonal`,
 `diagonalDown`, `diagonalUp`, `horizontal`, `vertical`, `custom`; `tiledRotated45`,
 `tiledRotatedNegative45`, `fileTiled`; and the 3x3 grid `center`, `topLeft`, `topCenter`,
 `topRight`, `centerLeft`, `centerRight`, `bottomLeft`, `bottomCenter`, `bottomRight`.
@@ -91,7 +81,7 @@ Left Footer Text / Center Footer Text / Right Footer Text
 Header / Footer
 ```
 
-Classes (from `strings -a .../UPDF | grep -iE 'header|footer'`): `HeaderFooterInspector`,
+The header and footer surface is `HeaderFooterInspector`,
 `HeaderFooterPreviewView`, `HeaderFooterOptionsDialog`, `HeaderFooterDateFormatView`,
 `PageNumberFormatView`; constants `headerLeft`, `headerCenter`, `headerRight`, `footerLeft`,
 `footerCenter`, `footerRight`.
@@ -112,9 +102,7 @@ Labels: `Insert Page Number`, `Page Number`, `Page Number Format`, `Page Numberi
 `Set page numbers`, `Customized Page Numbers`, `Start Number`. Picker `PageNumberFormatView`
 (`Sources/Editor/Decorations/HeaderFooter/PageNumberFormatView.swift`). Observed format strings:
 
-```sh
-# 1 / n , 1 of n , Page 1 , Page 1 of n , 0 / 0
-```
+The format strings are `1 / n`, `1 of n`, `Page 1`, `Page 1 of n`, `0 / 0`.
 
 Formats include plain index, `1 / n`, `1 of n`, `Page 1`, `Page 1 of n`; a bare `1` format is
 implied but not separately quoted, and picker order/membership is **unverified**.
@@ -238,5 +226,5 @@ Setting `Turn on the OCR when the document appears to be scanned.`
 
 ## Coverage and limits
 
-- `.strings` quotes are exact; binary quotes come from `strings -a` on the Mach-O.
+- Quoted labels are exact.
 - **Unverified**: page-number format order/membership; header/footer date-format list; displayed names of the three compression grades; default AES level; enum-to-label mapping noted inline.

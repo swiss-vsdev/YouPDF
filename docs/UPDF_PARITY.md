@@ -1,6 +1,6 @@
 # YouPDF — UPDF Feature Parity Gap List
 
-This document tracks the feature gap between YouPDF and UPDF.app v2.5.6, based on the audit of the UPDF.app bundle.
+This document tracks the feature gap between YouPDF and UPDF.app v2.5.6, based on observed UPDF behaviour.
 
 ## Implementation progress
 

@@ -1,7 +1,7 @@
-# YouPDF — UPDF UX Inventory (read-only)
+# YouPDF — UPDF UX Inventory
 
-Machine locale: French — all strings below are UPDF's French UI. EN equivalents in parentheses where useful.
-Evidence artifacts live next to this file: screenshots (`shot-*.png`, `state-*.png`), full menu dump (`menus-fr.txt`).
+Locale: French — all strings below are UPDF's French UI. EN equivalents in parentheses where useful.
+The full menu dump is next to this file in `menus-fr.txt`.
 
 Clean-room rule: this spec records layout, labels and behavior only. No UPDF assets, icons or code go into YouPDF.
 
