@@ -2,6 +2,7 @@
 
 mod ai;
 mod app;
+mod fonts;
 mod home;
 mod inspector;
 
