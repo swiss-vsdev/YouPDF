@@ -26,7 +26,7 @@ This document tracks YouPDF's feature parity against **/Applications/UPDF.app** 
 | **09. Security & Signatures** | REA §09 | 🟡 | AES-256 R6, 2-phase redaction, PKCS#7 window with cert manager + validation banner. No AES-128 |
 | **10. Office Export & Conversion** | REA §10 | ✅ | Word (DOCX framePr), Excel (XLSX), PPTX, PNG/JPEG/TIFF, long image, TXT/MD/HTML/RTF/CSV/XML, PDF/A-1b |
 | **11. OCR Engine** | REA §11 | ✅ | Tesseract (48 languages), 3 output modes (Searchable, Editable, Text+Image), scanned PDF auto-detect banner |
-| **12. Measurement & Compare** | REA §12 | 🟡 | Distance/perimeter/area drag box, scale calibration. Compare has side-by-side + report; no synchronized scroll or overlay blend |
+| **12. Measurement & Compare** | REA §12 | ✅ | Distance/perimeter/area drag box, scale calibration. Compare: text report, side-by-side with shared page navigation and per-page difference highlights, overlay blend with opacity slider |
 | **13. Batch Processing** | REA §13 | ✅ | File queue table (progress, ETA, cancel), 12 operations (convert, OCR, combine, insert, watermark, etc.) |
 | **14. Settings & Localization** | REA §14 | ✅ | Prefs window (General, Appearance, Document, AI). `t()` wired across the whole UI (363-entry EN/FR dictionary, coverage gate in `scripts/i18n_extract.py`) |
 
@@ -34,16 +34,15 @@ This document tracks YouPDF's feature parity against **/Applications/UPDF.app** 
 
 ## Open Parity Gaps
 
-The remaining work for total 1-to-1 feature parity:
+No open gaps. The last three closed:
 
-1. **Task 12.2 — PDF Comparison Engine View Modes**
-   - **Status:** Side-by-side view with shared page navigation, ignore-whitespace/case options, text report.
-   - **Missing:** Synchronized scrolling, difference overlay blend mode, side-by-side difference highlights.
-
-Done since the last audit: **Task 4.2** — content element arrange: hit-test
-selection, drag-to-move, corner resize handles, free-angle rotation
-(`rotate_image`), z-order (`set_image_z_order`). **Task 14.2** — i18n
-wiring (`f1a6f64`).
+- **Task 12.2** (`c37981a`) — compare view modes: side-by-side with shared
+  page navigation and per-page difference highlights, overlay blend with an
+  opacity slider, text report.
+- **Task 4.2** (`e21c6f6`) — content element arrange: hit-test selection,
+  drag-to-move, corner resize handles, free-angle rotation
+  (`rotate_image`), z-order (`set_image_z_order`).
+- **Task 14.2** (`f1a6f64`) — full i18n wiring.
 
 ---
 
