@@ -17,16 +17,15 @@
 
 ## Open Parity Gaps
 
-The remaining work for total 1-to-1 feature parity:
+No open gaps. The last three closed:
 
-1. **Task 12.2 — PDF Comparison Engine View Modes**
-   - **Status:** Side-by-side view with shared page navigation, ignore-whitespace/case options, text report.
-   - **Missing:** Synchronized scrolling, difference overlay blend mode, side-by-side difference highlights.
-
-Done since the last audit: **Task 4.2** — content element arrange: hit-test
-selection, drag-to-move, corner resize handles, free-angle rotation
-(`rotate_image`), z-order (`set_image_z_order`). **Task 14.2** — i18n
-wiring (`f1a6f64`).
+- **Task 12.2** (`c37981a`) — compare view modes: side-by-side with shared
+  page navigation and per-page difference highlights, overlay blend with an
+  opacity slider, text report.
+- **Task 4.2** (`e21c6f6`) — content element arrange: hit-test selection,
+  drag-to-move, corner resize handles, free-angle rotation
+  (`rotate_image`), z-order (`set_image_z_order`).
+- **Task 14.2** (`f1a6f64`) — full i18n wiring.
 
 ---
 
