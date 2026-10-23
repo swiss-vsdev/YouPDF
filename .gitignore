@@ -1,3 +1,5 @@
 /target
 .DS_Store
 *.dSYM
+/docs/rea
+/docs/subagents
