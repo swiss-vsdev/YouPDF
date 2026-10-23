@@ -341,10 +341,14 @@ fn cell_gap_threshold(line: &Line) -> f32 {
 fn table_runs(lines: &[Line]) -> Vec<Vec<usize>> {
     let mut runs: Vec<Vec<usize>> = Vec::new();
     let mut current: Vec<usize> = Vec::new();
+    // Colonnes de référence, triées : le test d'appartenance passe d'une
+    // scan linéaire O(r) par cellule (O(l·r) au total, l=r=colonnes) à une
+    // recherche binaire O(log r), donc O(l·log r).
     let mut columns: Vec<f32> = Vec::new();
 
     for (index, line) in lines.iter().enumerate() {
-        let line_columns: Vec<f32> = cells_of(line).into_iter().map(|c| c.x).collect();
+        let mut line_columns: Vec<f32> = cells_of(line).into_iter().map(|c| c.x).collect();
+        line_columns.sort_unstable_by(|a, b| a.total_cmp(b));
 
         if current.is_empty() {
             columns = line_columns;
@@ -354,7 +358,7 @@ fn table_runs(lines: &[Line]) -> Vec<Vec<usize>> {
 
         let shared = line_columns
             .iter()
-            .filter(|x| columns.iter().any(|column| (column - **x).abs() <= COLUMN_TOL))
+            .filter(|x| columns_within_tol(columns.as_slice(), **x))
             .count();
 
         if shared >= MIN_TABLE_COLUMNS {
@@ -375,6 +379,28 @@ fn table_runs(lines: &[Line]) -> Vec<Vec<usize>> {
     }
 
     runs
+}
+
+/// Vrai si `columns` (trié) contient une valeur à `COLUMN_TOL` près de `x`.
+///
+/// Recherche binaire sur la borne inférieure, puis vérification de la
+/// valeur la plus proche : O(log n) au lieu d'un scan O(n).
+fn columns_within_tol(columns: &[f32], x: f32) -> bool {
+    match columns.binary_search_by(|c| c.total_cmp(&x)) {
+        // Égalité exacte.
+        Ok(_) => true,
+        // Position d'insertion : vérifier le voisin de gauche (le plus
+        // proche inférieur) et le voisin de droite (le plus proche
+        // supérieur), l'un ou l'autre peut être dans la tolérance.
+        Err(ins) => {
+            columns
+                .get(ins.saturating_sub(1))
+                .is_some_and(|c| (c - x).abs() <= COLUMN_TOL)
+                || columns
+                    .get(ins)
+                    .is_some_and(|c| (c - x).abs() <= COLUMN_TOL)
+        }
+    }
 }
 
 /// Sépare un libellé de sa valeur.
