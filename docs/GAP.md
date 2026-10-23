@@ -18,7 +18,7 @@ This document tracks YouPDF's feature parity against **/Applications/UPDF.app** 
 | **01. Window Chrome & Navigation** | REA §01 | ✅ | Tabs (pin/reorder/close), Home screen (Recents/Starred/Tools, grid/list, thumbnails), docked status bar |
 | **02. Left Rail & Side Panels** | REA §02 | ✅ | 8 rail tools (Organize, Search, Thumbnails, Bookmarks, Comments, Forms, Attachments, Aspect) |
 | **03. Floating Inspectors & Mode Toolbars** | REA §03 | ✅ | Mode pills (Comment/Edit/Form/Redact), floating inspector (text, image, annot, form) |
-| **04. Content Editing Engine** | REA §04 | 🟡 | Caret navigation, typing, backspace, replace. **Gap 4.2:** No handles, no drag-to-move/scale, no z-order |
+| **04. Content Editing Engine** | REA §04 | 🟡 | Caret navigation, typing, backspace, replace. **Gap 4.2:** drag-to-move and z-order are done; resize/rotation handles still missing |
 | **05. Commenting & Annotations** | REA §05 | ✅ | Markup (4 types), smooth ink + 2-mode eraser, callout, 12 dynamic stamps, custom stamp, signature creator |
 | **06. Form Builder & Filling** | REA §06 | 🟡 | Reader fill (text, check, radio, combo), Form Prep canvas, guides, 6-tab properties. Push buttons unhandled, no date picker |
 | **07. Organize Pages Surface** | REA §07 | ✅ | Full-window grid, select odd/even/all, rotate, delete (confirmed), extract, insert, replace, split |
@@ -26,9 +26,9 @@ This document tracks YouPDF's feature parity against **/Applications/UPDF.app** 
 | **09. Security & Signatures** | REA §09 | 🟡 | AES-256 R6, 2-phase redaction, PKCS#7 window with cert manager + validation banner. No AES-128 |
 | **10. Office Export & Conversion** | REA §10 | ✅ | Word (DOCX framePr), Excel (XLSX), PPTX, PNG/JPEG/TIFF, long image, TXT/MD/HTML/RTF/CSV/XML, PDF/A-1b |
 | **11. OCR Engine** | REA §11 | ✅ | Tesseract (48 languages), 3 output modes (Searchable, Editable, Text+Image), scanned PDF auto-detect banner |
-| **12. Measurement & Compare** | REA §12 | 🟡 | Distance/perimeter/area drag box, scale calibration. **Gap 12.2:** Compare is a text-diff report only |
+| **12. Measurement & Compare** | REA §12 | 🟡 | Distance/perimeter/area drag box, scale calibration. Compare has side-by-side + report; no synchronized scroll or overlay blend |
 | **13. Batch Processing** | REA §13 | ✅ | File queue table (progress, ETA, cancel), 12 operations (convert, OCR, combine, insert, watermark, etc.) |
-| **14. Settings & Localization** | REA §14 | ✅ | Prefs window (General, Appearance, Document, AI). `t()` wired across the whole UI (351-entry EN/FR dictionary, coverage gate in `scripts/i18n_extract.py`) |
+| **14. Settings & Localization** | REA §14 | ✅ | Prefs window (General, Appearance, Document, AI). `t()` wired across the whole UI (363-entry EN/FR dictionary, coverage gate in `scripts/i18n_extract.py`) |
 
 ---
 
@@ -37,16 +37,15 @@ This document tracks YouPDF's feature parity against **/Applications/UPDF.app** 
 These represent all remaining work for total 1-to-1 feature parity:
 
 1. **Task 4.2 — Content Element Arrange**
-   - **Status:** Foundation only (`ContentElement`, `ContentDrag`, `ContentKind` types exist in `youpdf-app`).
-   - **Missing:** Canvas hit-test dispatch in Edit mode, corner/edge resize handles, rotation handle, drag-to-move/scale, z-order reordering (Bring to Front, Send to Back).
+   - **Status:** Drag-to-move (images via `set_image_matrix`, text blocks via `replace_text_fragment_at`) and z-order (`set_image_z_order`) are implemented.
+   - **Missing:** Corner/edge resize handles, rotation handle, drag-to-scale.
 
 2. **Task 12.2 — PDF Comparison Engine View Modes**
-   - **Status:** Text-diff report implemented (`youpdf-core/src/compare.rs`).
-   - **Missing:** Dual-document side-by-side synchronized scrolling, difference overlay blend mode, side-by-side difference highlights.
+   - **Status:** Side-by-side view with shared page navigation, ignore-whitespace/case options, text report.
+   - **Missing:** Synchronized scrolling, difference overlay blend mode, side-by-side difference highlights.
 
 3. **Task 14.2 — Full Localization (i18n) Wiring**
-   - **Status:** Dictionary implemented (`youpdf-shared/src/i18n.rs`, 110 entries).
-   - **Missing:** Wiring `t("...")` across the remaining UI surfaces (status bar, sidebars, floating inspector, dialogs, toolbars).
+   - **Status:** ✅ Done (`f1a6f64`) — 333 call sites wrapped across 12 modules; 363-entry EN/FR dictionary; coverage gate passes (0 missing, 0 dead).
 
 ---
 
