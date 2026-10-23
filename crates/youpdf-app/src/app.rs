@@ -7033,7 +7033,49 @@ impl YouPdfApp {
         }
     }
 
-    /// Applique un glissé-déplacer sur l'image sélectionnée.\n    ///\n    /// L'offset est en coordonnées écran ; on le convertit en points de\n    /// page (repère PDF, y vers le haut) avant d'écrire la matrice. Le geste\n    /// ne réencode aucun pixel : la translation est appliquée à `(e, f)`.\n    fn commit_image_move(\n        &mut self,\n        selected: &SelectedImage,\n        offset: [f32; 2],\n        scale: f32,\n        ctx: &egui::Context,\n    ) {\n        let Some(tab) = self.tabs.get_mut(self.active) else {\n            return;\n        };\n        let Some(info) = tab\n            .doc\n            .extract_images(selected.page as u32)\n            .ok()\n            .and_then(|list| list.into_iter().find(|i| i.resource_name == selected.name))\n        else {\n            return;\n        };\n        let dx = offset[0] / scale.max(0.001);\n        let dy = -offset[1] / scale.max(0.001);\n        let matrix = match tab.doc.image_matrix(&info) {\n            Ok(Some(m)) => m,\n            _ => [1.0, 0.0, 0.0, 1.0, dx, dy],\n        };\n        let mut moved = matrix;\n        moved[4] += dx;\n        moved[5] += dy;\n        match tab.doc.set_image_matrix(&info, moved) {\n            Ok(()) => {\n                self.mark_document_changed();\n                self.refresh_selected_image();\n                self.toast(ctx, \"Image moved\");\n            }\n            Err(err) => self.toast(ctx, format!(\"Move failed: {err}\")),\n        }\n    }\n\n    /// Déplace un bloc de texte en réécrivant son emplacement cible.
+    /// Applique un glissé-déplacer sur l'image sélectionnée.
+    ///
+    /// L'offset est en coordonnées écran ; on le convertit en points de
+    /// page (repère PDF, y vers le haut) avant d'écrire la matrice. Le geste
+    /// ne réencode aucun pixel : la translation est appliquée à `(e, f)`.
+    fn commit_image_move(
+        &mut self,
+        selected: &SelectedImage,
+        offset: [f32; 2],
+        scale: f32,
+        ctx: &egui::Context,
+    ) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let Some(info) = tab
+            .doc
+            .extract_images(selected.page as u32)
+            .ok()
+            .and_then(|list| list.into_iter().find(|i| i.resource_name == selected.name))
+        else {
+            return;
+        };
+        let dx = offset[0] / scale.max(0.001);
+        let dy = -offset[1] / scale.max(0.001);
+        let matrix = match tab.doc.image_matrix(&info) {
+            Ok(Some(m)) => m,
+            _ => [1.0, 0.0, 0.0, 1.0, dx, dy],
+        };
+        let mut moved = matrix;
+        moved[4] += dx;
+        moved[5] += dy;
+        match tab.doc.set_image_matrix(&info, moved) {
+            Ok(()) => {
+                self.mark_document_changed();
+                self.refresh_selected_image();
+                self.toast(ctx, "Image moved");
+            }
+            Err(err) => self.toast(ctx, format!("Move failed: {err}")),
+        }
+    }
+
+    /// Déplace un bloc de texte en réécrivant son emplacement cible.
     ///
     /// L'offset écran est converti en points de page (y inversé) et ajouté
     /// au rectangle du fragment. Le texte, la police et la tailre sont
@@ -9558,6 +9600,9 @@ impl YouPdfApp {
         // le canevas emprunte déjà `self.tabs`, et le champ posé sur la page
         // doit pouvoir modifier son tampon pendant la boucle.
         let mut draft = self.edit_text.take();
+        // Le glissé d'un élément de contenu est pris hors de `self` : la boucle
+        // du canevas emprunte déjà les onglets et le moteur de rendu.
+        let mut content_drag = self.content_drag.take();
         // Couleur du fond sous le bloc réécrit : lue avant que `self.tabs` ne
         // soit emprunté, `self` n'est plus accessible dans la boucle.
         let mask_bg = match draft.as_ref() {
@@ -9654,6 +9699,8 @@ impl YouPdfApp {
         let selected_image = self.selected_image.clone();
         let crop_draft = self.image_crop;
         let mut crop_next: Option<ImageCrop> = None;
+        let mut pending_text_move: Option<(TextFragment, [f32; 2], f32)> = None;
+        let mut pending_image_move: Option<(SelectedImage, [f32; 2], f32)> = None;
 
         // Réserve pour les barres flottantes : les pages commencent sous la
         // barre d'outils, sinon la première page passe dessous.
@@ -10086,6 +10133,46 @@ impl YouPdfApp {
                                         page_rect.max.y - y1 * scale,
                                     ),
                                 );
+                                // Barre de préhension au-dessus du champ : le
+                                // champ lui-même doit garder ses clics pour le
+                                // curseur, donc seul le bandeau déplace.
+                                let grip = Rect::from_min_size(
+                                    pos2(block.min.x, block.min.y - 14.0),
+                                    vec2(block.width(), 14.0),
+                                );
+                                let grip_resp = ui.interact(
+                                    grip,
+                                    Id::new("YouPDF text block drag").with(page),
+                                    Sense::drag(),
+                                );
+                                if grip_resp.drag_started() {
+                                    if let Some(pos) = grip_resp.interact_pointer_pos() {
+                                        content_drag = Some(ContentDrag::Move {
+                                            start: [pos.x, pos.y],
+                                            offset: [0.0, 0.0],
+                                        });
+                                    }
+                                }
+                                let mut offset = [0.0_f32; 2];
+                                let mut move_pending: Option<(TextFragment, [f32; 2])> = None;
+                                if let Some(ContentDrag::Move { start, offset: o }) =
+                                    content_drag.as_mut()
+                                {
+                                    if let Some(pos) = grip_resp.interact_pointer_pos() {
+                                        *o = [pos.x - start[0], pos.y - start[1]];
+                                    }
+                                    offset = *o;
+                                    if grip_resp.drag_stopped() {
+                                        move_pending =
+                                            Some((d.fragment.clone(), offset));
+                                        content_drag = None;
+                                    }
+                                }
+                                let block = block.translate(vec2(offset[0], offset[1]));
+                                if let Some((fragment, off)) = move_pending {
+                                    pending_text_move =
+                                        Some((fragment, off, scale));
+                                }
                                 // Un seul masque, au moins aussi grand que le
                                 // bloc d'origine *et* que le champ : sinon les
                                 // jambages dépassent au-dessus et en dessous,
@@ -10108,6 +10195,11 @@ impl YouPdfApp {
                                     field,
                                     2.0,
                                     Stroke::new(1.0_f32, pal().accent),
+                                );
+                                ui.painter().rect_filled(
+                                    grip.translate(vec2(offset[0], offset[1])),
+                                    Rounding::same(2.0),
+                                    pal().accent,
                                 );
                                 let ink = Color32::from_rgb(
                                     d.style.color[0],
@@ -10238,7 +10330,7 @@ impl YouPdfApp {
                     if let Some(image) = &selected_image {
                         if image.page == page as usize {
                             let [x1, y1, x2, y2] = image.rect;
-                            let box_screen = Rect::from_two_pos(
+                            let mut box_screen = Rect::from_two_pos(
                                 pos2(
                                     page_rect.min.x + x1 * scale,
                                     page_rect.max.y - y2 * scale,
@@ -10248,6 +10340,43 @@ impl YouPdfApp {
                                     page_rect.max.y - y1 * scale,
                                 ),
                             );
+                            // Glisser-déposer pour déplacer l'image : la
+                            // matrice qui la dessine est modifiée au
+                            // relâchement, sans réencodage des pixels. Le
+                            // cadre suit le curseur pendant le glissé.
+                            if crop_draft.is_none() {
+                                let drag_resp = ui.interact(
+                                    box_screen,
+                                    Id::new("YouPDF image drag").with(page),
+                                    Sense::drag(),
+                                );
+                                if drag_resp.drag_started() {
+                                    if let Some(pos) = drag_resp.interact_pointer_pos() {
+                                        content_drag = Some(ContentDrag::Move {
+                                            start: [pos.x, pos.y],
+                                            offset: [0.0, 0.0],
+                                        });
+                                    }
+                                }
+                                let mut offset = [0.0_f32; 2];
+                                if let Some(ContentDrag::Move { start, offset: o }) =
+                                    content_drag.as_mut()
+                                {
+                                    if let Some(pos) = drag_resp.interact_pointer_pos() {
+                                        *o = [pos.x - start[0], pos.y - start[1]];
+                                    }
+                                    offset = *o;
+                                    if drag_resp.drag_stopped() {
+                                        pending_image_move =
+                                            Some((image.clone(), offset, scale));
+                                        content_drag = None;
+                                    }
+                                }
+                                if offset != [0.0, 0.0] {
+                                    box_screen =
+                                        box_screen.translate(vec2(offset[0], offset[1]));
+                                }
+                            }
                             ui.painter().rect_stroke(
                                 box_screen,
                                 Rounding::same(2.0),
@@ -10972,6 +11101,14 @@ impl YouPdfApp {
         self.last_page_y = first_page_y;
 
         self.edit_text = draft;
+        self.content_drag = content_drag;
+        if let Some((fragment, off, scale)) = pending_text_move {
+            self.commit_text_block_move(&fragment, off, scale, &ctx);
+            self.edit_text = None;
+        }
+        if let Some((image, off, scale)) = pending_image_move {
+            self.commit_image_move(&image, off, scale, &ctx);
+        }
         self.form_edit = form_draft;
         if form_cancel {
             self.form_edit = None;
