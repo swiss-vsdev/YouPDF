@@ -3856,7 +3856,6 @@ impl YouPdfApp {
 
     /// Indice du tracé de crayon réellement touché à `point`, en ignorant les
     /// boîtes englobantes vides.
-    #[allow(dead_code)]
     fn ink_hit_test(&self, page: usize, point: [f32; 2]) -> Option<usize> {
         let tab = self.tabs.get(self.active)?;
         tab.annots
@@ -10854,6 +10853,15 @@ impl YouPdfApp {
                     };
                     self.callout_pending = pending;
                 }
+                ToolAction::Erase => {
+                    // Mode trait : un clic efface le trait entier sous le
+                    // pointeur. Tous ses tracés partent avec lui — c'est la
+                    // différence avec le mode segment, qui n'en coupe qu'un
+                    // morceau.
+                    if let Some(idx) = self.ink_hit_test(page, point) {
+                        self.remove_annot(idx);
+                    }
+                }
                 _ => {}
             }
         }
@@ -11140,7 +11148,8 @@ impl YouPdfApp {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned());
-        let exists = path.is_file();
+        let meta = path.metadata().ok();
+        let exists = meta.as_ref().is_some_and(|m| m.is_file());
         let starred = home::is_star(&self.stars, path);
 
         // Vignette de la première page, ou glyphe de repli.
@@ -11178,11 +11187,12 @@ impl YouPdfApp {
             pos2(text_x, rect.min.y + 165.0),
             Align2::LEFT_CENTER,
             if exists {
-                let size = std::fs::metadata(path)
+                let size = meta
+                    .as_ref()
                     .map(|m| format_size(m.len() as usize))
-                    .unwrap_or_else(|_| "—".to_owned());
-                let age = std::fs::metadata(path)
-                    .ok()
+                    .unwrap_or_else(|| "—".to_owned());
+                let age = meta
+                    .as_ref()
                     .and_then(|m| m.modified().ok())
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| home::relative_time(d.as_secs() as i64, now))
@@ -11274,7 +11284,8 @@ impl YouPdfApp {
                 .parent()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let exists = path.is_file();
+            let meta = path.metadata().ok();
+            let exists = meta.as_ref().is_some_and(|m| m.is_file());
             let starred = home::is_star(&self.stars, path);
 
             ui.horizontal(|ui| {
@@ -11293,11 +11304,12 @@ impl YouPdfApp {
                     if exists { pal().icon_bright } else { pal().muted },
                 );
                 let detail = if exists {
-                    let size = std::fs::metadata(path)
+                    let size = meta
+                        .as_ref()
                         .map(|m| format_size(m.len() as usize))
-                        .unwrap_or_else(|_| "—".to_owned());
-                    let age = std::fs::metadata(path)
-                        .ok()
+                        .unwrap_or_else(|| "—".to_owned());
+                    let age = meta
+                        .as_ref()
                         .and_then(|m| m.modified().ok())
                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                         .map(|d| home::relative_time(d.as_secs() as i64, now))
