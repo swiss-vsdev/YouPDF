@@ -7075,6 +7075,36 @@ impl YouPdfApp {
         }
     }
 
+    /// Applique un redimensionnement à l'image sélectionnée : la matrice
+    /// `(a, d)` est étirée et `(e, f)` est déplacée pour que le coin tenu
+    /// reste collé au curseur. Les pixels ne sont pas réencodés.
+    fn commit_image_scale(
+        &mut self,
+        selected: &SelectedImage,
+        matrix: [f32; 6],
+        ctx: &egui::Context,
+    ) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let Some(info) = tab
+            .doc
+            .extract_images(selected.page as u32)
+            .ok()
+            .and_then(|list| list.into_iter().find(|i| i.resource_name == selected.name))
+        else {
+            return;
+        };
+        match tab.doc.set_image_matrix(&info, matrix) {
+            Ok(()) => {
+                self.mark_document_changed();
+                self.refresh_selected_image();
+                self.toast(ctx, "Image resized");
+            }
+            Err(err) => self.toast(ctx, format!("Resize failed: {err}")),
+        }
+    }
+
     /// Déplace un bloc de texte en réécrivant son emplacement cible.
     ///
     /// L'offset écran est converti en points de page (y inversé) et ajouté
@@ -9701,6 +9731,7 @@ impl YouPdfApp {
         let mut crop_next: Option<ImageCrop> = None;
         let mut pending_text_move: Option<(TextFragment, [f32; 2], f32)> = None;
         let mut pending_image_move: Option<(SelectedImage, [f32; 2], f32)> = None;
+        let mut pending_image_scale: Option<(SelectedImage, [f32; 6])> = None;
 
         // Réserve pour les barres flottantes : les pages commencent sous la
         // barre d'outils, sinon la première page passe dessous.
@@ -10387,6 +10418,106 @@ impl YouPdfApp {
                                 id: ImageId(image.index),
                                 bounds: box_screen,
                             });
+                            // Poignées de redimensionnement sur les quatre coins :
+                            // un glissé étire la matrice (a, d) et déplace (e, f)
+                            // pour que le coin tenu reste collé au curseur. Les
+                            // pixels ne sont pas réencodés, la surface est
+                            // étirée comme dans le test d'engine.
+                            if crop_draft.is_none() {
+                                let mx1 = box_screen.min.x;
+                                let my1 = box_screen.max.y;
+                                let mx2 = box_screen.max.x;
+                                let my2 = box_screen.min.y;
+                                let mut scale_pending: Option<[f32; 6]> = None;
+                                for (handle, corner) in [
+                                    ("YouPDF resize tl", pos2(mx1, my1)),
+                                    ("YouPDF resize tr", pos2(mx2, my1)),
+                                    ("YouPDF resize bl", pos2(mx1, my2)),
+                                    ("YouPDF resize br", pos2(mx2, my2)),
+                                ] {
+                                    let centre = ui.painter().round_pos_to_pixels(corner);
+                                    let resp = ui.interact(
+                                        Rect::from_center_size(centre, vec2(12.0, 12.0)),
+                                        Id::new(handle),
+                                        Sense::drag(),
+                                    );
+                                    ui.painter().rect_filled(
+                                        Rect::from_center_size(centre, vec2(8.0, 8.0)),
+                                        Rounding::same(2.0),
+                                        if resp.hovered() || resp.dragged() {
+                                            pal().accent
+                                        } else {
+                                            pal().icon_bright
+                                        },
+                                    );
+                                    if !resp.dragged() {
+                                        continue;
+                                    }
+                                    let Some(pointer) = resp.interact_pointer_pos() else {
+                                        continue;
+                                    };
+                                    let info = tab
+                                        .doc
+                                        .extract_images(image.page as u32)
+                                        .ok()
+                                        .and_then(|list| {
+                                            list.into_iter()
+                                                .find(|i| i.resource_name == image.name)
+                                        });
+                                    let [a, b, c, d, e, f] = match info.and_then(|i| {
+                                        tab.doc.image_matrix(&i).ok().flatten()
+                                    }) {
+                                        Some(m) => m,
+                                        None => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                                    };
+                                    // La poignée fixe le coin qui reste collé au curseur :
+                                    // la largeur et la hauteur se mesurent à partir de
+                                    // ce coin, pas toujours du haut-gauche.
+                                    let (px1, py1, px2, py2) = match handle {
+                                        "YouPDF resize tl" => (
+                                            box_screen.min.x,
+                                            box_screen.max.y,
+                                            box_screen.max.x,
+                                            box_screen.min.y,
+                                        ),
+                                        "YouPDF resize tr" => (
+                                            box_screen.max.x,
+                                            box_screen.max.y,
+                                            box_screen.min.x,
+                                            box_screen.min.y,
+                                        ),
+                                        "YouPDF resize bl" => (
+                                            box_screen.min.x,
+                                            box_screen.min.y,
+                                            box_screen.max.x,
+                                            box_screen.max.y,
+                                        ),
+                                        _ => (
+                                            box_screen.max.x,
+                                            box_screen.min.y,
+                                            box_screen.min.x,
+                                            box_screen.max.y,
+                                        ),
+                                    };
+                                    let nw = (pointer.x - px1).abs().max(0.001);
+                                    let nh = (pointer.y - py1).abs().max(0.001);
+                                    let sx = nw / (px2 - px1).abs().max(0.001);
+                                    let sy = nh / (py2 - py1).abs().max(0.001);
+                                    let na = a * sx;
+                                    let nd = d * sy;
+                                    let (ne, nf) = match handle {
+                                        "YouPDF resize tl" => (e, f + d - nd),
+                                        "YouPDF resize tr" => (e + a - na, f + d - nd),
+                                        "YouPDF resize bl" => (e, f),
+                                        _ => (e + a - na, f),
+                                    };
+                                    scale_pending = Some([na, b, c, nd, ne, nf]);
+                                }
+                                if let Some(matrix) = scale_pending {
+                                    pending_image_scale =
+                                        Some((image.clone(), matrix));
+                                }
+                            }
                             if let Some(crop) = crop_draft {
                                 // Zone conservée : les poignées vivent sur ses
                                 // coins, le reste de l'image est assombri.
@@ -11108,6 +11239,9 @@ impl YouPdfApp {
         }
         if let Some((image, off, scale)) = pending_image_move {
             self.commit_image_move(&image, off, scale, &ctx);
+        }
+        if let Some((image, matrix)) = pending_image_scale {
+            self.commit_image_scale(&image, matrix, &ctx);
         }
         self.form_edit = form_draft;
         if form_cancel {
