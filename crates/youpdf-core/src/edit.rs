@@ -1136,6 +1136,79 @@ impl Document {
         Ok(found)
     }
 
+    /// Déplace le flux de dessin d'une image vers le début (back) ou la fin
+    /// (front) du tableau `Contents` de la page. Chaque image est posée dans
+    /// son propre flux par `insert_image_bitmap` : déplacer le flux entier
+    /// change l'ordre d'affichage sans toucher les autres images. L'opération
+    /// est exacte.
+    pub fn set_image_z_order(&mut self, info: &ImageInfo, front: bool) -> Result<()> {
+        let page_id = self
+            .page_id(info.page as u32)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let name = info.resource_name.clone();
+        let name_bytes = name.trim_start_matches('/').as_bytes().to_vec();
+
+        // Trouve le flux de contenu qui contient le `Do` de l'image.
+        let targets = self.page_content_ids(page_id)?;
+        let mut stream_id: Option<(u32, u16)> = None;
+        for content_id in &targets {
+            let Ok(Object::Stream(stream)) = self.inner().get_object(*content_id) else {
+                continue;
+            };
+            let Ok(bytes) = stream.get_plain_content() else {
+                continue;
+            };
+            let Ok(content) = lopdf::content::Content::decode(&bytes) else {
+                continue;
+            };
+            let has_do = content.operations.iter().any(|op| {
+                op.operator == "Do"
+                    && op
+                        .operands
+                        .first()
+                        .and_then(|obj| obj.as_name().ok())
+                        == Some(name_bytes.as_slice())
+            });
+            if has_do {
+                stream_id = Some(*content_id);
+                break;
+            }
+        }
+        let Some(stream_id) = stream_id else {
+            return Err(Error::NotFound(format!("dessin de l'image \"{name}\"")));
+        };
+
+        // Lit le tableau `Contents` de la page.
+        let page = self
+            .inner_mut()
+            .get_object_mut(page_id)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?
+            .as_dict_mut()
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let contents_obj = page
+            .get_mut(b"Contents")
+            .map_err(|e| Error::Pdf(format!("contenu : {e}")))?;
+        let contents = match contents_obj {
+            Object::Array(arr) => arr,
+            _ => return Err(Error::Pdf("page sans tableau Contents".to_owned())),
+        };
+        let position = contents.iter().position(|obj| {
+            matches!(obj, Object::Reference(id) if *id == stream_id)
+        });
+        let Some(position) = position else {
+            return Err(Error::Pdf(format!(
+                "flux de l'image {name} absent du tableau Contents"
+            )));
+        };
+        let entry = contents.remove(position);
+        if front {
+            contents.push(entry);
+        } else {
+            contents.insert(0, entry);
+        }
+        Ok(())
+    }
+
     /// Pose la matrice qui dessine une image sur sa page.
     ///
     /// Sert au déplacement et au redimensionnement d'un bloc image : l'origine

@@ -543,6 +543,54 @@ fn rognage_decoupe_les_pixels_et_la_boite() {
     );
 }
 
+/// L'ordre d'affichage des images suit l'ordre du tableau `Contents` :
+/// l'image dont le flux est le dernier est dessinée en dernier, donc visible
+/// par-dessus. Le test rend la page et vérifie la couleur qui gagne au
+/// centre des deux images superposées.
+#[test]
+fn ordre_daffichage_limage_devant_est_dessinee_apres() {
+    let mut rouge = image::RgbImage::new(8, 8);
+    for px in rouge.pixels_mut() {
+        *px = image::Rgb([220, 40, 40]);
+    }
+    let mut bleu = image::RgbImage::new(8, 8);
+    for px in bleu.pixels_mut() {
+        *px = image::Rgb([0, 40, 220]);
+    }
+    let mut doc = document_avec_image(&rouge.clone().into_raw(), 8, 8);
+    // Deuxième image, même place : elle recouvre la première.
+    doc.insert_image_bitmap(1, [150.0, 300.0, 350.0, 500.0], &bleu.clone().into_raw(), 8, 8)
+        .expect("insertion");
+    let images = doc.extract_images(1).expect("liste des images");
+    assert_eq!(images.len(), 2, "deux images attendues");
+
+    // Le bleu est dessiné en dernier : il est visible au centre de la page.
+    let (rouges, bleus) = rendre_couleurs(&doc.to_bytes().expect("écriture"))
+        .expect("rendu");
+    assert!(
+        bleus > rouges,
+        "le bleu devrait recouvrir le rouge : {rouges} rouges, {bleus} bleus"
+    );
+
+    // Mise au premier plan du rouge : le rouge doit gagner.
+    doc.set_image_z_order(&images[0], true).expect("z-order avant");
+    let (rouges, bleus) = rendre_couleurs(&doc.to_bytes().expect("écriture"))
+        .expect("rendu");
+    assert!(
+        rouges > bleus,
+        "le rouge devrait recouvrir le bleu : {rouges} rouges, {bleus} bleus"
+    );
+
+    // Mise à l'arrière-plan du bleu : le bleu repasse derrière le rouge.
+    doc.set_image_z_order(&images[1], false).expect("z-order arrière");
+    let (rouges, bleus) = rendre_couleurs(&doc.to_bytes().expect("écriture"))
+        .expect("rendu");
+    assert!(
+        rouges > bleus,
+        "le rouge devrait recouvrir le bleu : {rouges} rouges, {bleus} bleus"
+    );
+}
+
 /// Matrice `cm` qui précède le dessin d'une image, relue dans le fichier.
 fn premiere_matrice(doc: &Document, resource_name: &str) -> Option<[f32; 6]> {
     let bytes = doc.to_bytes().expect("écriture");

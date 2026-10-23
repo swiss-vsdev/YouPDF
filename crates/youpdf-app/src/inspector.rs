@@ -463,6 +463,8 @@ pub enum ImageAction {
     CancelCrop,
     /// Régler l'opacité, de 0 à 1.
     Opacity(f32),
+    /// Passer l'image au premier plan (true) ou à l'arrière-plan (false).
+    ZOrder(bool),
     /// Retirer l'image de la page.
     Delete,
 }
@@ -530,6 +532,20 @@ pub fn image_controls(
             .clicked()
         {
             action = Some(ImageAction::StartCrop);
+        }
+        if ui
+            .small_button(ph::STACK)
+            .on_hover_text(t("Bring to front"))
+            .clicked()
+        {
+            action = Some(ImageAction::ZOrder(true));
+        }
+        if ui
+            .small_button(ph::STACK_SIMPLE)
+            .on_hover_text(t("Send to back"))
+            .clicked()
+        {
+            action = Some(ImageAction::ZOrder(false));
         }
         if ui
             .small_button(ph::TRASH)
