@@ -83,21 +83,37 @@ pub fn document_from_images(paths: &[PathBuf], dpi: f32) -> Result<Document> {
     if paths.is_empty() {
         return Err(Error::InvalidInput("aucune image fournie".into()));
     }
+    let mut images: Vec<(String, Vec<u8>)> = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = std::fs::read(path)
+            .map_err(|e| Error::InvalidInput(format!("{} : {e}", path.display())))?;
+        images.push((path.display().to_string(), bytes));
+    }
+    document_from_image_bytes(&images, dpi)
+}
+
+/// Même chose que [`document_from_images`], mais depuis des octets déjà en
+/// mémoire — le cas du presse-papiers, où l'image n'a jamais de chemin.
+///
+/// `images` associe à chaque image un libellé qui sert uniquement aux
+/// messages d'erreur.
+pub fn document_from_image_bytes(images: &[(String, Vec<u8>)], dpi: f32) -> Result<Document> {
+    if images.is_empty() {
+        return Err(Error::InvalidInput("aucune image fournie".into()));
+    }
     let dpi = dpi.max(36.0);
 
     let mut doc = lopdf::Document::with_version("1.4");
     let pages_id = doc.new_object_id();
-    let mut kids: Vec<Object> = Vec::with_capacity(paths.len());
+    let mut kids: Vec<Object> = Vec::with_capacity(images.len());
 
-    for path in paths {
-        let bytes = std::fs::read(path)
-            .map_err(|e| Error::InvalidInput(format!("{} : {e}", path.display())))?;
-        let format = image::guess_format(&bytes)
-            .map_err(|e| Error::InvalidInput(format!("{} : {e}", path.display())))?;
-        let decoded = crate::compress::decode_limited(&bytes, format).ok_or_else(|| {
+    for (label, bytes) in images {
+        let bytes = bytes.as_slice();
+        let format = image::guess_format(bytes)
+            .map_err(|e| Error::InvalidInput(format!("{label} : {e}")))?;
+        let decoded = crate::compress::decode_limited(bytes, format).ok_or_else(|| {
             Error::InvalidInput(format!(
-                "{} : image illisible ou trop grande (plafond 20000 px, 256 Mio)",
-                path.display()
+                "{label} : image illisible ou trop grande (plafond 20000 px, 256 Mio)"
             ))
         })?;
 
@@ -119,7 +135,7 @@ pub fn document_from_images(paths: &[PathBuf], dpi: f32) -> Result<Document> {
                     "BitsPerComponent" => Object::Integer(8),
                     "Filter" => Object::Name(b"DCTDecode".to_vec()),
                 },
-                bytes,
+                bytes.to_vec(),
             )
         } else {
             let rgb = decoded.to_rgb8();
@@ -164,7 +180,7 @@ pub fn document_from_images(paths: &[PathBuf], dpi: f32) -> Result<Document> {
         dictionary! {
             "Type" => Object::Name(b"Pages".to_vec()),
             "Kids" => Object::Array(kids),
-            "Count" => Object::Integer(paths.len() as i64),
+            "Count" => Object::Integer(images.len() as i64),
         },
     );
 

@@ -59,8 +59,8 @@
 - [x] **Task 6.4** — Form data import/export: FDF/XFDF/CSV/JSON parsing/generation; Import/Export buttons in forms panel; Reset Form clears to defaults
 
 ## Phase 7: Full-Window Page Organization Surface ✅
-- [x] **Task 7.1** — Organize Pages full-screen grid: "X of Y pages selected" indicator; Select All/Deselect; Select Odd/Even; Rotate Left/Right; Delete (with confirm); Extract/Insert/Replace/Split/Duplicate dialogs; Close returns to normal view — **minor gap:** Delete has no confirmation (`crates/youpdf-app/src/app/organize_ui.rs:358-384`); the pages are removed straight away.
-- [x] **Task 7.2** — Action dialogs: Extract (single PDF / separate PDFs, delete original); Insert (Blank/From File/From Clipboard, before/after/first/last, fit options); Replace (pages Start-End with new pages); Split (by count, by max size, by bookmarks) — **partly done.** Extract, Replace and Split are as described, but Insert has no "From Clipboard" (`grep -i clipboard` repo-wide → 0 hits in the sources) and no fit options — only "From PDF file…" and "Blank A4 page" (`crates/youpdf-app/src/app/organize_ui.rs:436-480`).
+- [x] **Task 7.1** — Organize Pages full-screen grid: "X of Y pages selected" indicator; Select All/Deselect; Select Odd/Even; Rotate Left/Right; Delete (with confirm); Extract/Insert/Replace/Split/Duplicate dialogs; Close returns to normal view — Delete asks first: the toolbar button, the per-page shortcut and the Delete key all open a confirmation window that names how many pages leave the file.
+- [x] **Task 7.2** — Action dialogs: Extract (single PDF / separate PDFs, delete original); Insert (Blank/From File/From Clipboard, before/after/first/last, fit options); Replace (pages Start-End with new pages); Split (by count, by max size, by bookmarks) — **mostly done.** Extract, Replace, Split and Insert are as described, the three insert sources included: "From PDF file…", "Blank A4 page" and "From Clipboard", which reads the image off the system clipboard (`arboard`) and turns it into a page at 96 dpi. Insert has no fit options — the image arrives at its own pixel size.
 
 ## Phase 8: Page Operations & Transformations ✅
 - [x] **Task 8.1** — Crop Pages tool: visual rectangle with corner/edge handles; margin inputs (mm/cm/in/pt); Page Box target (CropBox/ArtBox/TrimBox/BleedBox); Page Range (Current/All/Odd/Even/Custom "1-5, 8"); "Auto-Crop/Remove White Margins"; "Reset Crop"
@@ -134,7 +134,7 @@ Every phase ends with an end-to-end regression pass:
 
 ## Current State Summary (October 2026)
 
-**The engine is broadly complete; the interface is not.** The core crates implement most of the operations this plan describes, but several phases are only half-wired, and five tasks are not implemented at all:
+**The engine is broadly complete; the interface is not.** The core crates implement most of the operations this plan describes, but several phases are only half-wired, and six tasks are not implemented at all:
 - ❌ Task 4.2 — content elements can be selected and moved on paper, but not on screen: there is no hit-test dispatch, no resize or rotation handles and no drag-to-move or scale.
 - ❌ Task 5.5 — no custom-stamp dialog, no signature-creator window, no stored-signatures list (visual signature placement is real).
 - ❌ Task 9.3 — the signing engine exists in `youpdf-core`, but the application has no signing window and never calls it.

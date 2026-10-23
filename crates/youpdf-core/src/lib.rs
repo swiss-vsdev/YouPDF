@@ -54,7 +54,7 @@ pub use annotate::{
 };
 pub use compare::{ComparisonReport, Difference, DifferenceKind};
 pub use convert::{ImageFormat, TextFormat};
-pub use create::{blank_document, document_from_images};
+pub use create::{blank_document, document_from_image_bytes, document_from_images};
 pub use crop::CropMargins;
 pub use compress::{CompressionExtras, CompressionReport};
 pub use document::{Document, PageBoxes, PageView};

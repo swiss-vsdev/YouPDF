@@ -73,7 +73,7 @@ impl YouPdfApp {
                         if selected.len() >= total {
                             self.toast(ui.ctx(), "Keep at least one page".to_string());
                         } else {
-                            self.delete_pages(ui.ctx(), &selected, total);
+                            self.ask_delete_pages(&selected, total);
                         }
                     }
                     if organize_button(ui, icon_export, "Extract…") {
@@ -299,7 +299,7 @@ impl YouPdfApp {
         }
         if let Some(page) = quick_delete {
             let single: BTreeSet<usize> = [page].into_iter().collect();
-            self.delete_pages(ui.ctx(), &single, total);
+            self.ask_delete_pages(&single, total);
         }
         if let Some((from, to)) = pending_move {
             if let Some(tab) = self.tabs.get_mut(active) {
@@ -321,10 +321,11 @@ impl YouPdfApp {
         }) && self.organize_selected.len() < total
         {
             let sel = self.organize_selected.clone();
-            self.delete_pages(ui.ctx(), &sel, total);
+            self.ask_delete_pages(&sel, total);
         }
 
         self.organize_dialogs(ui.ctx());
+        self.delete_confirm_window(ui.ctx());
     }
 
     /// Actions groupées sur la sélection (vide = tout le document).
@@ -352,6 +353,53 @@ impl YouPdfApp {
                 }
                 Err(err) => self.toast(ctx, format!("Rotation failed: {err}")),
             }
+        }
+    }
+
+    /// Demande confirmation avant de supprimer : la suppression est
+    /// destructive, et la seule autre sortie est Annuler.
+    fn ask_delete_pages(&mut self, selected: &BTreeSet<usize>, total: usize) {
+        if let Some(pages) = pages_to_confirm_delete(&self.organize_targets(selected, total), total) {
+            self.organize_pending_delete = Some(pages);
+        }
+    }
+
+    /// Fenêtre de confirmation de la suppression.
+    fn delete_confirm_window(&mut self, ctx: &egui::Context) {
+        let Some(pages) = self.organize_pending_delete.clone() else {
+            return;
+        };
+        let total = self.tabs.get(self.active).map_or(0, |tab| tab.total());
+        let mut open = true;
+        let mut confirmed = false;
+        let mut cancelled = false;
+        self.show_modal(ctx, "modal-delete-pages", "Delete pages", 340.0, &mut open, |_app, ui| {
+            ui.label(
+                RichText::new(format!("Remove {} page(s) from this document?", pages.len()))
+                    .size(12.5)
+                    .color(pal().icon_bright),
+            );
+            ui.label(
+                RichText::new("The pages leave the file. Undo brings them back.")
+                    .size(11.0)
+                    .color(pal().muted),
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Delete").clicked() {
+                    confirmed = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancelled = true;
+                }
+            });
+        });
+        if confirmed {
+            self.organize_pending_delete = None;
+            let selection: BTreeSet<usize> = pages.into_iter().collect();
+            self.delete_pages(ctx, &selection, total);
+        } else if cancelled || !open {
+            self.organize_pending_delete = None;
         }
     }
 
@@ -477,6 +525,10 @@ impl YouPdfApp {
                         }
                         if ui.button("Blank A4 page").clicked() {
                             self.run_insert_blank(ctx);
+                        }
+                        let pasted = ui.button("From Clipboard").clicked();
+                        if pasted {
+                            self.run_insert_clipboard(ctx);
                         }
                     });
             }
@@ -623,12 +675,7 @@ impl YouPdfApp {
             return;
         };
         let total = self.tabs.get(self.active).map_or(0, |tab| tab.total());
-        let after = match self.organize_insert_where {
-            0 => self.organize_insert_page.saturating_sub(1),
-            2 => 0,
-            3 => total,
-            _ => self.organize_insert_page.min(total),
-        };
+        let after = self.insert_position(total);
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };
@@ -643,31 +690,74 @@ impl YouPdfApp {
 
     fn run_insert_blank(&mut self, ctx: &egui::Context) {
         let total = self.tabs.get(self.active).map_or(0, |tab| tab.total());
-        let after = match self.organize_insert_where {
+        let after = self.insert_position(total);
+        match youpdf_core::blank_document(1, 595.0, 842.0) {
+            Ok(doc) => self.insert_document(ctx, doc, after, "blank"),
+            Err(err) => self.toast(ctx, format!("Blank page failed: {err}")),
+        }
+    }
+
+    /// Insère l'image du presse-papiers comme une page.
+    ///
+    /// egui ne connaît que le texte du presse-papiers ; l'image vient donc
+    /// de son backend de fenêtre, `arboard`, que `egui-winit` tire déjà.
+    fn run_insert_clipboard(&mut self, ctx: &egui::Context) {
+        let total = self.tabs.get(self.active).map_or(0, |tab| tab.total());
+        let after = self.insert_position(total);
+        let image = match clipboard_image() {
+            Ok(bytes) => bytes,
+            Err(message) => {
+                self.toast(ctx, message);
+                return;
+            }
+        };
+        // 96 dpi : la résolution qu'annonce un presse-papiers, et celle qui
+        // rend une capture d'écran à sa taille perçue.
+        let doc = match youpdf_core::document_from_image_bytes(&image, 96.0) {
+            Ok(doc) => doc,
+            Err(err) => {
+                self.toast(ctx, format!("Clipboard image failed: {err}"));
+                return;
+            }
+        };
+        self.insert_document(ctx, doc, after, "image");
+    }
+
+    /// Où poser les pages insérées, d'après le choix du dialogue.
+    fn insert_position(&self, total: usize) -> usize {
+        match self.organize_insert_where {
             0 => self.organize_insert_page.saturating_sub(1),
             2 => 0,
             3 => total,
             _ => self.organize_insert_page.min(total),
-        };
-        let Some(tab) = self.tabs.get_mut(self.active) else {
-            return;
-        };
-        let mut blank = match youpdf_core::create::blank_document(1, 595.0, 842.0) {
-            Ok(doc) => doc,
-            Err(err) => {
-                self.toast(ctx, format!("Blank page failed: {err}"));
-                return;
-            }
-        };
-        let path = std::env::temp_dir().join("youpdf-blank-insert.pdf");
-        if blank.save(&path).is_err() {
+        }
+    }
+
+    /// Écrit `doc` dans un fichier temporaire puis l'insère après `after`.
+    ///
+    /// `insert_pages_after` prend un chemin : le temporaire est le seul
+    /// moyen de réunir un document construit en mémoire et cette API.
+    fn insert_document(
+        &mut self,
+        ctx: &egui::Context,
+        mut doc: youpdf_core::Document,
+        after: usize,
+        what: &str,
+    ) {
+        let path = std::env::temp_dir().join(format!("youpdf-insert-{what}.pdf"));
+        if let Err(err) = doc.save(&path) {
+            self.toast(ctx, format!("Insert failed: {err}"));
             return;
         }
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            let _ = std::fs::remove_file(&path);
+            return;
+        };
         match tab.doc.insert_pages_after(after, &path) {
             Ok(count) => {
                 let _ = std::fs::remove_file(&path);
                 self.mark_document_changed();
-                self.toast(ctx, format!("{count} blank page inserted"));
+                self.toast(ctx, format!("{count} {what} page(s) inserted"));
             }
             Err(err) => {
                 let _ = std::fs::remove_file(&path);
@@ -719,5 +809,68 @@ impl YouPdfApp {
             Ok(files) => self.toast(ctx, format!("{} file(s) written", files.len())),
             Err(err) => self.toast(ctx, format!("Split failed: {err}")),
         }
+    }
+}
+
+/// Octets PNG de l'image du presse-papiers.
+///
+/// Le presse-papiers peut être vide, ne contenir que du texte, ou refuser
+/// l'accès (session sans gestionnaire) : chaque cas rend un message
+/// affichable plutôt qu'une panique.
+fn clipboard_image() -> Result<Vec<(String, Vec<u8>)>, String> {
+    use arboard::Clipboard;
+
+    let mut clipboard =
+        Clipboard::new().map_err(|_| "Clipboard is not available".to_string())?;
+    let image = clipboard
+        .get_image()
+        .map_err(|_| "No image in the clipboard".to_string())?;
+    let rgba = image::RgbaImage::from_raw(
+        image.width as u32,
+        image.height as u32,
+        image.bytes.into_owned(),
+    )
+    .ok_or_else(|| "Clipboard image is malformed".to_string())?;
+
+    let mut png = std::io::Cursor::new(Vec::new());
+    rgba.write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|err| format!("Clipboard image failed: {err}"))?;
+    Ok(vec![("clipboard".to_string(), png.into_inner())])
+}
+
+/// Pages qu'une suppression doit viser, ou `None` quand il n'y a rien à
+/// confirmer : plus rien à supprimer, ou tout le document (que l'app refuse
+/// de vider).
+fn pages_to_confirm_delete(pages: &[usize], total: usize) -> Option<Vec<usize>> {
+    if pages.is_empty() || pages.len() >= total {
+        None
+    } else {
+        Some(pages.to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pages_to_confirm_delete;
+
+    #[test]
+    fn une_selection_partielle_demande_confirmation() {
+        assert_eq!(pages_to_confirm_delete(&[2, 3], 10), Some(vec![2, 3]));
+    }
+
+    #[test]
+    fn une_selection_vide_ne_demande_rien() {
+        assert_eq!(pages_to_confirm_delete(&[], 10), None);
+    }
+
+    #[test]
+    fn tout_le_document_ne_demande_rien() {
+        let tout: Vec<usize> = (1..=4).collect();
+        assert_eq!(pages_to_confirm_delete(&tout, 4), None);
+    }
+
+    #[test]
+    fn tout_sauf_une_page_demande_confirmation() {
+        assert_eq!(pages_to_confirm_delete(&[1, 2, 3], 4), Some(vec![1, 2, 3]));
     }
 }
