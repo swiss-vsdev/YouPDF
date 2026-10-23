@@ -1680,6 +1680,12 @@ pub struct YouPdfApp {
     organize_drag: Option<usize>,
     /// Fenêtre d'action ouverte.
     organize_dialog: Option<organize_ui::OrganizeDialog>,
+    /// Suppression en attente de confirmation : les pages visées.
+    ///
+    /// Supprimer des pages casse le document sans retour possible autrement
+    /// que par Annuler ; on demande donc avant, comme la fermeture d'un
+    /// onglet modifié.
+    organize_pending_delete: Option<Vec<usize>>,
     /// Extraction : un seul fichier, et suppression des pages d'origine.
     organize_extract_single: bool,
     organize_extract_delete: bool,
@@ -1996,6 +2002,7 @@ impl YouPdfApp {
             organize_anchor: None,
             organize_drag: None,
             organize_dialog: None,
+            organize_pending_delete: None,
             organize_extract_single: true,
             organize_extract_delete: false,
             organize_insert_where: 1,

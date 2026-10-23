@@ -4,7 +4,7 @@
 //! taille des pages, réouverture depuis `to_bytes()`, ordre des pages après
 //! insertion.
 
-use youpdf_core::{blank_document, document_from_images, Document};
+use youpdf_core::{blank_document, document_from_image_bytes, document_from_images, Document};
 
 /// Comparaison de tailles flottantes (les points sont stockés en `f32`).
 fn approx(a: f32, b: f32) -> bool {
@@ -62,6 +62,43 @@ fn document_from_images_une_page_par_image() {
 
     // Aucune image : entrée invalide.
     assert!(document_from_images(&[], 96.0).is_err(), "liste vide refusée");
+}
+
+/// Le presse-papiers ne donne pas de chemin : les mêmes octets doivent
+/// produire le même document, sans passer par le disque.
+#[test]
+fn document_from_image_bytes_donne_le_meme_document() {
+    let mut img = image::RgbImage::new(10, 10);
+    for px in img.pixels_mut() {
+        *px = image::Rgb([10, 120, 200]);
+    }
+    let mut png = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut png, image::ImageFormat::Png).expect("encodage");
+    let bytes = png.into_inner();
+
+    // 10 px à 72 dpi = 10 points.
+    let doc = document_from_image_bytes(&[("presse-papiers".to_string(), bytes)], 72.0)
+        .expect("création");
+    assert_eq!(doc.page_count(), 1);
+    assert_size(&doc, 1, 10.0, 10.0);
+
+    let serialized = doc.to_bytes().expect("sérialisation");
+    let reopened = Document::from_bytes(&serialized).expect("réouverture");
+    assert_eq!(reopened.page_count(), 1);
+    assert_size(&reopened, 1, 10.0, 10.0);
+
+    // Le libellé n'est qu'un message d'erreur ; des octets illisibles le
+    // retrouvent dans l'erreur.
+    let err = match document_from_image_bytes(&[("collé".to_string(), vec![0, 1, 2])], 72.0) {
+        Ok(_) => panic!("des octets invalides doivent échouer"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("collé"), "erreur : {err}");
+
+    assert!(
+        document_from_image_bytes(&[], 72.0).is_err(),
+        "liste vide refusée"
+    );
 }
 
 /// Séquence des tailles de page, pour vérifier l'ordre après insertion.
