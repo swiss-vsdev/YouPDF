@@ -1,3 +1,4 @@
+use youpdf_shared::{BODY};
 //! Fenêtre principale de YouPDF — v0.1 « lecteur ».
 //!
 //! Chrome calqué sur la référence UX mesurée : rail de 8 outils, barre de
@@ -878,12 +879,12 @@ fn extract_page_fragments(renderer: &dyn Renderer, tab: &mut Tab, page: u32) -> 
     match renderer.page_fragments(&tab.doc, page) {
         Ok(mut frags) => {
             for frag in &mut frags {
-                frag.rect = rect_to_display(&tab.doc, page as usize, frag.rect);
+                frag.rect = youpdf_core::geom::rect_to_display(&tab.doc, page as usize, frag.rect);
                 // Les boîtes de glyphes vivent dans le même repère que le
                 // fragment : sans cette conversion, la sélection au caractère
                 // serait décalée sur une page tournée ou recadrée.
                 for item in &mut frag.chars {
-                    item.rect = rect_to_display(&tab.doc, page as usize, item.rect);
+                    item.rect = youpdf_core::geom::rect_to_display(&tab.doc, page as usize, item.rect);
                 }
             }
             let usable = !frags.is_empty();
@@ -3041,7 +3042,7 @@ impl YouPdfApp {
                             } else {
                                 ph::CARET_DOWN
                             },
-                            FontId::proportional(11.0),
+                            FontId::proportional(LABEL),
                             pal().muted,
                         );
                     }
@@ -3056,7 +3057,7 @@ impl YouPdfApp {
                         let edit = ui.put(
                             edit_rect,
                             TextEdit::singleline(&mut rename_text)
-                                .font(FontId::proportional(12.0)),
+                                .font(FontId::proportional(BODY)),
                         );
                         if request_focus {
                             edit.request_focus();
@@ -3076,7 +3077,7 @@ impl YouPdfApp {
                             pos2(text_x, rect.center().y),
                             Align2::LEFT_CENTER,
                             shorten(title, 30),
-                            FontId::proportional(12.0),
+                            FontId::proportional(BODY),
                             pal().icon_bright,
                         );
                     }
@@ -3085,7 +3086,7 @@ impl YouPdfApp {
                             pos2(rect.max.x - 8.0, rect.center().y),
                             Align2::RIGHT_CENTER,
                             format!("p.{page}"),
-                            FontId::proportional(10.5),
+                            FontId::proportional(CAPTION),
                             pal().muted,
                         );
                     }
@@ -3391,7 +3392,7 @@ impl YouPdfApp {
                         pos2(rect.min.x + 30.0, rect.min.y + 13.0),
                         Align2::LEFT_CENTER,
                         shorten(name, 24),
-                        FontId::proportional(12.0),
+                        FontId::proportional(BODY),
                         pal().icon_bright,
                     );
                     let mut detail = size
@@ -3404,7 +3405,7 @@ impl YouPdfApp {
                         pos2(rect.min.x + 30.0, rect.min.y + 30.0),
                         Align2::LEFT_CENTER,
                         detail,
-                        FontId::proportional(10.5),
+                        FontId::proportional(CAPTION),
                         pal().muted,
                     );
                     let save_rect = Rect::from_center_size(
@@ -3995,7 +3996,6 @@ impl YouPdfApp {
             .map(|(idx, _)| idx)
     }
 
-
     /// Indice du tracé de crayon réellement touché à `point`, en ignorant les
     /// boîtes englobantes vides.
     fn ink_hit_test(&self, page: usize, point: [f32; 2]) -> Option<usize> {
@@ -4216,7 +4216,7 @@ impl YouPdfApp {
                 // Le fragment vit en repère affiché, la réécriture attend le
                 // repère page.
                 let mut fragment = draft.fragment.clone();
-                fragment.rect = rect_to_page(&tab.doc, fragment.page, fragment.rect);
+                fragment.rect = youpdf_core::geom::rect_to_page(&tab.doc, fragment.page, fragment.rect);
                 let background = Some([bg[0] as f32 / 255.0, bg[1] as f32 / 255.0, bg[2] as f32 / 255.0]);
                 tab.doc
                     .replace_text_fragment_styled(&fragment, &draft.buffer, background, &draft.style)
@@ -4236,7 +4236,7 @@ impl YouPdfApp {
     fn insert_image_at(&mut self, page: usize, point: [f32; 2], ctx: &egui::Context) {
         // Le clic arrive en repère affiché ; l'insertion se fait en repère page.
         let point = match self.tabs.get(self.active) {
-            Some(tab) => point_to_page(&tab.doc, page, point),
+            Some(tab) => youpdf_core::geom::point_to_page(&tab.doc, page, point),
             None => return,
         };
         let Some(path) = rfd::FileDialog::new()
@@ -4767,7 +4767,7 @@ impl YouPdfApp {
         for fragment in fragments {
             // Les fragments sortent du moteur en repère page ; les surlignages
             // se dessinent en repère affiché.
-            let rect = rect_to_display(&tab.doc, page, fragment.rect);
+            let rect = youpdf_core::geom::rect_to_display(&tab.doc, page, fragment.rect);
             self.search_rects
                 .extend(match_rects(&fragment.text, rect, &needle, options));
         }
@@ -4803,7 +4803,7 @@ impl YouPdfApp {
                     let bg = mask_color_in(
                         tab,
                         page,
-                        rect_to_display(&tab.doc, page, fragment.rect),
+                        youpdf_core::geom::rect_to_display(&tab.doc, page, fragment.rect),
                     );
                     let background =
                         Some([bg[0] as f32 / 255.0, bg[1] as f32 / 255.0, bg[2] as f32 / 255.0]);
@@ -4854,7 +4854,7 @@ impl YouPdfApp {
                     continue;
                 };
                 for fragment in fragments {
-                    let rect = rect_to_display(&tab.doc, page, fragment.rect);
+                    let rect = youpdf_core::geom::rect_to_display(&tab.doc, page, fragment.rect);
                     for rect in match_rects(&fragment.text, rect, &needle, options) {
                         // Ne pas empiler deux fois la même marque : le bouton
                         // corbeille et le bouton surlignage peuvent se suivre.
@@ -5162,7 +5162,7 @@ impl YouPdfApp {
                         }
                         let galley = ui.painter().layout_no_wrap(
                             label,
-                            FontId::proportional(12.5),
+                            FontId::proportional(BODY),
                             color,
                         );
                         let width = if selected {
@@ -5306,7 +5306,7 @@ impl YouPdfApp {
                             rect.center(),
                             Align2::CENTER_CENTER,
                             "Y",
-                            FontId::proportional(11.0),
+                            FontId::proportional(LABEL),
                             Color32::WHITE,
                         );
                         let _ = resp;
@@ -5568,7 +5568,7 @@ impl YouPdfApp {
                                             rect.center(),
                                             Align2::CENTER_CENTER,
                                             author_initial(&row.author),
-                                            FontId::proportional(10.0),
+                                            FontId::proportional(CAPTION),
                                             pal().icon_bright,
                                         );
                                         ui.vertical(|ui| {
@@ -6162,7 +6162,7 @@ impl YouPdfApp {
                         pos2(rect.center().x, img_rect.max.y + 14.0),
                         Align2::CENTER_CENTER,
                         page.to_string(),
-                        FontId::proportional(11.0),
+                        FontId::proportional(LABEL),
                         if picked { pal().accent } else { pal().muted },
                     );
 
@@ -6499,7 +6499,7 @@ impl YouPdfApp {
                 rect.center(),
                 Align2::CENTER_CENTER,
                 "Aa",
-                FontId::proportional(12.0),
+                FontId::proportional(BODY),
                 if resp.hovered() { pal().icon_bright } else { pal().icon },
             );
             if resp.clicked() {
@@ -6647,7 +6647,7 @@ impl YouPdfApp {
                             pos2(rect.min.x + 10.0, rect.center().y),
                             Align2::LEFT_CENTER,
                             shorten(query, 22),
-                            FontId::proportional(11.5),
+                            FontId::proportional(BODY),
                             pal().icon_bright,
                         );
                         let x_rect = Rect::from_center_size(
@@ -6731,14 +6731,14 @@ impl YouPdfApp {
                             pos2(rect.min.x + 8.0, rect.center().y),
                             Align2::LEFT_CENTER,
                             format!("#{}", result.page),
-                            FontId::proportional(11.5),
+                            FontId::proportional(BODY),
                             pal().accent,
                         );
                         ui.painter().text(
                             pos2(rect.min.x + 40.0, rect.center().y),
                             Align2::LEFT_CENTER,
                             shorten(result.context.trim(), 24),
-                            FontId::proportional(11.0),
+                            FontId::proportional(LABEL),
                             pal().muted,
                         );
                         if resp.clicked() {
@@ -6839,7 +6839,7 @@ impl YouPdfApp {
         let created = self.tabs.get_mut(self.active).map(|tab| {
             // La boîte tracée est en repère affiché, le champ s'écrit en repère
             // page.
-            let rect = rect_to_page(&tab.doc, page, rect);
+            let rect = youpdf_core::geom::rect_to_page(&tab.doc, page, rect);
             // Les noms de champ sont des identifiants dans tout le document :
             // deux champs ne peuvent pas partager le même.
             // Les noms sont des identifiants uniques : un `contains` sur un vecteur
@@ -8374,8 +8374,6 @@ impl YouPdfApp {
         Some(outcome)
     }
 
-
-
     /// Fenêtre « Comparer des PDF » : différences de texte entre deux fichiers.
     fn compare_window(&mut self, ctx: &egui::Context) {
         if !self.compare_open {
@@ -8751,7 +8749,7 @@ impl YouPdfApp {
                                 img_rect.left_top() + vec2(6.0, 4.0),
                                 Align2::LEFT_TOP,
                                 format!("{diffs}"),
-                                FontId::proportional(11.0),
+                                FontId::proportional(LABEL),
                                 MODIFIED_AMBER,
                             );
                         }
@@ -11514,8 +11512,8 @@ impl YouPdfApp {
             // Le glissé est en repère affiché ; la mesure s'écrit en repère page.
             let (from, to) = match self.tabs.get(self.active) {
                 Some(tab) => (
-                    point_to_page(&tab.doc, page, from),
-                    point_to_page(&tab.doc, page, to),
+                    youpdf_core::geom::point_to_page(&tab.doc, page, from),
+                    youpdf_core::geom::point_to_page(&tab.doc, page, to),
                 ),
                 None => (from, to),
             };
@@ -12044,7 +12042,7 @@ impl YouPdfApp {
             pos2(text_x, rect.min.y + 146.0),
             Align2::LEFT_CENTER,
             shorten(&name, 20),
-            FontId::proportional(12.0),
+            FontId::proportional(BODY),
             if exists { pal().icon_bright } else { pal().muted },
         );
         ui.painter().text(
@@ -12065,7 +12063,7 @@ impl YouPdfApp {
             } else {
                 "File not found".to_owned()
             },
-            FontId::proportional(10.0),
+            FontId::proportional(CAPTION),
             pal().muted,
         );
 
@@ -12079,7 +12077,7 @@ impl YouPdfApp {
             star_rect.center(),
             Align2::CENTER_CENTER,
             if starred { "★" } else { "☆" },
-            FontId::proportional(13.0),
+            FontId::proportional(TITLE),
             if starred { pal().accent } else { pal().muted },
         );
         if star_resp.clicked() {
@@ -12164,7 +12162,7 @@ impl YouPdfApp {
                     pos2(rect.min.x + 14.0, rect.min.y + 15.0),
                     Align2::LEFT_CENTER,
                     shorten(&name, 46),
-                    FontId::proportional(12.5),
+                    FontId::proportional(BODY),
                     if exists { pal().icon_bright } else { pal().muted },
                 );
                 let detail = if exists {
@@ -12186,7 +12184,7 @@ impl YouPdfApp {
                     pos2(rect.min.x + 14.0, rect.min.y + 32.0),
                     Align2::LEFT_CENTER,
                     detail,
-                    FontId::proportional(10.5),
+                    FontId::proportional(CAPTION),
                     pal().muted,
                 );
 
@@ -12199,7 +12197,7 @@ impl YouPdfApp {
                     star_rect.center(),
                     Align2::CENTER_CENTER,
                     if starred { "★" } else { "☆" },
-                    FontId::proportional(13.0),
+                    FontId::proportional(TITLE),
                     if starred { pal().accent } else { pal().muted },
                 );
                 if star_resp.clicked() {
@@ -12215,7 +12213,7 @@ impl YouPdfApp {
                     forget_rect.center(),
                     Align2::CENTER_CENTER,
                     if forget_resp.hovered() { ph::X } else { "" },
-                    FontId::proportional(12.0),
+                    FontId::proportional(BODY),
                     pal().icon,
                 );
                 if forget_resp.clicked() {
@@ -12286,7 +12284,7 @@ impl YouPdfApp {
                         rect.center(),
                         Align2::CENTER_CENTER,
                         *label,
-                        FontId::proportional(13.0),
+                        FontId::proportional(TITLE),
                         pal().icon_bright,
                     );
                     if resp.clicked() {
@@ -12382,7 +12380,6 @@ impl YouPdfApp {
             .insert(path.to_path_buf(), (mtime, handle.clone()));
         Some(handle)
     }
-
 
     /// Journal d'activité (cloche de la barre de titre) : les derniers
     /// messages affichés, du plus récent au plus ancien.
@@ -12975,7 +12972,6 @@ fn extract_document_text(doc: &Document) -> String {
 // Widgets maison
 // --------------------------------------------------------------------------
 
-
 /// Pastille de mode / d'outil : icône + libellé (+ `▾`), fond si actif.
 fn pill_button(
     ui: &mut egui::Ui,
@@ -12994,7 +12990,7 @@ fn pill_button(
     };
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
-        FontId::proportional(12.5),
+        FontId::proportional(BODY),
         text_color,
     );
     let width = 12.0
@@ -13090,7 +13086,7 @@ fn menu_row_checked(ui: &mut egui::Ui, label: &str, checked: bool) -> bool {
         pos2(rect.min.x + 32.0, rect.center().y),
         Align2::LEFT_CENTER,
         label,
-        FontId::proportional(12.5),
+        FontId::proportional(BODY),
         pal().icon_bright,
     );
     resp.clicked()
@@ -13158,14 +13154,14 @@ fn menu_row(ui: &mut egui::Ui, label: &str, shortcut: &str, icon: Option<fn(&egu
         pos2(label_x, rect.center().y),
         Align2::LEFT_CENTER,
         label,
-        FontId::proportional(12.5),
+        FontId::proportional(BODY),
         pal().icon_bright,
     );
     ui.painter().text(
         pos2(shortcut_x, rect.center().y),
         Align2::RIGHT_CENTER,
         shortcut,
-        FontId::proportional(11.0),
+        FontId::proportional(LABEL),
         pal().muted,
     );
     resp.clicked()
@@ -13229,21 +13225,6 @@ fn annots_to_display(doc: &Document, mut annots: Vec<Annotation>) -> Vec<Annotat
     annots
 }
 
-/// Recadre un rectangle du repère affiché vers le repère page.
-fn rect_to_page(doc: &Document, page: usize, rect: [f32; 4]) -> [f32; 4] {
-    doc.page_view(page as u32).page_rect(rect)
-}
-
-/// Recadre un point du repère affiché vers le repère page.
-fn point_to_page(doc: &Document, page: usize, point: [f32; 2]) -> [f32; 2] {
-    doc.page_view(page as u32).page_point(point)
-}
-
-/// Recadre un rectangle du repère page vers le repère affiché.
-fn rect_to_display(doc: &Document, page: usize, rect: [f32; 4]) -> [f32; 4] {
-    doc.page_view(page as u32).display_rect(rect)
-}
-
 /// Lien sous un point, en repère page.
 ///
 /// La tolérance élargit la boîte du lien : un lien dessiné au pixel près
@@ -13302,7 +13283,6 @@ fn icon_button(
     draw(ui.painter(), rect.shrink(6.0), color);
     resp
 }
-
 
 /// Bouton d'action d'un panneau (icône 30×28, fond si actif).
 fn panel_action(
@@ -13873,7 +13853,7 @@ fn organize_button(ui: &mut egui::Ui, icon: IconFn, label: &str) -> bool {
         pos2(rect.min.x + 28.0, rect.center().y),
         Align2::LEFT_CENTER,
         label,
-        FontId::proportional(11.5),
+        FontId::proportional(BODY),
         color,
     );
     resp.clicked()

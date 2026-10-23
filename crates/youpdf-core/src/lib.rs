@@ -28,6 +28,7 @@ pub mod convert;
 pub mod create;
 pub mod crop;
 pub mod document;
+pub mod geom;
 pub mod edit;
 pub mod extract;
 pub mod forms;
