@@ -39,9 +39,10 @@ use youpdf_core::compress::CompressionLevel;
 use youpdf_core::render::NullRenderer;
 use youpdf_core::ocr::{make_ocr, TesseractEngine};
 use youpdf_core::{
-    blank_document, document_from_images, export_comments, fold_case, Annotation, AnnotationKind,
-    AnnotationState, AnnotationStyle, AttachmentInfo, Background, BandSlots, Bates, BatesPosition,
-    CommentFormat, ComparisonReport, CompressionExtras, Conformance, CropMargins, DifferenceKind, Document,
+    blank_document, document_from_images, export_comments, fold_case, is_whole_word, Annotation,
+    AnnotationKind, AnnotationState, AnnotationStyle, AttachmentInfo, Background, BandSlots, Bates,
+    BatesPosition, CommentFormat, ComparisonReport, CompressionExtras, Conformance, CropMargins,
+    DifferenceKind, Document,
     EncryptionOptions, EncryptionStrength, ExtractedTable, FieldProperties, FormDataFormat,
     FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, LinkAction, MeasureKind,
     Measurement, NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem,
@@ -893,6 +894,11 @@ const ZOOM_SETTLE_SECS: f64 = 0.12;
 /// Délai de repos après le dernier défilement avant d'affiner les pages
 /// rastérisées à basse résolution.
 const SCROLL_SETTLE_SECS: f64 = 0.12;
+
+/// Délai de repos après la dernière frappe dans le champ de recherche avant
+/// de relancer la recherche. L'index est réutilisé : seule la correspondance
+/// elle-même est refaite, mais on l'épargne à chaque caractère d'un mot.
+const SEARCH_SETTLE_SECS: f64 = 0.18;
 
 /// Échelle de rastérisation pendant un geste de défilement. Le coût de
 /// PDFium est quadratique : à 0,4× l'image pèse 16 % de la résolution
@@ -1779,6 +1785,10 @@ pub struct YouPdfApp {
     search_index: Option<(usize, SearchIndex)>,
     results: Vec<SearchResult>,
     history: Vec<String>,
+    /// Instant de la dernière frappe dans le champ de recherche (voir
+    /// `SEARCH_SETTLE_SECS`) : la recherche part au repos, pas à chaque
+    /// caractère.
+    search_typed_at: Option<f64>,
 
     /// Message éphémère : (texte, date d'apparition).
     toast: (String, f64),
@@ -2038,6 +2048,7 @@ impl YouPdfApp {
             search_index: None,
             results: Vec::new(),
             history: Vec::new(),
+            search_typed_at: None,
             toast: (String::new(), f64::NEG_INFINITY),
             render_status: String::new(),
             jump: None,
@@ -2639,6 +2650,7 @@ impl YouPdfApp {
     /// opposée. Une entrée structurelle remplace le document entier ; une
     /// entrée d'annotations ne touche que la liste en mémoire.
     fn step_history(&mut self, ctx: &egui::Context, backward: bool) {
+        let mut invalidate_search = false;
         let message = {
             let Some(tab) = self.tabs.get_mut(self.active) else {
                 return;
@@ -2715,6 +2727,9 @@ impl YouPdfApp {
                         .map(fingerprint)
                         .unwrap_or_default();
                     tab.structural_dirty = hash != tab.saved_hash;
+                    // Le document a été remplacé : l'index, les résultats et
+                    // les surlignages décrivent l'état précédent.
+                    invalidate_search = true;
                 }
                 tab.dirty = tab.structural_dirty || tab.annots != tab.baseline_annots;
                 tab.page = tab.page.clamp(1, tab.total().max(1));
@@ -2727,6 +2742,10 @@ impl YouPdfApp {
                 })
             }
         };
+        if invalidate_search {
+            self.search_index = None;
+            self.clear_search_state();
+        }
         if let Some(message) = message {
             self.toast(ctx, message);
         }
@@ -4358,10 +4377,7 @@ impl YouPdfApp {
             tab.page = tab.page.clamp(1, tab.total().max(1));
         }
         self.search_index = None;
-        self.search_rects.clear();
-        self.search_rects_page = None;
-        self.search_active = None;
-        self.results.clear();
+        self.clear_search_state();
     }
 
     // -- Zoom --------------------------------------------------------------
@@ -4407,44 +4423,85 @@ impl YouPdfApp {
 
     // -- Recherche ---------------------------------------------------------
 
+    /// Texte utile de la requête, ou `None` si elle est vide.
+    fn search_needle(&self) -> Option<String> {
+        let query = self.search_query.trim();
+        (!query.is_empty()).then(|| query.to_owned())
+    }
+
+    /// Oublie les résultats et les surlignages, sans toucher à l'index.
+    ///
+    /// L'index reste valable tant que le document ne change pas : une requête
+    /// vidée puis retapée ne doit pas relire toutes les pages.
+    fn clear_search_state(&mut self) {
+        self.results.clear();
+        self.search_active = None;
+        self.search_rects.clear();
+        self.search_rects_page = None;
+    }
+
+    /// Recherche explicite (Entrée, champ modifié, bouton) : la requête
+    /// entre dans l'historique et le nombre de résultats est annoncé.
     fn run_search(&mut self, ctx: &egui::Context) {
-        let query = self.search_query.trim().to_owned();
-        if query.is_empty() {
-            return;
-        }
-        let Some(tab) = self.tabs.get(self.active) else {
+        // La recherche explicite couvre la frappe en attente.
+        self.search_typed_at = None;
+        let Some(query) = self.search_needle() else {
+            self.clear_search_state();
             return;
         };
+        let options = SearchOptions {
+            case_sensitive: self.search_case,
+            whole_word: self.search_word,
+        };
+        let Some(count) = self.refresh_search_results(ctx, &query, options, true) else {
+            return;
+        };
+        self.history.retain(|q| q != &query);
+        self.history.insert(0, query);
+        self.history.truncate(8);
+        self.toast(ctx, format!("{count} result(s)"));
+    }
+
+    /// Recalcule les résultats et les surlignages sans bruit.
+    ///
+    /// Utilisé pendant la saisie : ni historique, ni toast (`announce` les
+    /// tait), et l'index déjà construit est réutilisé — seule la recherche
+    /// elle-même est refaite. Renvoie le nombre de résultats, ou `None` si
+    /// l'index a échoué.
+    fn refresh_search_results(
+        &mut self,
+        ctx: &egui::Context,
+        query: &str,
+        options: SearchOptions,
+        announce: bool,
+    ) -> Option<usize> {
+        let tab = self.tabs.get(self.active)?;
 
         if self.search_index.as_ref().map(|(idx, _)| *idx) != Some(self.active) {
             match SearchIndex::build(&tab.doc) {
                 Ok(index) => self.search_index = Some((self.active, index)),
                 Err(err) => {
-                    self.toast(ctx, format!("Search index failed: {err}"));
-                    return;
+                    if announce {
+                        self.toast(ctx, format!("Search index failed: {err}"));
+                    }
+                    return None;
                 }
             }
         }
 
-        let options = SearchOptions {
-            case_sensitive: self.search_case,
-            whole_word: self.search_word,
+        let Some((_, index)) = &self.search_index else {
+            return None;
         };
-        if let Some((_, index)) = &self.search_index {
-            let mut results = index.search_with(&query, 200, options);
-            // Les signets et les commentaires ne vivent pas dans le texte des
-            // pages : on les ajoute à la main quand les filtres les demandent.
-            let synonyms = self.bookmark_comment_matches(&query, options);
-            results.extend(synonyms);
-            self.results = results;
-            let count = self.results.len();
-            self.history.retain(|q| q != &query);
-            self.history.insert(0, query);
-            self.history.truncate(8);
-            self.search_active = if count > 0 { Some(0) } else { None };
-            self.focus_search_result();
-            self.toast(ctx, format!("{count} result(s)"));
-        }
+        let mut results = index.search_with(query, 200, options);
+        // Les signets et les commentaires ne vivent pas dans le texte des
+        // pages : on les ajoute à la main quand les filtres les demandent.
+        let synonyms = self.bookmark_comment_matches(query, options);
+        results.extend(synonyms);
+        let count = results.len();
+        self.results = results;
+        self.search_active = if count > 0 { Some(0) } else { None };
+        self.focus_search_result();
+        Some(count)
     }
 
     /// Résultats synthétiques pour les signets et les commentaires.
@@ -4464,22 +4521,18 @@ impl YouPdfApp {
         let Some(tab) = self.tabs.get(self.active) else {
             return out;
         };
-        let needle = if options.case_sensitive {
-            query.to_owned()
-        } else {
-            fold_case(query)
-        };
+        let needle = query.trim();
         if needle.is_empty() {
             return out;
         }
 
         if self.search_bookmarks {
             for item in tab.doc.outline() {
-                if let Some(pos) = find_query(&item.title, &needle, options.case_sensitive) {
+                if let Some((start, end)) = find_query(&item.title, needle, options) {
                     out.push(SearchResult {
                         page: item.page.unwrap_or(1),
-                        start: pos,
-                        end: pos + needle.len(),
+                        start,
+                        end,
                         context: format!("Bookmark · {}", item.title),
                     });
                 }
@@ -4490,11 +4543,11 @@ impl YouPdfApp {
                 if annot.content.is_empty() {
                     continue;
                 }
-                if let Some(pos) = find_query(&annot.content, &needle, options.case_sensitive) {
+                if let Some((start, end)) = find_query(&annot.content, needle, options) {
                     out.push(SearchResult {
                         page: annot.page,
-                        start: pos,
-                        end: pos + needle.len(),
+                        start,
+                        end,
                         context: format!("Comment · {}", annot.content),
                     });
                 }
@@ -4529,10 +4582,13 @@ impl YouPdfApp {
         self.jump = Some(page);
         self.search_rects.clear();
         self.search_rects_page = Some(page as u32);
-        let needle = fold_case(self.search_query.trim());
-        if needle.is_empty() {
+        let Some(needle) = self.search_needle() else {
             return;
-        }
+        };
+        let options = SearchOptions {
+            case_sensitive: self.search_case,
+            whole_word: self.search_word,
+        };
         let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
@@ -4544,17 +4600,19 @@ impl YouPdfApp {
             // se dessinent en repère affiché.
             let rect = rect_to_display(&tab.doc, page, fragment.rect);
             self.search_rects
-                .extend(match_rects(&fragment.text, rect, &needle));
+                .extend(match_rects(&fragment.text, rect, &needle, options));
         }
     }
 
     /// Remplace (ou supprime, `replacement` vide) toutes les correspondances.
     fn replace_matches(&mut self, ctx: &egui::Context, replacement: &str) -> usize {
-        let query = self.search_query.trim().to_owned();
-        if query.is_empty() {
+        let Some(query) = self.search_needle() else {
             return 0;
-        }
-        let needle = fold_case(&query);
+        };
+        let options = SearchOptions {
+            case_sensitive: self.search_case,
+            whole_word: self.search_word,
+        };
         let pages: std::collections::BTreeSet<usize> =
             self.results.iter().map(|result| result.page).collect();
         let mut changed = 0usize;
@@ -4567,10 +4625,7 @@ impl YouPdfApp {
                     continue;
                 };
                 for fragment in fragments {
-                    if !fold_case(&fragment.text).contains(&needle) {
-                        continue;
-                    }
-                    let new_text = replace_occurrences(&fragment.text, &needle, replacement);
+                    let new_text = replace_occurrences(&fragment.text, &query, replacement, options);
                     if new_text == fragment.text {
                         continue;
                     }
@@ -4611,10 +4666,13 @@ impl YouPdfApp {
     /// comportement de « supprimer les correspondances », qui doit être
     /// destructif pour être honnête (masquer le texte ne le supprime pas).
     fn mark_matches_for_redaction(&mut self, ctx: &egui::Context, confirm: bool) {
-        let needle = fold_case(self.search_query.trim());
-        if needle.is_empty() {
+        let Some(needle) = self.search_needle() else {
             return;
-        }
+        };
+        let options = SearchOptions {
+            case_sensitive: self.search_case,
+            whole_word: self.search_word,
+        };
         let pages: std::collections::BTreeSet<usize> =
             self.results.iter().map(|result| result.page).collect();
         let mut added = 0usize;
@@ -4628,7 +4686,7 @@ impl YouPdfApp {
                 };
                 for fragment in fragments {
                     let rect = rect_to_display(&tab.doc, page, fragment.rect);
-                    for rect in match_rects(&fragment.text, rect, &needle) {
+                    for rect in match_rects(&fragment.text, rect, &needle, options) {
                         // Ne pas empiler deux fois la même marque : le bouton
                         // corbeille et le bouton surlignage peuvent se suivre.
                         // La déduplication porte sur la page et le rectangle :
@@ -6291,12 +6349,47 @@ impl YouPdfApp {
             if std::mem::take(&mut self.find_focus) {
                 resp.request_focus();
             }
+            // Une frappe ne cherche pas tout de suite : on attend le repos
+            // (`SEARCH_SETTLE_SECS`). L'index, lui, n'est pas reconstruit —
+            // seule la correspondance sur le texte déjà plié est refaite.
+            if resp.changed() {
+                self.search_typed_at = Some(ui.input(|i| i.time));
+            }
+            let settle = self.search_typed_at.is_some_and(|at| {
+                ui.input(|i| i.time) - at >= SEARCH_SETTLE_SECS
+            });
+            if settle {
+                self.search_typed_at = None;
+                let options = SearchOptions {
+                    case_sensitive: self.search_case,
+                    whole_word: self.search_word,
+                };
+                match self.search_needle() {
+                    Some(query) => {
+                        self.refresh_search_results(ctx, &query, options, false);
+                    }
+                    None => self.clear_search_state(),
+                }
+            } else if let Some(at) = self.search_typed_at {
+                // Sans réveil programmé, le repos n'arriverait qu'à la
+                // prochaine frame (frappe, clic...).
+                let wait = (SEARCH_SETTLE_SECS as f32) - (ui.input(|i| i.time) - at) as f32;
+                ctx.request_repaint_after_secs(wait.max(0.0));
+            }
+            // Entrée : egui retire le focus du champ multiligne juste après
+            // avoir émis la touche. Le rendre au champ permet d'enchaîner
+            // Entrée sur Entrée pour parcourir les résultats.
             if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                if self.results.is_empty() {
+                // Entrée vaut recherche explicite si la frappe n'est pas
+                // encore partie au repos ; ensuite elle parcourt les
+                // résultats comme ⌘G.
+                let pending = self.search_typed_at.take().is_some();
+                if pending || self.results.is_empty() {
                     self.run_search(ctx);
                 } else {
                     self.search_step(1);
                 }
+                resp.request_focus();
             }
         });
 
@@ -12582,6 +12675,47 @@ fn icon_layout(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::LAYOUT);
 }
 
+/// Positions `(début, fin)` des occurrences de `needle` dans `text`.
+///
+/// C'est la règle de correspondance de la recherche, appliquée à une ligne
+/// de fragment : `needle` est le texte **brut** de la requête (non plié), et
+/// [`SearchOptions`] décide de la casse et du mot entier. Les positions sont
+/// des indices d'octets dans `text` : le pliage de [`fold_case`] préserve la
+/// longueur en octets.
+fn query_matches(text: &str, needle: &str, options: SearchOptions) -> Vec<(usize, usize)> {
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let (haystack, needle): (std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>) =
+        if options.case_sensitive {
+            (text.into(), needle.into())
+        } else {
+            (fold_case(text).into(), fold_case(needle).into())
+        };
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(offset) = haystack[cursor..].find(needle.as_ref()) {
+        let start = cursor + offset;
+        let end = start + needle.len();
+        // Le pliage préserve la longueur, mais `find` peut tomber sur une
+        // frontière valide sans que `end` le soit : on ne découpe jamais
+        // au milieu d'un caractère.
+        if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            cursor = end.max(start + 1);
+            continue;
+        }
+        // Comme l'index : un mot entier se juge sur le texte d'origine.
+        if options.whole_word && !is_whole_word(text, start, end) {
+            cursor = end.max(start + 1);
+            continue;
+        }
+        out.push((start, end));
+        cursor = end.max(start + 1);
+    }
+    out
+}
+
 /// Sous-rectangles d'une ligne couvrant chaque occurrence de `needle`.
 ///
 /// Le texte d'un fragment est une ligne : la position de la correspondance
@@ -12589,43 +12723,44 @@ fn icon_layout(p: &Painter, r: Rect, c: Color32) {
 /// rectangle. C'est une approximation (police proportionnelle), suffisante
 /// pour surligner ou marquer une correspondance.
 ///
-/// `needle` doit déjà être plié par [`fold_case`], comme le texte comparé.
-fn match_rects(text: &str, rect: [f32; 4], needle: &str) -> Vec<[f32; 4]> {
-    if needle.is_empty() {
-        return Vec::new();
-    }
-    let folded = fold_case(text);
-    let total = folded.len().max(1) as f32;
+/// `needle` est le texte brut de la requête : la casse et le mot entier sont
+/// ceux de `options`, exactement comme pour les résultats de l'index.
+fn match_rects(
+    text: &str,
+    rect: [f32; 4],
+    needle: &str,
+    options: SearchOptions,
+) -> Vec<[f32; 4]> {
+    let total = text.len().max(1) as f32;
     let width = rect[2] - rect[0];
     let mut out = Vec::new();
-    let mut cursor = 0usize;
-    while let Some(offset) = folded[cursor..].find(needle) {
-        let start = cursor + offset;
-        let end = start + needle.len();
+    for (start, end) in query_matches(text, needle, options) {
         let before = start as f32 / total;
-        let hit = (needle.len() as f32 / total).min(1.0 - before);
+        let hit = ((end - start) as f32 / total).min(1.0 - before);
         let left = rect[0] + width * before;
         let right = (rect[0] + width * (before + hit)).max(left + 2.0);
         out.push([left, rect[1], right, rect[3]]);
-        cursor = end;
     }
     out
 }
 
-/// Remplace toutes les occurrences de `needle` (déjà plié) dans `text`.
+/// Remplace toutes les occurrences de `needle` dans `text`.
 ///
-/// `fold_case` préserve la longueur en octets : les positions trouvées dans la
-/// version pliée sont donc directement valables dans l'original.
-fn replace_occurrences(text: &str, needle: &str, replacement: &str) -> String {
-    if needle.is_empty() {
+/// `needle` est le texte brut de la requête ; `options` applique les mêmes
+/// règles que [`match_rects`] et que l'index de recherche.
+fn replace_occurrences(
+    text: &str,
+    needle: &str,
+    replacement: &str,
+    options: SearchOptions,
+) -> String {
+    let hits = query_matches(text, needle, options);
+    if hits.is_empty() {
         return text.to_owned();
     }
-    let folded = fold_case(text);
     let mut out = String::with_capacity(text.len());
     let mut cursor = 0usize;
-    while let Some(offset) = folded[cursor..].find(needle) {
-        let start = cursor + offset;
-        let end = start + needle.len();
+    for (start, end) in hits {
         out.push_str(&text[cursor..start]);
         out.push_str(replacement);
         cursor = end;
@@ -12886,17 +13021,13 @@ impl ZoomMode {
     ];
 }
 
-/// Cherche `needle` dans `hay`, selon la casse demandée.
+/// Première occurrence de `needle` dans `hay`, avec les filtres de `options`.
 ///
-/// `needle` est déjà plié si la recherche est insensible à la casse ;
-/// `fold_case` préservant la longueur en octets, l'index trouvé reste valable
-/// dans la chaîne d'origine.
-fn find_query(hay: &str, needle: &str, case_sensitive: bool) -> Option<usize> {
-    if case_sensitive {
-        hay.find(needle)
-    } else {
-        fold_case(hay).find(needle)
-    }
+/// Les signets et les commentaires ne passent pas par l'index : sans ce
+/// détour par [`query_matches`], une recherche « mot entier » y trouverait
+/// encore des sous-chaînes que la page, elle, refuse.
+fn find_query(hay: &str, needle: &str, options: SearchOptions) -> Option<(usize, usize)> {
+    query_matches(hay, needle, options).first().copied()
 }
 
 /// Vrai si le réglage `mode` correspond au zoom courant de l'onglet.
@@ -13820,13 +13951,13 @@ mod tests {
         };
         // Bord gauche à 2 pt de celui du voisin : il doit coller.
         let (rect, guides) =
-            snap_form_rect([102.0, 200.0, 130.0, 220.0], &[neighbor.clone()], 1, 6.0);
+            snap_form_rect([102.0, 200.0, 130.0, 220.0], std::slice::from_ref(&neighbor), 1, 6.0);
         assert!((rect[0] - 100.0).abs() < 1e-4, "{rect:?}");
         assert!((rect[2] - 128.0).abs() < 1e-4, "{rect:?}");
         assert!(guides.iter().any(|(vertical, at)| *vertical && (*at - 100.0).abs() < 1e-4));
         // Un voisin posé sur une autre page n'attire pas le champ.
         let (other, guides) =
-            snap_form_rect([102.0, 200.0, 130.0, 220.0], &[neighbor.clone()], 2, 6.0);
+            snap_form_rect([102.0, 200.0, 130.0, 220.0], std::slice::from_ref(&neighbor), 2, 6.0);
         assert_eq!(other, [102.0, 200.0, 130.0, 220.0]);
         assert!(guides.is_empty());
         // Aucun voisin à portée : rien ne bouge.
@@ -13960,9 +14091,122 @@ mod tests {
     /// La recherche de texte respecte la casse et retrouve une sous-chaîne.
     #[test]
     fn find_query_matches_with_and_without_case() {
-        assert_eq!(find_query("Hello World", "world", false), Some(6));
-        assert_eq!(find_query("Hello World", "world", true), None);
-        assert_eq!(find_query("accents ÉglIsE", "église", false), Some(8));
+        let insensitive = SearchOptions::default();
+        let sensitive = SearchOptions {
+            case_sensitive: true,
+            whole_word: false,
+        };
+        let whole = SearchOptions {
+            case_sensitive: false,
+            whole_word: true,
+        };
+        assert_eq!(find_query("Hello World", "world", insensitive), Some((6, 11)));
+        assert_eq!(find_query("Hello World", "world", sensitive), None);
+        assert_eq!(find_query("accents ÉglIsE", "église", insensitive), Some((8, 15)));
+        // Les signets et les commentaires suivent le même filtre « mot
+        // entier » que les pages.
+        assert_eq!(find_query("Worldwide", "world", whole), None);
+        assert_eq!(find_query("Hello World", "world", whole), Some((6, 11)));
+    }
+
+    /// Les correspondances d'un fragment suivent la casse et le mot entier :
+    /// les mêmes règles que l'index, sans quoi le surlignage mentirait.
+    #[test]
+    fn query_matches_honours_case_and_whole_word() {
+        let insensitive = SearchOptions::default();
+        let sensitive = SearchOptions {
+            case_sensitive: true,
+            whole_word: false,
+        };
+        let whole = SearchOptions {
+            case_sensitive: false,
+            whole_word: true,
+        };
+        assert_eq!(
+            query_matches("cat Cat catalog", "cat", insensitive),
+            vec![(0, 3), (4, 7), (8, 11)]
+        );
+        assert_eq!(
+            query_matches("cat Cat catalog", "cat", sensitive),
+            vec![(0, 3), (8, 11)]
+        );
+        // « catalog » n'est pas un mot : seules les occurrences isolées
+        // comptent, mais « Cat » en est une.
+        assert_eq!(
+            query_matches("cat Cat catalog", "cat", whole),
+            vec![(0, 3), (4, 7)]
+        );
+        assert_eq!(query_matches("a scat here", "cat", whole), Vec::new());
+        // Une requête vide ne correspond à rien, même contre du vide.
+        assert!(query_matches("abc", "   ", insensitive).is_empty());
+    }
+
+    /// Le remplacement applique les mêmes filtres que le surlignage.
+    #[test]
+    fn replace_occurrences_honours_case_and_whole_word() {
+        let insensitive = SearchOptions::default();
+        let sensitive = SearchOptions {
+            case_sensitive: true,
+            whole_word: false,
+        };
+        let whole = SearchOptions {
+            case_sensitive: false,
+            whole_word: true,
+        };
+        assert_eq!(
+            replace_occurrences("cat Cat catalog", "cat", "dog", insensitive),
+            "dog dog dogalog"
+        );
+        assert_eq!(
+            replace_occurrences("cat Cat catalog", "cat", "dog", sensitive),
+            "dog Cat dogalog"
+        );
+        assert_eq!(
+            replace_occurrences("cat Cat catalog", "cat", "dog", whole),
+            "dog dog catalog"
+        );
+        // Aucune occurrence : la chaîne revient intacte.
+        assert_eq!(
+            replace_occurrences("scatter", "cat", "dog", whole),
+            "scatter"
+        );
+    }
+
+    /// Les rectangles de surlignage se placent proportionnellement dans la
+    /// ligne et ne marquent pas les correspondances refusées par les filtres.
+    #[test]
+    fn match_rects_places_only_accepted_matches() {
+        let rect = [0.0, 10.0, 110.0, 20.0]; // 11 caractères → 10 pt chacun
+        let insensitive = SearchOptions::default();
+        let whole = SearchOptions {
+            case_sensitive: false,
+            whole_word: true,
+        };
+        let sensitive = SearchOptions {
+            case_sensitive: true,
+            whole_word: false,
+        };
+
+        let all = match_rects("cat cat cat", rect, "cat", insensitive);
+        assert_eq!(all.len(), 3);
+        let lefts: Vec<f32> = all.iter().map(|r| r[0]).collect();
+        for (got, want) in lefts.iter().zip([0.0, 40.0, 80.0]) {
+            assert!((got - want).abs() < 0.5, "gauche {got} ≠ {want}");
+        }
+        // Chaque rectangle couvre la largeur de la correspondance, et garde
+        // la hauteur de la ligne.
+        for r in &all {
+            assert!((r[2] - r[0] - 30.0).abs() < 0.5, "largeur {}", r[2] - r[0]);
+            assert_eq!(r[1], rect[1]);
+            assert_eq!(r[3], rect[3]);
+        }
+
+        // « catalog » : le mot entier refuse la correspondance.
+        assert!(match_rects("catalog", rect, "cat", whole).is_empty());
+        // Sensible à la casse : « Cat » ne compte pas.
+        assert_eq!(match_rects("cat Cat", rect, "cat", sensitive).len(), 1);
+        // Requête vide : aucun rectangle.
+        assert!(match_rects("cat", rect, " ", insensitive).is_empty());
     }
 
     /// Chaque disposition doit couvrir exactement les pages, une fois chacune.

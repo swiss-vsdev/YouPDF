@@ -78,7 +78,7 @@ pub use redact::{
     RedactionFill, RedactionMark, RedactionOverlay, RedactionRegion, RedactionReport,
 };
 pub use render::{PageBitmap, PdfiumRenderer, RenderOptions, Renderer};
-pub use search::{SearchIndex, SearchOptions, SearchResult, fold_case};
+pub use search::{SearchIndex, SearchOptions, SearchResult, fold_case, is_whole_word};
 pub use signature::{SignaturePlacement, SignatureRequest, SignatureStatus};
 pub use structure::{
     decode_pdf_text, AttachmentInfo, OutlineEntry, OutlineItem, OutlineStyle, OutlineTarget,

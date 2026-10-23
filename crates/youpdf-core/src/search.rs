@@ -92,6 +92,23 @@ pub fn fold_case(s: &str) -> String {
         .collect()
 }
 
+/// Vrai si `text[start..end]` n'est collé à aucun caractère alphanumérique.
+///
+/// C'est la règle du « mot entier » : `cat` ne correspond pas dans
+/// `catalog` ni dans `scat`. Partagée avec l'application, qui surligne et
+/// remplace les correspondances trouvées par l'index.
+pub fn is_whole_word(text: &str, start: usize, end: usize) -> bool {
+    let before = text[..start]
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_alphanumeric());
+    let after = text[end..]
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphanumeric());
+    !before && !after
+}
+
 impl SearchIndex {
     /// Construit l'index en extrayant le texte de toutes les pages.
     ///
@@ -222,15 +239,7 @@ impl SearchIndex {
 
     /// Vrai si `start..end` n'est pas collé à un caractère alphanumérique.
     fn is_whole_word(&self, start: usize, end: usize) -> bool {
-        let before = self.text[..start]
-            .chars()
-            .next_back()
-            .is_some_and(|c| c.is_alphanumeric());
-        let after = self.text[end..]
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_alphanumeric());
-        !before && !after
+        is_whole_word(&self.text, start, end)
     }
 
     /// Retourne le numéro de page (1-indexé) contenant `offset`.
