@@ -268,6 +268,8 @@ pub fn t(key: &'static str) -> &'static str {
         "Last" => "Dernière",
         "Text report" => "Rapport de texte",
         "Side by side" => "Côte à côte",
+        "Overlay" => "Superposition",
+        "Opacity of B" => "Opacité de B",
         "Ignore whitespace" => "Ignorer les espaces",
         "Ignore case" => "Ignorer la casse",
         "Continue" => "Continuer",

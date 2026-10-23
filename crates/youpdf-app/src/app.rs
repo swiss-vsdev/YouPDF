@@ -129,6 +129,8 @@ enum CompareView {
     Report,
     /// Les deux documents côte à côte, défilement synchronisé.
     SideBySide,
+    /// Le second document posé sur le premier, opacité réglable.
+    Overlay,
 }
 
 impl PageLayout {
@@ -930,6 +932,15 @@ const CANVAS_TOP_GAP: f32 = 48.0;
 /// d'un facteur √2. Entre deux paliers on étire le bitmap voisin, ce qui ne
 /// se voit pas une fois filtré, au lieu de rastériser chaque page à chaque
 /// cran de molette — c'est ce qui faisait ramer le zoom.
+/// Cadre d'affichage d'une page de comparaison : centré dans la place
+/// disponible, jamais agrandi au-delà de sa taille réelle.
+fn compare_fit_rect(slot: Rect, size: egui::Vec2) -> Rect {
+    let scale = (slot.width() / size.x.max(1.0))
+        .min(slot.height() / size.y.max(1.0))
+        .min(1.0);
+    Rect::from_center_size(slot.center(), size * scale)
+}
+
 fn render_step(scale: f32, ppp: f32) -> i32 {
     // Décalage constant : les paliers restent positifs et `THUMBNAIL_STEP`
     // (-1) ne peut pas être confondu avec un palier de page.
@@ -1577,6 +1588,8 @@ pub struct YouPdfApp {
     compare_ignore_ws: bool,
     /// Options de comparaison : ignorer la casse.
     compare_ignore_case: bool,
+    /// Opacité du second document dans la vue superposée, de 0 à 1.
+    compare_blend: f32,
     /// Callout en cours : les points déjà posés par les clics successifs.
     /// L'outil prend trois clics (départ, genou, coin du texte) : l'état
     /// doit survivre d'une trame à l'autre, sinon chaque clic repart de zéro.
@@ -1996,6 +2009,7 @@ impl YouPdfApp {
             compare_page: 1,
             compare_ignore_ws: false,
             compare_ignore_case: false,
+            compare_blend: 0.5,
             compare_report: None,
             ocr_open: false,
             ocr_language: "eng".to_owned(),
@@ -8359,6 +8373,8 @@ impl YouPdfApp {
                     ui.add_space(4.0);
                     ui.separator();
                     ui.add_space(4.0);
+                    // Côte à côte et superposée partagent la navigation ; la
+                    // superposée n'est qu'un autre tracé du même panneau.
                     self.compare_split_view(ui);
                 }
                 if let Some(report) = &self.compare_report {
@@ -8506,6 +8522,7 @@ impl YouPdfApp {
                 .selected_text(match self.compare_view {
                     CompareView::Report => t("Text report"),
                     CompareView::SideBySide => t("Side by side"),
+                    CompareView::Overlay => t("Overlay"),
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
@@ -8518,7 +8535,20 @@ impl YouPdfApp {
                         CompareView::SideBySide,
                         t("Side by side"),
                     );
+                    ui.selectable_value(
+                        &mut self.compare_view,
+                        CompareView::Overlay,
+                        t("Overlay"),
+                    );
                 });
+            // Dans la vue superposée, le curseur règle l'opacité du second
+            // document posé sur le premier.
+            if self.compare_view == CompareView::Overlay {
+                ui.add(
+                    egui::Slider::new(&mut self.compare_blend, 0.0..=1.0)
+                        .text(t("Opacity of B")),
+                );
+            }
             ui.add_space(10.0);
             if ui.checkbox(&mut self.compare_ignore_ws, t("Ignore whitespace")).changed() {
                 self.compare_report = None;
@@ -8588,104 +8618,138 @@ impl YouPdfApp {
         ui.separator();
         ui.add_space(4.0);
 
-        // Deux panneaux côte à côte, même hauteur.
-        let available = ui.available_size();
-        let pane_width = available.x / 2.0;
-        let scroll_height = available.y;
-
-        ui.horizontal(|ui| {
-            // Panneau A — document actif
-            ui.allocate_ui_with_layout(
-                vec2(pane_width, scroll_height),
-                Layout::top_down(Align::Center),
-                |ui| {
-                    ui.label(
-                        RichText::new(t("Document A"))
-                            .size(12.0)
-                            .color(pal().icon_bright),
-                    );
-                    let page_a = self.compare_page.min(total_a);
-                    if page_a >= 1 {
-                        let Some(tab) = self.tabs.get_mut(self.active) else { return };
-                        let zoom = tab.zoom.unwrap_or(1.0);
-                        let ppp = ui.ctx().pixels_per_point();
-                        let mut status = String::new();
-                        if let Some(tex) = YouPdfApp::page_texture(
-                            ui.ctx(),
-                            &*self.renderer,
-                            tab,
-                            page_a as u32,
-                            render_step(zoom, ppp),
-                            zoom,
-                            ppp,
-                            true,
-                            false,
-                            &mut status,
-                        ) {
-                            let sz = tex.size_vec2();
-                            let max_w = pane_width * 0.95;
-                            let scale = (max_w / sz.x).min(1.0);
-                            let img_rect = Rect::from_min_max(
-                                pos2(0.0, 0.0),
-                                pos2(sz.x * scale, sz.y * scale),
-                            );
-                            ui.painter().image(
-                                tex.id(),
-                                img_rect,
-                                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                                Color32::WHITE,
-                            );
-                        }
-                    }
-                },
-            );
-            ui.add_space(4.0);
-            // Panneau B — document comparé
-            ui.allocate_ui_with_layout(
-                vec2(pane_width, scroll_height),
-                Layout::top_down(Align::Center),
-                |ui| {
-                    ui.label(
-                        RichText::new(t("Document B"))
-                            .size(12.0)
-                            .color(pal().icon_bright),
-                    );
-                    let page_b = self.compare_page.min(total_b);
-                    if page_b >= 1 {
-                        let Some(tab) = self.compare_tab.as_mut() else { return };
-                        let zoom = tab.zoom.unwrap_or(1.0);
-                        let ppp = ui.ctx().pixels_per_point();
-                        let mut status = String::new();
-                        if let Some(tex) = YouPdfApp::page_texture(
-                            ui.ctx(),
-                            &*self.renderer,
-                            tab,
-                            page_b as u32,
-                            render_step(zoom, ppp),
-                            zoom,
-                            ppp,
-                            true,
-                            false,
-                            &mut status,
-                        ) {
-                            let sz = tex.size_vec2();
-                            let max_w = pane_width * 0.95;
-                            let scale = (max_w / sz.x).min(1.0);
-                            let img_rect = Rect::from_min_max(
-                                pos2(0.0, 0.0),
-                                pos2(sz.x * scale, sz.y * scale),
-                            );
-                            ui.painter().image(
-                                tex.id(),
-                                img_rect,
-                                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                                Color32::WHITE,
-                            );
-                        }
-                    }
-                },
-            );
+        // Les deux rasters sont produits avant l'affichage : chaque panneau
+        // emprunte son propre onglet et les deux ne peuvent pas être tenus
+        // en même temps.
+        let page_a = self.compare_page.min(total_a);
+        let page_b = self.compare_page.min(total_b);
+        let zoom_a = self.tabs.get(self.active).and_then(|t| t.zoom).unwrap_or(1.0);
+        let zoom_b = self.compare_tab.as_ref().and_then(|t| t.zoom).unwrap_or(1.0);
+        let ppp = ui.ctx().pixels_per_point();
+        let mut status = String::new();
+        let tex_a = self.tabs.get_mut(self.active).and_then(|tab| {
+            YouPdfApp::page_texture(
+                ui.ctx(),
+                &*self.renderer,
+                tab,
+                page_a as u32,
+                render_step(zoom_a, ppp),
+                zoom_a,
+                ppp,
+                true,
+                false,
+                &mut status,
+            )
         });
+        let tex_b = self.compare_tab.as_mut().and_then(|tab| {
+            YouPdfApp::page_texture(
+                ui.ctx(),
+                &*self.renderer,
+                tab,
+                page_b as u32,
+                render_step(zoom_b, ppp),
+                zoom_b,
+                ppp,
+                true,
+                false,
+                &mut status,
+            )
+        });
+        let diffs_a = self.diffs_on_page(true, page_a);
+        let diffs_b = self.diffs_on_page(false, page_b);
+        let blend = self.compare_blend;
+
+        let available = ui.available_size();
+
+        if self.compare_view == CompareView::Overlay {
+            // Le second document est posé sur le premier à l'opacité réglée
+            // dans la barre de contrôle : les décalages sautent aux yeux.
+            let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
+            if let Some(tex) = &tex_a {
+                let img_rect = compare_fit_rect(rect, tex.size_vec2());
+                ui.painter().image(
+                    tex.id(),
+                    img_rect,
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+            if let Some(tex) = &tex_b {
+                let img_rect = compare_fit_rect(rect, tex.size_vec2());
+                ui.painter().image(
+                    tex.id(),
+                    img_rect,
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                    Color32::from_white_alpha((blend.clamp(0.0, 1.0) * 255.0) as u8),
+                );
+            }
+            return;
+        }
+
+        let pane_width = available.x / 2.0;
+        ui.horizontal(|ui| {
+            for (label, tex, diffs) in [
+                (t("Document A"), tex_a, diffs_a),
+                (t("Document B"), tex_b, diffs_b),
+            ] {
+                ui.allocate_ui_with_layout(
+                    vec2(pane_width, available.y),
+                    Layout::top_down(Align::Center),
+                    |ui| {
+                        ui.label(
+                            RichText::new(label)
+                                .size(12.0)
+                                .color(pal().icon_bright),
+                        );
+                        let Some(tex) = tex else { return };
+                        let (slot, _) = ui.allocate_exact_size(
+                            vec2(pane_width, available.y - 24.0),
+                            egui::Sense::hover(),
+                        );
+                        let img_rect = compare_fit_rect(slot, tex.size_vec2());
+                        ui.painter().image(
+                            tex.id(),
+                            img_rect,
+                            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
+                        if diffs > 0 {
+                            // Liseré + compteur : les différences du rapport
+                            // sont signalées page par page.
+                            ui.painter().rect_stroke(
+                                img_rect.expand(2.0),
+                                Rounding::same(2.0),
+                                Stroke::new(1.5_f32, MODIFIED_AMBER),
+                            );
+                            ui.painter().text(
+                                img_rect.left_top() + vec2(6.0, 4.0),
+                                Align2::LEFT_TOP,
+                                format!("{diffs}"),
+                                FontId::proportional(11.0),
+                                MODIFIED_AMBER,
+                            );
+                        }
+                    },
+                );
+                ui.add_space(4.0);
+            }
+        });
+    }
+
+    /// Nombre de différences signalées sur une page, selon le côté du
+    /// rapport (A ou B).
+    fn diffs_on_page(&self, side_a: bool, page: usize) -> usize {
+        let Some(report) = &self.compare_report else {
+            return 0;
+        };
+        report
+            .differences
+            .iter()
+            .filter(|d| {
+                let p = if side_a { d.page_a } else { d.page_b };
+                p == Some(page)
+            })
+            .count()
     }
 
     /// Fenêtre « OCR » : rend le document consultable par Tesseract.
