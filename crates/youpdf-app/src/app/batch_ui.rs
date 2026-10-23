@@ -4,6 +4,7 @@
 //! egui et ne renvoie que des lignes de texte vers l'interface.
 
 use super::*;
+use youpdf_shared::t;
 
 impl YouPdfApp {
     pub(super) fn batch_window(&mut self, ctx: &egui::Context) {
@@ -29,7 +30,7 @@ impl YouPdfApp {
             .batch_dir
             .as_ref()
             .map(|p| p.display().to_string());
-        egui::Window::new("Batch processing")
+        egui::Window::new(t("Batch processing"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -37,12 +38,12 @@ impl YouPdfApp {
             .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.set_max_width(620.0);
-                ui.label(RichText::new("Queue").size(12.0).color(pal().muted));
+                ui.label(RichText::new(t("Queue")).size(12.0).color(pal().muted));
                 ui.horizontal(|ui| {
-                    if ui.button("Add PDFs…").clicked() {
+                    if ui.button(t("Add PDFs…")).clicked() {
                         add_files = true;
                     }
-                    if ui.button("Add folder…").clicked() {
+                    if ui.button(t("Add folder…")).clicked() {
                         add_folder = true;
                     }
                     if ui.add_enabled(!self.batch_running, egui::Button::new("Clear")).clicked() {
@@ -53,9 +54,9 @@ impl YouPdfApp {
                 ui.add_space(4.0);
                 self.batch_table(ui);
                 ui.add_space(6.0);
-                ui.label(RichText::new("Output folder").size(12.0).color(pal().muted));
+                ui.label(RichText::new(t("Output folder")).size(12.0).color(pal().muted));
                 ui.horizontal(|ui| {
-                    if ui.button("Choose…").clicked() {
+                    if ui.button(t("Choose…")).clicked() {
                         choose_dir = true;
                     }
                     ui.label(
@@ -68,11 +69,11 @@ impl YouPdfApp {
                 ui.separator();
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new("Operations, applied in this order").size(12.0).color(pal().muted),
+                    RichText::new(t("Operations, applied in this order")).size(12.0).color(pal().muted),
                 );
-                ui.checkbox(&mut self.batch_text, "Export the text (plain text)");
-                ui.checkbox(&mut self.batch_images, "Export the pages as PNG (150 dpi)");
-                ui.checkbox(&mut self.batch_compress, "Write a compressed copy");
+                ui.checkbox(&mut self.batch_text, t("Export the text (plain text)"));
+                ui.checkbox(&mut self.batch_images, t("Export the pages as PNG (150 dpi)"));
+                ui.checkbox(&mut self.batch_compress, t("Write a compressed copy"));
                 ui.checkbox(
                     &mut self.batch_protect,
                     "Write a protected copy (current settings)",
@@ -81,12 +82,12 @@ impl YouPdfApp {
                     &mut self.batch_flatten,
                     "Write a copy with the annotations flattened",
                 );
-                ui.checkbox(&mut self.batch_combine, "Combine every file into one PDF");
-                ui.checkbox(&mut self.batch_print, "Send each file to the system printer");
-                ui.checkbox(&mut self.batch_ocr, "Recognise text (OCR, searchable)");
+                ui.checkbox(&mut self.batch_combine, t("Combine every file into one PDF"));
+                ui.checkbox(&mut self.batch_print, t("Send each file to the system printer"));
+                ui.checkbox(&mut self.batch_ocr, t("Recognise text (OCR, searchable)"));
                 if self.batch_ocr {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("OCR language").size(12.0).color(pal().muted));
+                        ui.label(RichText::new(t("OCR language")).size(12.0).color(pal().muted));
                         let mut picked: Option<String> = None;
                         egui::ComboBox::from_id_salt("batch-ocr-lang")
                             .selected_text(language_name(&self.ocr_language))
@@ -113,7 +114,7 @@ impl YouPdfApp {
                     "Apply the current page background",
                 );
                 ui.horizontal(|ui| {
-                    if ui.button("Insert pages from…").clicked() {
+                    if ui.button(t("Insert pages from…")).clicked() {
                         insert_file = true;
                     }
                     ui.label(
@@ -127,7 +128,7 @@ impl YouPdfApp {
                         .size(11.0)
                         .color(pal().muted),
                     );
-                    ui.label(RichText::new("at").size(11.0).color(pal().muted));
+                    ui.label(RichText::new(t("at")).size(11.0).color(pal().muted));
                     let mut at_page = self.batch_insert_at.min(9999) as u32;
                     ui.add(egui::DragValue::new(&mut at_page).range(0..=9999).prefix("after "));
                     self.batch_insert_at = if at_page == 0 {
@@ -137,7 +138,7 @@ impl YouPdfApp {
                     };
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Convert").size(11.0).color(pal().muted));
+                    ui.label(RichText::new(t("Convert")).size(11.0).color(pal().muted));
                     let current = self.batch_convert;
                     egui::ComboBox::from_id_salt("batch-convert")
                         .selected_text(
@@ -146,7 +147,7 @@ impl YouPdfApp {
                                 .unwrap_or_else(|| "None".to_owned()),
                         )
                         .show_ui(ui, |ui| {
-                            if ui.selectable_label(current.is_none(), "None").clicked() {
+                            if ui.selectable_label(current.is_none(), t("None")).clicked() {
                                 self.batch_convert = None;
                             }
                             for format in OfficeFormat::ALL {
@@ -160,7 +161,7 @@ impl YouPdfApp {
                         });
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Remove pages").size(11.0).color(pal().muted));
+                    ui.label(RichText::new(t("Remove pages")).size(11.0).color(pal().muted));
                     ui.add(
                         TextEdit::singleline(&mut self.batch_remove_pages)
                             .hint_text("1-2, 5")
@@ -168,7 +169,7 @@ impl YouPdfApp {
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Watermark").size(11.0).color(pal().muted));
+                    ui.label(RichText::new(t("Watermark")).size(11.0).color(pal().muted));
                     ui.add(
                         TextEdit::singleline(&mut self.batch_watermark_text)
                             .hint_text("CONFIDENTIAL")
@@ -176,7 +177,7 @@ impl YouPdfApp {
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Header/footer").size(11.0).color(pal().muted));
+                    ui.label(RichText::new(t("Header/footer")).size(11.0).color(pal().muted));
                     ui.add(
                         TextEdit::singleline(&mut self.batch_header_text)
                             .hint_text("My Company")
@@ -184,15 +185,15 @@ impl YouPdfApp {
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Bates prefix").size(11.0).color(pal().muted));
+                    ui.label(RichText::new(t("Bates prefix")).size(11.0).color(pal().muted));
                     ui.add(
                         TextEdit::singleline(&mut self.batch_bates_prefix).desired_width(80.0),
                     );
-                    ui.label(RichText::new("start").size(11.0).color(pal().muted));
+                    ui.label(RichText::new(t("start")).size(11.0).color(pal().muted));
                     ui.add(egui::DragValue::new(&mut self.batch_bates_start).range(1..=999_999));
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Output name").size(11.0).color(pal().muted));
+                    ui.label(RichText::new(t("Output name")).size(11.0).color(pal().muted));
                     ui.add(
                         TextEdit::singleline(&mut self.batch_prefix)
                             .hint_text("prefix")
@@ -207,7 +208,7 @@ impl YouPdfApp {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if self.batch_running {
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(t("Cancel")).clicked() {
                             cancel = true;
                         }
                         ui.spinner();

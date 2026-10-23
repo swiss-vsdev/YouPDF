@@ -8,7 +8,7 @@
 use egui::{pos2, Color32, Painter, Rect, RichText, Rounding, Sense, Shape, Stroke, Vec2};
 use egui_phosphor::regular as ph;
 use youpdf_core::{AnnotationKind, ImageTransform, PatchFont, TextAlign, TextStyle};
-use youpdf_shared::pal;
+use youpdf_shared::{t, pal};
 
 /// Identificateur d'un bloc de texte dans la page.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -372,7 +372,7 @@ pub fn text_style_row(
         if spacing.changed() {
             changed = true;
         }
-        spacing.on_hover_text("Character spacing");
+        spacing.on_hover_text(t("Character spacing"));
         changed
     });
     if state.palette_open {
@@ -399,7 +399,7 @@ pub fn text_style_row(
             }
         });
         ui.horizontal(|ui| {
-            ui.label(RichText::new("#").size(11.0).color(pal().muted));
+            ui.label(RichText::new(t("#")).size(11.0).color(pal().muted));
             let hex = ui.add(
                 egui::TextEdit::singleline(&mut state.hex)
                     .desired_width(64.0)
@@ -481,14 +481,14 @@ pub fn image_controls(
         if cropping {
             if ui
                 .small_button(format!("{} Apply", ph::CHECK))
-                .on_hover_text("Apply the crop")
+                .on_hover_text(t("Apply the crop"))
                 .clicked()
             {
                 action = Some(ImageAction::ApplyCrop);
             }
             if ui
                 .small_button(format!("{} Cancel", ph::X))
-                .on_hover_text("Cancel the crop")
+                .on_hover_text(t("Cancel the crop"))
                 .clicked()
             {
                 action = Some(ImageAction::CancelCrop);
@@ -497,14 +497,14 @@ pub fn image_controls(
         }
         if ui
             .small_button(format!("{} Replace", ph::ARROWS_CLOCKWISE))
-            .on_hover_text("Replace the image, keeping its place")
+            .on_hover_text(t("Replace the image, keeping its place"))
             .clicked()
         {
             action = Some(ImageAction::Replace);
         }
         if ui
             .small_button(format!("{} Extract", ph::EXPORT))
-            .on_hover_text("Export the image as PNG")
+            .on_hover_text(t("Export the image as PNG"))
             .clicked()
         {
             action = Some(ImageAction::Extract);
@@ -526,14 +526,14 @@ pub fn image_controls(
         }
         if ui
             .small_button(ph::CROP)
-            .on_hover_text("Crop the image")
+            .on_hover_text(t("Crop the image"))
             .clicked()
         {
             action = Some(ImageAction::StartCrop);
         }
         if ui
             .small_button(ph::TRASH)
-            .on_hover_text("Delete the image")
+            .on_hover_text(t("Delete the image"))
             .clicked()
         {
             action = Some(ImageAction::Delete);

@@ -14,6 +14,7 @@
 //! signature « à l'encre ».
 
 use super::*;
+use youpdf_shared::t;
 use ab_glyph::ScaleFont;
 
 /// Nombre de signatures conservées d'un côté et de l'autre.
@@ -128,18 +129,18 @@ impl YouPdfApp {
                 ui.separator();
                 if app.marks.stamp_tab == 0 {
                     ui.horizontal(|ui| {
-                        ui.label("Text");
+                        ui.label(t("Text"));
                         ui.add(
                             TextEdit::singleline(&mut app.marks.stamp_text).desired_width(260.0),
                         );
                     });
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut app.marks.stamp_border, "Border");
-                        ui.checkbox(&mut app.marks.stamp_date, "Add the date");
+                        ui.checkbox(&mut app.marks.stamp_border, t("Border"));
+                        ui.checkbox(&mut app.marks.stamp_date, t("Add the date"));
                     });
                     ui.add_space(6.0);
                     ui.label(
-                        RichText::new("The stamp is placed at the centre of the current page.")
+                        RichText::new(t("The stamp is placed at the centre of the current page."))
                             .size(10.5)
                             .color(pal().muted),
                     );
@@ -152,7 +153,7 @@ impl YouPdfApp {
                         .clicked();
                 } else {
                     ui.horizontal(|ui| {
-                        if ui.button("Choose image…").clicked() {
+                        if ui.button(t("Choose image…")).clicked() {
                             app.choose_stamp_image();
                         }
                         if !app.marks.stamp_image_name.is_empty() {
@@ -165,7 +166,7 @@ impl YouPdfApp {
                     });
                     ui.add_space(6.0);
                     ui.label(
-                        RichText::new("PNG or JPEG, drawn at a quarter of the page width.")
+                        RichText::new(t("PNG or JPEG, drawn at a quarter of the page width."))
                             .size(10.5)
                             .color(pal().muted),
                     );
@@ -299,7 +300,7 @@ impl YouPdfApp {
                 self.marks.draw_current.clear();
             }
             ui.add_enabled_ui(!self.marks.draw_points.is_empty(), |ui| {
-                if ui.button("Use this signature").clicked() {
+                if ui.button(t("Use this signature")).clicked() {
                     match self.render_drawn_signature() {
                         Ok(png) => {
                             self.marks.error = None;
@@ -318,7 +319,7 @@ impl YouPdfApp {
     /// Onglet « Taper » : un nom rendu en scripte.
     fn signature_type_tab(&mut self, ui: &mut egui::Ui) -> Option<Vec<u8>> {
         ui.horizontal(|ui| {
-            ui.label("Name");
+            ui.label(t("Name"));
             ui.add(TextEdit::singleline(&mut self.marks.typed_name).desired_width(280.0));
         });
         ui.add_space(4.0);
@@ -344,7 +345,7 @@ impl YouPdfApp {
             );
         }
         ui.add_enabled_ui(!preview.is_empty(), |ui| {
-            if ui.button("Use this signature").clicked() {
+            if ui.button(t("Use this signature")).clicked() {
                 match self.render_typed_signature() {
                     Ok(png) => {
                         self.marks.error = None;
@@ -361,7 +362,7 @@ impl YouPdfApp {
     /// Onglet « Image » : import d'une signature scannée ou photographiée.
     fn signature_image_tab(&mut self, ui: &mut egui::Ui) -> Option<Vec<u8>> {
         ui.horizontal(|ui| {
-            if ui.button("Choose image…").clicked() {
+            if ui.button(t("Choose image…")).clicked() {
                 self.choose_signature_image();
             }
             if let Some((_, w, h)) = self.marks.imported {
@@ -382,7 +383,7 @@ impl YouPdfApp {
         );
         ui.add_space(6.0);
         ui.add_enabled_ui(self.marks.imported.is_some(), |ui| {
-            if ui.button("Use this signature").clicked() {
+            if ui.button(t("Use this signature")).clicked() {
                 if let Some((rgb, width, height)) = self.marks.imported.clone() {
                     match encode_png(&rgb, width, height, true) {
                         Ok(png) => {
@@ -410,7 +411,7 @@ impl YouPdfApp {
         );
         if self.marks.stored.is_empty() {
             ui.label(
-                RichText::new("Nothing saved yet.")
+                RichText::new(t("Nothing saved yet."))
                     .size(10.5)
                     .color(pal().muted),
             );

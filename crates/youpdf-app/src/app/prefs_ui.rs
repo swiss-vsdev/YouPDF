@@ -1,6 +1,7 @@
 //! Fenêtre des préférences et enregistrement automatique.
 
 use super::*;
+use youpdf_shared::t;
 
 /// Libellé d'une disposition de pages, pour les menus et les préférences.
 pub(super) fn layout_label(layout: PageLayout) -> &'static str {
@@ -24,7 +25,7 @@ fn prefs_body(app: &mut YouPdfApp, ui: &mut egui::Ui, settings: &mut youpdf_ai::
         .num_columns(2)
         .spacing([8.0, 6.0])
         .show(ui, |ui| {
-            ui.label(RichText::new("On startup").size(11.0));
+            ui.label(RichText::new(t("On startup")).size(11.0));
             egui::ComboBox::from_id_salt("prefs-startup")
                 .selected_text(match settings.startup.as_str() {
                     "blank" => "Blank document",
@@ -44,7 +45,7 @@ fn prefs_body(app: &mut YouPdfApp, ui: &mut egui::Ui, settings: &mut youpdf_ai::
                 });
             ui.end_row();
 
-            ui.label(RichText::new("Default zoom").size(11.0));
+            ui.label(RichText::new(t("Default zoom")).size(11.0));
             egui::ComboBox::from_id_salt("prefs-zoom")
                 .selected_text(settings.default_zoom.clone())
                 .show_ui(ui, |ui| {
@@ -58,7 +59,7 @@ fn prefs_body(app: &mut YouPdfApp, ui: &mut egui::Ui, settings: &mut youpdf_ai::
                 });
             ui.end_row();
 
-            ui.label(RichText::new("Default layout").size(11.0));
+            ui.label(RichText::new(t("Default layout")).size(11.0));
             let mut layout = settings.default_layout.min(PageLayout::ALL.len() - 1);
             egui::ComboBox::from_id_salt("prefs-layout")
                 .selected_text(layout_label(PageLayout::ALL[layout]))
@@ -75,11 +76,11 @@ fn prefs_body(app: &mut YouPdfApp, ui: &mut egui::Ui, settings: &mut youpdf_ai::
             settings.default_layout = layout;
             ui.end_row();
 
-            ui.label(RichText::new("Author").size(11.0));
+            ui.label(RichText::new(t("Author")).size(11.0));
             ui.add(TextEdit::singleline(&mut settings.author).desired_width(180.0));
             ui.end_row();
 
-            ui.label(RichText::new("Measure unit").size(11.0));
+            ui.label(RichText::new(t("Measure unit")).size(11.0));
             egui::ComboBox::from_id_salt("prefs-unit")
                 .selected_text(settings.measure_unit.clone())
                 .show_ui(ui, |ui| {
@@ -93,7 +94,7 @@ fn prefs_body(app: &mut YouPdfApp, ui: &mut egui::Ui, settings: &mut youpdf_ai::
                 });
             ui.end_row();
 
-            ui.label(RichText::new("Auto-save").size(11.0));
+            ui.label(RichText::new(t("Auto-save")).size(11.0));
             egui::ComboBox::from_id_salt("prefs-autosave")
                 .selected_text(match settings.autosave_minutes {
                     0 => "Disabled".to_string(),
@@ -153,8 +154,8 @@ fn prefs_body(app: &mut YouPdfApp, ui: &mut egui::Ui, settings: &mut youpdf_ai::
         }
     });
     ui.add_space(6.0);
-    ui.label(RichText::new("AI").size(12.0).color(pal().muted));
-    ui.checkbox(&mut settings.ai_enabled, "Enable the AI layer");
+    ui.label(RichText::new(t("AI")).size(12.0).color(pal().muted));
+    ui.checkbox(&mut settings.ai_enabled, t("Enable the AI layer"));
     ui.add_space(8.0);
 }
 
@@ -182,9 +183,9 @@ impl YouPdfApp {
                 let mut settings = draft;
                 prefs_body(app, ui, &mut settings);
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
+                    if ui.button(t("Save")).clicked() {
                         (settings.clone(), true, false)
-                    } else if ui.button("Close").clicked() {
+                    } else if ui.button(t("Close")).clicked() {
                         (settings.clone(), false, true)
                     } else {
                         (settings.clone(), false, false)
