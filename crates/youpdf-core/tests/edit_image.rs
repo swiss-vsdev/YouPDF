@@ -328,6 +328,40 @@ fn rotation_antihoraire_amene_la_gauche_en_bas() {
     );
 }
 
+/// Une rotation d'angle libre fait tourner l'image autour de son centre,
+/// sans réencodage des pixels. Un quart de tour équivaut au cas `RotateCw`.
+#[test]
+fn rotation_libre_fait_tourner_autour_du_centre() {
+    let mut doc = document_avec_image(&moities_gauche_droite(), 8, 8);
+    let images = doc.extract_images(1).expect("liste des images");
+
+    let renderer = PdfiumRenderer::load().expect("pdfium");
+    let avant = renderer
+        .render_page(&doc, 1, &RenderOptions::default())
+        .expect("rendu");
+    let (rouge_x, _) = centroide(&avant, true).expect("moitié rouge");
+    let (bleu_x, _) = centroide(&avant, false).expect("moitié bleue");
+    assert!(rouge_x < bleu_x, "au départ, le rouge est à gauche");
+
+    // 45° dans le sens horaire à l'écran : le rouge (à gauche) monte, le
+    // bleu (à droite) descend ; les deux gardent leur ordre horizontal,
+    // resserré vers le centre.
+    doc.rotate_image(&images[0], 45.0).expect("rotation libre");
+    let apres = renderer
+        .render_page(&doc, 1, &RenderOptions::default())
+        .expect("rendu");
+    let (rouge_x, rouge_y) = centroide(&apres, true).expect("moitié rouge");
+    let (bleu_x, bleu_y) = centroide(&apres, false).expect("moitié bleue");
+    assert!(
+        rouge_y < bleu_y && (rouge_x - bleu_x).abs() < 90.0,
+        "après 45° horaire, le rouge devrait être au-dessus du bleu et plus
+         près de l'axe vertical qu'avant : rouge=({rouge_x},{rouge_y}) bleu=({bleu_x},{bleu_y})"
+    );
+    // Les pixels ne sont pas réencodés : la ressource garde sa taille.
+    let apres_infos = doc.extract_images(1).expect("liste des images");
+    assert_eq!((apres_infos[0].width, apres_infos[0].height), (8, 8));
+}
+
 /// Déplacer une image n'est qu'un déplacement d'origine : elle atterrit
 /// ailleurs, sans réencodage des pixels.
 #[test]
