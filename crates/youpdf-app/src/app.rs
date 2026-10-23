@@ -1,4 +1,3 @@
-use youpdf_shared::{BODY};
 //! Fenêtre principale de YouPDF — v0.1 « lecteur ».
 //!
 //! Chrome calqué sur la référence UX mesurée : rail de 8 outils, barre de
@@ -3042,7 +3041,7 @@ impl YouPdfApp {
                             } else {
                                 ph::CARET_DOWN
                             },
-                            FontId::proportional(LABEL),
+                            FontId::proportional(11.0),
                             pal().muted,
                         );
                     }
@@ -3057,7 +3056,7 @@ impl YouPdfApp {
                         let edit = ui.put(
                             edit_rect,
                             TextEdit::singleline(&mut rename_text)
-                                .font(FontId::proportional(BODY)),
+                                .font(FontId::proportional(12.0)),
                         );
                         if request_focus {
                             edit.request_focus();
@@ -3077,7 +3076,7 @@ impl YouPdfApp {
                             pos2(text_x, rect.center().y),
                             Align2::LEFT_CENTER,
                             shorten(title, 30),
-                            FontId::proportional(BODY),
+                            FontId::proportional(12.0),
                             pal().icon_bright,
                         );
                     }
@@ -3086,7 +3085,7 @@ impl YouPdfApp {
                             pos2(rect.max.x - 8.0, rect.center().y),
                             Align2::RIGHT_CENTER,
                             format!("p.{page}"),
-                            FontId::proportional(CAPTION),
+                            FontId::proportional(10.5),
                             pal().muted,
                         );
                     }
@@ -3392,7 +3391,7 @@ impl YouPdfApp {
                         pos2(rect.min.x + 30.0, rect.min.y + 13.0),
                         Align2::LEFT_CENTER,
                         shorten(name, 24),
-                        FontId::proportional(BODY),
+                        FontId::proportional(12.0),
                         pal().icon_bright,
                     );
                     let mut detail = size
@@ -3405,7 +3404,7 @@ impl YouPdfApp {
                         pos2(rect.min.x + 30.0, rect.min.y + 30.0),
                         Align2::LEFT_CENTER,
                         detail,
-                        FontId::proportional(CAPTION),
+                        FontId::proportional(10.5),
                         pal().muted,
                     );
                     let save_rect = Rect::from_center_size(
@@ -3995,6 +3994,7 @@ impl YouPdfApp {
             })
             .map(|(idx, _)| idx)
     }
+
 
     /// Indice du tracé de crayon réellement touché à `point`, en ignorant les
     /// boîtes englobantes vides.
@@ -5162,7 +5162,7 @@ impl YouPdfApp {
                         }
                         let galley = ui.painter().layout_no_wrap(
                             label,
-                            FontId::proportional(BODY),
+                            FontId::proportional(12.5),
                             color,
                         );
                         let width = if selected {
@@ -5306,7 +5306,7 @@ impl YouPdfApp {
                             rect.center(),
                             Align2::CENTER_CENTER,
                             "Y",
-                            FontId::proportional(LABEL),
+                            FontId::proportional(11.0),
                             Color32::WHITE,
                         );
                         let _ = resp;
@@ -5568,7 +5568,7 @@ impl YouPdfApp {
                                             rect.center(),
                                             Align2::CENTER_CENTER,
                                             author_initial(&row.author),
-                                            FontId::proportional(CAPTION),
+                                            FontId::proportional(10.0),
                                             pal().icon_bright,
                                         );
                                         ui.vertical(|ui| {
@@ -6162,7 +6162,7 @@ impl YouPdfApp {
                         pos2(rect.center().x, img_rect.max.y + 14.0),
                         Align2::CENTER_CENTER,
                         page.to_string(),
-                        FontId::proportional(LABEL),
+                        FontId::proportional(11.0),
                         if picked { pal().accent } else { pal().muted },
                     );
 
@@ -6499,7 +6499,7 @@ impl YouPdfApp {
                 rect.center(),
                 Align2::CENTER_CENTER,
                 "Aa",
-                FontId::proportional(BODY),
+                FontId::proportional(12.0),
                 if resp.hovered() { pal().icon_bright } else { pal().icon },
             );
             if resp.clicked() {
@@ -6647,7 +6647,7 @@ impl YouPdfApp {
                             pos2(rect.min.x + 10.0, rect.center().y),
                             Align2::LEFT_CENTER,
                             shorten(query, 22),
-                            FontId::proportional(BODY),
+                            FontId::proportional(11.5),
                             pal().icon_bright,
                         );
                         let x_rect = Rect::from_center_size(
@@ -6731,14 +6731,14 @@ impl YouPdfApp {
                             pos2(rect.min.x + 8.0, rect.center().y),
                             Align2::LEFT_CENTER,
                             format!("#{}", result.page),
-                            FontId::proportional(BODY),
+                            FontId::proportional(11.5),
                             pal().accent,
                         );
                         ui.painter().text(
                             pos2(rect.min.x + 40.0, rect.center().y),
                             Align2::LEFT_CENTER,
                             shorten(result.context.trim(), 24),
-                            FontId::proportional(LABEL),
+                            FontId::proportional(11.0),
                             pal().muted,
                         );
                         if resp.clicked() {
@@ -8374,6 +8374,8 @@ impl YouPdfApp {
         Some(outcome)
     }
 
+
+
     /// Fenêtre « Comparer des PDF » : différences de texte entre deux fichiers.
     fn compare_window(&mut self, ctx: &egui::Context) {
         if !self.compare_open {
@@ -8749,7 +8751,7 @@ impl YouPdfApp {
                                 img_rect.left_top() + vec2(6.0, 4.0),
                                 Align2::LEFT_TOP,
                                 format!("{diffs}"),
-                                FontId::proportional(LABEL),
+                                FontId::proportional(11.0),
                                 MODIFIED_AMBER,
                             );
                         }
@@ -12042,7 +12044,7 @@ impl YouPdfApp {
             pos2(text_x, rect.min.y + 146.0),
             Align2::LEFT_CENTER,
             shorten(&name, 20),
-            FontId::proportional(BODY),
+            FontId::proportional(12.0),
             if exists { pal().icon_bright } else { pal().muted },
         );
         ui.painter().text(
@@ -12063,7 +12065,7 @@ impl YouPdfApp {
             } else {
                 "File not found".to_owned()
             },
-            FontId::proportional(CAPTION),
+            FontId::proportional(10.0),
             pal().muted,
         );
 
@@ -12077,7 +12079,7 @@ impl YouPdfApp {
             star_rect.center(),
             Align2::CENTER_CENTER,
             if starred { "★" } else { "☆" },
-            FontId::proportional(TITLE),
+            FontId::proportional(13.0),
             if starred { pal().accent } else { pal().muted },
         );
         if star_resp.clicked() {
@@ -12162,7 +12164,7 @@ impl YouPdfApp {
                     pos2(rect.min.x + 14.0, rect.min.y + 15.0),
                     Align2::LEFT_CENTER,
                     shorten(&name, 46),
-                    FontId::proportional(BODY),
+                    FontId::proportional(12.5),
                     if exists { pal().icon_bright } else { pal().muted },
                 );
                 let detail = if exists {
@@ -12184,7 +12186,7 @@ impl YouPdfApp {
                     pos2(rect.min.x + 14.0, rect.min.y + 32.0),
                     Align2::LEFT_CENTER,
                     detail,
-                    FontId::proportional(CAPTION),
+                    FontId::proportional(10.5),
                     pal().muted,
                 );
 
@@ -12197,7 +12199,7 @@ impl YouPdfApp {
                     star_rect.center(),
                     Align2::CENTER_CENTER,
                     if starred { "★" } else { "☆" },
-                    FontId::proportional(TITLE),
+                    FontId::proportional(13.0),
                     if starred { pal().accent } else { pal().muted },
                 );
                 if star_resp.clicked() {
@@ -12213,7 +12215,7 @@ impl YouPdfApp {
                     forget_rect.center(),
                     Align2::CENTER_CENTER,
                     if forget_resp.hovered() { ph::X } else { "" },
-                    FontId::proportional(BODY),
+                    FontId::proportional(12.0),
                     pal().icon,
                 );
                 if forget_resp.clicked() {
@@ -12284,7 +12286,7 @@ impl YouPdfApp {
                         rect.center(),
                         Align2::CENTER_CENTER,
                         *label,
-                        FontId::proportional(TITLE),
+                        FontId::proportional(13.0),
                         pal().icon_bright,
                     );
                     if resp.clicked() {
@@ -12380,6 +12382,7 @@ impl YouPdfApp {
             .insert(path.to_path_buf(), (mtime, handle.clone()));
         Some(handle)
     }
+
 
     /// Journal d'activité (cloche de la barre de titre) : les derniers
     /// messages affichés, du plus récent au plus ancien.
@@ -12972,6 +12975,7 @@ fn extract_document_text(doc: &Document) -> String {
 // Widgets maison
 // --------------------------------------------------------------------------
 
+
 /// Pastille de mode / d'outil : icône + libellé (+ `▾`), fond si actif.
 fn pill_button(
     ui: &mut egui::Ui,
@@ -12990,7 +12994,7 @@ fn pill_button(
     };
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
-        FontId::proportional(BODY),
+        FontId::proportional(12.5),
         text_color,
     );
     let width = 12.0
@@ -13086,7 +13090,7 @@ fn menu_row_checked(ui: &mut egui::Ui, label: &str, checked: bool) -> bool {
         pos2(rect.min.x + 32.0, rect.center().y),
         Align2::LEFT_CENTER,
         label,
-        FontId::proportional(BODY),
+        FontId::proportional(12.5),
         pal().icon_bright,
     );
     resp.clicked()
@@ -13154,14 +13158,14 @@ fn menu_row(ui: &mut egui::Ui, label: &str, shortcut: &str, icon: Option<fn(&egu
         pos2(label_x, rect.center().y),
         Align2::LEFT_CENTER,
         label,
-        FontId::proportional(BODY),
+        FontId::proportional(12.5),
         pal().icon_bright,
     );
     ui.painter().text(
         pos2(shortcut_x, rect.center().y),
         Align2::RIGHT_CENTER,
         shortcut,
-        FontId::proportional(LABEL),
+        FontId::proportional(11.0),
         pal().muted,
     );
     resp.clicked()
@@ -13283,6 +13287,7 @@ fn icon_button(
     draw(ui.painter(), rect.shrink(6.0), color);
     resp
 }
+
 
 /// Bouton d'action d'un panneau (icône 30×28, fond si actif).
 fn panel_action(
@@ -13853,7 +13858,7 @@ fn organize_button(ui: &mut egui::Ui, icon: IconFn, label: &str) -> bool {
         pos2(rect.min.x + 28.0, rect.center().y),
         Align2::LEFT_CENTER,
         label,
-        FontId::proportional(BODY),
+        FontId::proportional(11.5),
         color,
     );
     resp.clicked()
