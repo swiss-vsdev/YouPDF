@@ -1419,6 +1419,12 @@ struct ContentElement {
 #[derive(Clone, Debug)]
 enum ContentDrag {
     Move { start: [f32; 2], offset: [f32; 2] },
+    Rotate {
+        /// Dernier angle curseur-centre, en degrés.
+        last_angle: f32,
+        /// Rotation totale du geste, en degrés horaires.
+        accumulated: f32,
+    },
 }
 
 /// Le curseur couramment utilisé par l'éditeur de texte.
@@ -7103,6 +7109,38 @@ impl YouPdfApp {
         }
     }
 
+    /// Fait tourner l'image sélectionnée d'un angle libre, en degrés.
+    ///
+    /// L'angle est le sens horaire à l'écran, comme le geste de la poignée de
+    /// rotation au centre de la boîte. Seule la matrice change : les pixels
+    /// ne sont jamais réencodés, donc l'opération est réversible.
+    fn commit_image_rotate(
+        &mut self,
+        selected: &SelectedImage,
+        degrees: f32,
+        ctx: &egui::Context,
+    ) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let Some(info) = tab
+            .doc
+            .extract_images(selected.page as u32)
+            .ok()
+            .and_then(|list| list.into_iter().find(|i| i.resource_name == selected.name))
+        else {
+            return;
+        };
+        match tab.doc.rotate_image(&info, degrees) {
+            Ok(()) => {
+                self.mark_document_changed();
+                self.refresh_selected_image();
+                self.toast(ctx, "Image rotated");
+            }
+            Err(err) => self.toast(ctx, format!("Rotate failed: {err}")),
+        }
+    }
+
     /// Déplace un bloc de texte en réécrivant son emplacement cible.
     ///
     /// L'offset écran est converti en points de page (y inversé) et ajouté
@@ -9730,6 +9768,7 @@ impl YouPdfApp {
         let mut pending_text_move: Option<(TextFragment, [f32; 2], f32)> = None;
         let mut pending_image_move: Option<(SelectedImage, [f32; 2], f32)> = None;
         let mut pending_image_scale: Option<(SelectedImage, [f32; 6])> = None;
+        let mut pending_image_rotate: Option<(SelectedImage, f32)> = None;
 
         // Réserve pour les barres flottantes : les pages commencent sous la
         // barre d'outils, sinon la première page passe dessous.
@@ -10512,6 +10551,81 @@ impl YouPdfApp {
                                     pending_image_scale =
                                         Some((image.clone(), matrix));
                                 }
+                                // Poignée de rotation au centre : un glissé
+                                // tourne l'image d'un angle libre autour de sa
+                                // boîte, sans réencodage des pixels. L'angle se
+                                // mesure entre le centre et le curseur ; chaque
+                                // trame ajoute son écart à l'angle précédent et
+                                // seul le total part au relâchement.
+                                if crop_draft.is_none() {
+                                    let centre_px = ui
+                                        .painter()
+                                        .round_pos_to_pixels(box_screen.center());
+                                    let ring_r = 10.0_f32;
+                                    let ring = Rect::from_center_size(
+                                        centre_px,
+                                        vec2(ring_r * 2.0, ring_r * 2.0),
+                                    );
+                                    let rotate_resp = ui.interact(
+                                        ring,
+                                        Id::new("YouPDF image rotate").with(page),
+                                        Sense::drag(),
+                                    );
+                                    ui.painter().circle_stroke(
+                                        centre_px,
+                                        ring_r,
+                                        Stroke::new(1.5_f32, pal().accent),
+                                    );
+                                    let angle_at = |pos: egui::Pos2| {
+                                        // L'écran a le y vers le bas : atan2
+                                        // donne le sens horaire, comme la
+                                        // rotation de l'engine.
+                                        (pos.y - centre_px.y)
+                                            .atan2(pos.x - centre_px.x)
+                                            .to_degrees()
+                                    };
+                                    if rotate_resp.drag_started() {
+                                        if let Some(pos) =
+                                            rotate_resp.interact_pointer_pos()
+                                        {
+                                            content_drag =
+                                                Some(ContentDrag::Rotate {
+                                                    last_angle: angle_at(pos),
+                                                    accumulated: 0.0,
+                                                });
+                                        }
+                                    }
+                                    if let Some(ContentDrag::Rotate {
+                                        last_angle,
+                                        accumulated,
+                                    }) = content_drag.as_mut()
+                                    {
+                                        if let Some(pos) =
+                                            rotate_resp.interact_pointer_pos()
+                                        {
+                                            let mut step =
+                                                angle_at(pos) - *last_angle;
+                                            // Le saut de ±180° au passage du
+                                            // demi-axe n'est pas une rotation.
+                                            if step > 180.0 {
+                                                step -= 360.0;
+                                            } else if step < -180.0 {
+                                                step += 360.0;
+                                            }
+                                            *accumulated += step;
+                                            *last_angle += step;
+                                        }
+                                        if rotate_resp.drag_stopped() {
+                                            if accumulated.abs() > 0.5 {
+                                                pending_image_rotate = Some((
+                                                    image.clone(),
+                                                    *accumulated,
+                                                ));
+                                            }
+                                            content_drag = None;
+                                        }
+                                    }
+                                }
                             }
                             if let Some(crop) = crop_draft {
                                 // Zone conservée : les poignées vivent sur ses
@@ -11237,6 +11351,9 @@ impl YouPdfApp {
         }
         if let Some((image, matrix)) = pending_image_scale {
             self.commit_image_scale(&image, matrix, &ctx);
+        }
+        if let Some((image, degrees)) = pending_image_rotate {
+            self.commit_image_rotate(&image, degrees, &ctx);
         }
         self.form_edit = form_draft;
         if form_cancel {

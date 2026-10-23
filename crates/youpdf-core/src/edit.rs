@@ -1231,6 +1231,64 @@ impl Document {
         Ok(())
     }
 
+    /// Tourne une image d'un angle libre, en place.
+    ///
+    /// L'angle est en degrés, dans le sens horaire à l'écran (comme les
+    /// rotations de l'inspecteur). Seule la matrice qui dessine l'image
+    /// change : les vecteurs de base tournent autour du centre de la boîte et
+    /// l'origine se replace pour que le centre ne bouge pas. Les pixels ne
+    /// sont jamais réencodés, donc l'opération est réversible et sans perte.
+    pub fn rotate_image(&mut self, info: &ImageInfo, degrees: f32) -> Result<()> {
+        let found = self.rotate_image_matrix(
+            info.page,
+            &info.resource_name,
+            degrees.to_radians(),
+        )?;
+        if !found {
+            return Err(Error::NotFound(format!(
+                "matrice de l'image {}",
+                info.resource_name
+            )));
+        }
+        Ok(())
+    }
+
+    fn rotate_image_matrix(
+        &mut self,
+        page: usize,
+        resource_name: &str,
+        angle: f32,
+    ) -> Result<bool> {
+        let page_id = self
+            .page_id(page as u32)
+            .map_err(|e| Error::Pdf(format!("page : {e}")))?;
+        let name = resource_name.to_owned();
+        self.edit_image_draw(page_id, &name, |operations, index| {
+            let Some(position) = preceding_cm(operations, index) else {
+                return;
+            };
+            let Some([a, b, c, d, e, f]) = matrix_of(&operations[position].operands) else {
+                return;
+            };
+            // Le repère du dessin : `(a, b)` va de gauche à droite de l'image,
+            // `(c, d)` du bas vers le haut. `e, f` est le coin bas-gauche.
+            // Les deux vecteurs de base sont tournés d'un même angle, dans le
+            // sens horaire à l'écran : à 90°, `(a, b) -> (b, -a)`, ce qui
+            // reproduit exactement le cas `RotateCw`.
+            let (s, cos) = angle.sin_cos();
+            // Rotation horaire à l'écran : à 90°, `(a, b) -> (b, -a)`, ce qui
+            // reproduit exactement le cas `RotateCw`.
+            let xa = a * cos + b * s;
+            let xb = -a * s + b * cos;
+            let ya = c * cos + d * s;
+            let yb = -c * s + d * cos;
+            // Centre conservé : l'origine se déplace de la moitié de l'écart.
+            let ne = e + 0.5 * (a + c - xa - ya);
+            let nf = f + 0.5 * (b + d - xb - yb);
+            operations[position].operands = matrix_operands([xa, xb, ya, yb, ne, nf]);
+        })
+    }
+
     /// Réécrit la matrice qui dessine une image pour la tourner ou la
     /// retourner.
     ///
