@@ -1406,17 +1406,24 @@ impl Document {
             FormDataFormat::Fdf => parse_fdf(data),
         };
 
+        // Les champs sont lus une seule fois : avant la boucle, chaque paire
+        // ne cherchait son champ par scan linéaire, ce qui refaisait le
+        // parcours de tout l'AcroForm pour chaque entrée (O(k·f)). Un
+        // index par nom ramène la recherche à O(1).
+        let fields = self.read_form_fields();
+        let mut by_name: std::collections::HashMap<&str, &FormField> =
+            std::collections::HashMap::with_capacity(fields.len());
+        for field in &fields {
+            by_name.entry(field.name.as_str()).or_insert(field);
+        }
+
         let mut applied = 0usize;
         for (name, value) in pairs {
-            let Some(field) = self
-                .read_form_fields()
-                .into_iter()
-                .find(|f| f.name == name)
-            else {
+            let Some(field) = by_name.get(name.as_str()) else {
                 // Nom inconnu : ignoré, ce n'est pas une erreur.
                 continue;
             };
-            self.set_field_value(&field, &value)?;
+            self.set_field_value(field, &value)?;
             applied += 1;
         }
         if applied > 0 {

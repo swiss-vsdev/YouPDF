@@ -1230,16 +1230,27 @@ fn trim_history(stack: &mut Vec<HistoryEntry>) {
 }
 
 fn trim_history_to(stack: &mut Vec<HistoryEntry>, limit: usize, budget: usize) {
-    while stack.len() > limit {
-        stack.remove(0);
+    // `remove(0)` déplace tous les éléments suivants : O(n) par appel,
+    // donc O(n²) pour vider l'historique. `drain` est O(n) une seule fois.
+    let excess = stack.len().saturating_sub(limit);
+    if excess > 0 {
+        stack.drain(..excess);
     }
-    let mut total: usize = stack
+    // Taille cumulée des documents, de l'entrée la plus ancienne à la plus
+    // récente : on retire une tranche de tête jusqu'à ce que le budget
+    // tienne, sans repasser par `remove(0)` à chaque entrée.
+    let sizes: Vec<usize> = stack
         .iter()
         .filter_map(|entry| entry.doc.as_ref().map(Vec::len))
-        .sum();
-    while total > budget && stack.len() > 1 {
-        let dropped = stack.remove(0);
-        total -= dropped.doc.as_ref().map(Vec::len).unwrap_or(0);
+        .collect();
+    let mut total: usize = sizes.iter().sum();
+    let mut drop_count = 0;
+    while total > budget && drop_count < stack.len().saturating_sub(1) {
+        total -= sizes[drop_count];
+        drop_count += 1;
+    }
+    if drop_count > 0 {
+        stack.drain(..drop_count);
     }
 }
 
@@ -5787,14 +5798,20 @@ impl YouPdfApp {
         let mut doomed: Vec<String> = vec![id.to_owned()];
         if let Some(tab) = self.tabs.get_mut(self.active) {
             // Fermeture transitive par largeur : chaque réponse trouvée
-            // étend la liste à explorer.
+            // étend la liste à explorer. `doomed_set` est un HashSet de
+            // String (pas de &str) pour que les clés ne maintiennent
+            // aucun emprunt sur `tab.annots` : sans lui, `doomed.contains`
+            // scanne le vecteur à chaque annotée, O(a·k) au total.
+            let mut doomed_set: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            doomed_set.insert(id.to_owned());
             let mut cursor = 0;
             while cursor < doomed.len() {
                 let parent = doomed[cursor].clone();
                 cursor += 1;
                 for annot in &tab.annots {
                     if annot.reply_to.as_deref() == Some(parent.as_str())
-                        && !doomed.contains(&annot.id)
+                        && !doomed_set.insert(annot.id.clone())
                     {
                         doomed.push(annot.id.clone());
                     }
@@ -5806,7 +5823,9 @@ impl YouPdfApp {
             }
             let before_state = tab.annots.clone();
             tab.record_annots(before_state);
-            tab.annots.retain(|annot| !doomed.contains(&annot.id));
+            // `retain` avec un `contains` sur un Vec serait O(a·k) ;
+            // `doomed_set` le ramène à O(a + k).
+            tab.annots.retain(|annot| !doomed_set.contains(annot.id.as_str()));
             if tab.annots.len() != before {
                 tab.dirty = true;
             }
@@ -6823,9 +6842,16 @@ impl YouPdfApp {
             let rect = rect_to_page(&tab.doc, page, rect);
             // Les noms de champ sont des identifiants dans tout le document :
             // deux champs ne peuvent pas partager le même.
-            let existing: Vec<String> = tab.forms.iter().map(|f| f.name.clone()).collect();
-            let mut num = existing.len() + 1;
-            while existing.contains(&format!("Field{num}")) {
+            // Les noms sont des identifiants uniques : un `contains` sur un vecteur
+            // est O(k) par candidat, O(k²) au total. Un HashSet ramène la
+            // recherche à O(1).
+            let mut existing: std::collections::HashSet<&str> =
+                std::collections::HashSet::with_capacity(tab.forms.len());
+            for form in &tab.forms {
+                existing.insert(form.name.as_str());
+            }
+            let mut num = tab.forms.len() + 1;
+            while existing.contains(format!("Field{num}").as_str()) {
                 num += 1;
             }
             let field = Self::new_form_field(kind, page, rect, format!("Field{num}"));

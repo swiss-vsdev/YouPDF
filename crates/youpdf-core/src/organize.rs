@@ -710,26 +710,29 @@ impl Document {
             .as_ref()
             .and_then(|path| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
             .unwrap_or_else(|| "document".to_owned());
+
+        // Recherche binaire du nombre maximal de pages par fichier :
+        // la taille est mesurée sur un document reconstruit, pas estimée.
+        // Un balayage linéaire clones et sérialise le document entier pour
+        // chaque candidat → O(n²) ; la recherche binaire fait O(n log n).
         let mut written = Vec::new();
         let mut start = 1usize;
         while start <= total {
-            let mut end = start;
-            let mut last_ok = start;
-            while end <= total {
-                let mut copy = Document::from_lopdf(self.inner.clone());
-                let keep: HashSet<usize> = (start..=end).collect();
-                let remove: Vec<usize> = (1..=copy.page_count())
-                    .filter(|number| !keep.contains(number))
-                    .collect();
-                if !remove.is_empty() {
-                    copy.delete_pages(&remove)?;
-                }
-                let size = copy.to_bytes()?.len() as u64;
-                if size <= max_bytes || end == start {
-                    last_ok = end;
-                    end += 1;
+            let mut lo = start;
+            let mut hi = total;
+            let mut last_ok = start; // au moins la page courante
+            while lo <= hi {
+                let mid = lo + (hi - lo) / 2;
+                let pages: Vec<usize> = (start..=mid).collect();
+                let size = self.measure_pages(&pages)?.len() as u64;
+                if size <= max_bytes {
+                    last_ok = mid;
+                    lo = mid + 1;
                 } else {
-                    break;
+                    if mid == start {
+                        last_ok = start;
+                    }
+                    hi = mid - 1;
                 }
             }
             let pages: Vec<usize> = (start..=last_ok).collect();
@@ -739,6 +742,23 @@ impl Document {
             start = last_ok + 1;
         }
         Ok(written)
+    }
+
+    /// Taille en octets d'un document ne contenant que `pages` (1-indexées).
+    ///
+    /// Construit une copie partielle et la sérialise : c'est la même
+    /// opération que `split_by_size` utilise pour mesurer, extraite pour
+    /// éviter de dupliquer le clone dans la recherche binaire.
+    fn measure_pages(&self, pages: &[usize]) -> Result<Vec<u8>> {
+        let mut copy = Document::from_lopdf(self.inner.clone());
+        let keep: HashSet<usize> = pages.iter().copied().collect();
+        let remove: Vec<usize> = (1..=copy.page_count())
+            .filter(|number| !keep.contains(number))
+            .collect();
+        if !remove.is_empty() {
+            copy.delete_pages(&remove)?;
+        }
+        copy.to_bytes()
     }
 
     /// Découpe aux pages des signets de premier niveau.
