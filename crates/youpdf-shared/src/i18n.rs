@@ -283,6 +283,8 @@ pub fn t(key: &'static str) -> &'static str {
         "Default layout" => "Disposition par défaut",
         "Default zoom" => "Zoom par défaut",
         "Delete" => "Supprimer",
+        "Bring to front" => "Mettre au premier plan",
+        "Send to back" => "Mettre à l'arrière-plan",
         "Delete Bookmark" => "Supprimer le signet",
         "Delete File…" => "Supprimer le fichier…",
         "Delete Pages" => "Supprimer les pages",

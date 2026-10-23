@@ -7033,6 +7033,33 @@ impl YouPdfApp {
         }
     }
 
+    /// Applique un glissé-déplacer sur l'image sélectionnée.\n    ///\n    /// L'offset est en coordonnées écran ; on le convertit en points de\n    /// page (repère PDF, y vers le haut) avant d'écrire la matrice. Le geste\n    /// ne réencode aucun pixel : la translation est appliquée à `(e, f)`.\n    fn commit_image_move(\n        &mut self,\n        selected: &SelectedImage,\n        offset: [f32; 2],\n        scale: f32,\n        ctx: &egui::Context,\n    ) {\n        let Some(tab) = self.tabs.get_mut(self.active) else {\n            return;\n        };\n        let Some(info) = tab\n            .doc\n            .extract_images(selected.page as u32)\n            .ok()\n            .and_then(|list| list.into_iter().find(|i| i.resource_name == selected.name))\n        else {\n            return;\n        };\n        let dx = offset[0] / scale.max(0.001);\n        let dy = -offset[1] / scale.max(0.001);\n        let matrix = match tab.doc.image_matrix(&info) {\n            Ok(Some(m)) => m,\n            _ => [1.0, 0.0, 0.0, 1.0, dx, dy],\n        };\n        let mut moved = matrix;\n        moved[4] += dx;\n        moved[5] += dy;\n        match tab.doc.set_image_matrix(&info, moved) {\n            Ok(()) => {\n                self.mark_document_changed();\n                self.refresh_selected_image();\n                self.toast(ctx, \"Image moved\");\n            }\n            Err(err) => self.toast(ctx, format!(\"Move failed: {err}\")),\n        }\n    }\n\n    /// Déplace un bloc de texte en réécrivant son emplacement cible.
+    ///
+    /// L'offset écran est converti en points de page (y inversé) et ajouté
+    /// au rectangle du fragment. Le texte, la police et la tailre sont
+    /// conservés — seul l'emplacement change.
+    fn commit_text_block_move(
+        &mut self,
+        fragment: &TextFragment,
+        offset: [f32; 2],
+        scale: f32,
+        ctx: &egui::Context,
+    ) {
+        let Some(tab) = self.tabs.get_mut(self.active) else { return };
+        let dx = offset[0] / scale.max(0.001);
+        let dy = -offset[1] / scale.max(0.001);
+        let [x1, y1, x2, y2] = fragment.rect;
+        let target = [x1 + dx, y1 + dy, x2 + dx, y2 + dy];
+        let style = TextStyle::from_fragment(fragment);
+        match tab.doc.replace_text_fragment_at(fragment, &fragment.text, target, None, &style) {
+            Ok(()) => {
+                self.mark_document_changed();
+                self.toast(ctx, "Text block moved");
+            }
+            Err(err) => self.toast(ctx, format!("Move failed: {err}")),
+        }
+    }
+
     /// Applique une action de l'inspecteur d'image.
     fn image_action(&mut self, action: ImageAction, ctx: &egui::Context) {
         let Some(selected) = self.selected_image.clone() else {
@@ -7163,6 +7190,17 @@ impl YouPdfApp {
                 match done {
                     Some(Ok(())) => self.mark_document_changed(),
                     Some(Err(err)) => self.toast(ctx, format!("Opacity failed: {err}")),
+                    None => {}
+                }
+            }
+            ImageAction::ZOrder(front) => {
+                let done = self
+                    .tabs
+                    .get_mut(self.active)
+                    .map(|tab| tab.doc.set_image_z_order(&info, front));
+                match done {
+                    Some(Ok(())) => self.mark_document_changed(),
+                    Some(Err(err)) => self.toast(ctx, format!("Reorder failed: {err}")),
                     None => {}
                 }
             }
