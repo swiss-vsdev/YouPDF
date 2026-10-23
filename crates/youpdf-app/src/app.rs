@@ -30,6 +30,7 @@ mod sign_ui;
 use youpdf_shared::{i18n, pal, set_palette, t, Language, Theme};
 use crate::ai::AiPanel;
 use crate::home::{self, HomeCategory, HomeView, ViewMode};
+use crate::app::batch_ui::{BatchEntry, BatchEvent};
 use crate::inspector::{
     arrow_x, image_controls, markup_row, paint_arrow, place_inspector, text_style_row, AnnotationId,
     ImageAction, ImageId, InspectorTarget, TextBlockId, TextStyleUi, INSPECTOR_HEIGHT,
@@ -1552,7 +1553,9 @@ pub struct YouPdfApp {
     slideshow: bool,
     /// Fenêtre « Traitement par lots ».
     batch_open: bool,
-    batch_files: Vec<PathBuf>,
+    /// File d'attente du lot : un état par fichier, plus ce que la ligne
+    /// affiche.
+    batch_queue: Vec<BatchEntry>,
     batch_dir: Option<PathBuf>,
     batch_text: bool,
     batch_images: bool,
@@ -1587,9 +1590,15 @@ pub struct YouPdfApp {
     /// Appliquer l'arrière-plan courant à chaque fichier.
     batch_background: bool,
     /// Lignes du lot en cours, envoyées par le fil de travail.
-    batch_rx: Option<std::sync::mpsc::Receiver<String>>,
+    batch_rx: Option<std::sync::mpsc::Receiver<BatchEvent>>,
     /// Vrai tant qu'un lot tourne.
     batch_running: bool,
+    /// Consigne d'arrêt lue par le fil de travail à chaque fichier.
+    batch_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Instant de départ du lot : sert à mesurer le rythme et l'ETA.
+    batch_started: Option<std::time::Instant>,
+    /// Fin estimée, calculée au fil de l'avancement.
+    batch_eta: Option<std::time::Duration>,
     /// Outil d'annotation actif (index dans la barre du mode Comment).
     annot_tool: Option<usize>,
     /// Type de marque du surligneur (surlignage, soulignage, barré, ondulé).
@@ -1935,7 +1944,7 @@ impl YouPdfApp {
             applied_theme: theme,
             slideshow: false,
             batch_open: false,
-            batch_files: Vec::new(),
+            batch_queue: Vec::new(),
             batch_dir: None,
             batch_text: false,
             batch_images: false,
@@ -1959,6 +1968,9 @@ impl YouPdfApp {
             batch_background: false,
             batch_rx: None,
             batch_running: false,
+            batch_cancel: std::sync::Arc::default(),
+            batch_started: None,
+            batch_eta: None,
             annot_tool: None,
             marker: AnnotationKind::Highlight,
             shape: AnnotationKind::Square,
@@ -11995,6 +12007,22 @@ impl YouPdfApp {
                 .filter_map(|f| f.path.clone())
                 .collect()
         });
+        // Une fenêtre de lot ouverte prend les fichiers déposés : les
+        // ajouter à la file est ce qu'on attend d'un glissé sur elle, alors
+        // qu'ouvrir chaque PDF l'un après l'autre perdrait le lot en cours.
+        if self.batch_open {
+            for path in dropped {
+                if path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+                {
+                    self.push_batch_file(path);
+                } else {
+                    self.open_path(path);
+                }
+            }
+            return;
+        }
         for path in dropped {
             self.open_path(path);
         }

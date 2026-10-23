@@ -23,7 +23,8 @@ impl YouPdfApp {
         let mut choose_dir = false;
         let mut clear = false;
         let mut run = false;
-        let files = self.batch_files.len();
+        let mut cancel = false;
+        let files = self.batch_queue.len();
         let dir = self
             .batch_dir
             .as_ref()
@@ -35,8 +36,8 @@ impl YouPdfApp {
             .default_size(vec2(520.0, 470.0))
             .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .show(ctx, |ui| {
-                ui.set_max_width(520.0);
-                ui.label(RichText::new("Files").size(12.0).color(pal().muted));
+                ui.set_max_width(620.0);
+                ui.label(RichText::new("Queue").size(12.0).color(pal().muted));
                 ui.horizontal(|ui| {
                     if ui.button("Add PDFs…").clicked() {
                         add_files = true;
@@ -44,20 +45,13 @@ impl YouPdfApp {
                     if ui.button("Add folder…").clicked() {
                         add_folder = true;
                     }
-                    if ui.button("Clear").clicked() {
+                    if ui.add_enabled(!self.batch_running, egui::Button::new("Clear")).clicked() {
                         clear = true;
                     }
                     ui.label(RichText::new(format!("{files} file(s)")).size(11.0).color(pal().muted));
                 });
-                ScrollArea::vertical().max_height(130.0).show(ui, |ui| {
-                    for path in &self.batch_files {
-                        let name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-                        ui.label(RichText::new(name).size(11.0).color(pal().icon_bright));
-                    }
-                });
+                ui.add_space(4.0);
+                self.batch_table(ui);
                 ui.add_space(6.0);
                 ui.label(RichText::new("Output folder").size(12.0).color(pal().muted));
                 ui.horizontal(|ui| {
@@ -211,18 +205,41 @@ impl YouPdfApp {
                     );
                 });
                 ui.add_space(8.0);
-                if ui
-                    .add_enabled(
-                        files > 0 && self.batch_dir.is_some() && !self.batch_running,
-                        egui::Button::new(if self.batch_running {
-                            "Running…"
-                        } else {
-                            "Run"
-                        }),
-                    )
-                    .clicked()
-                {
-                    run = true;
+                ui.horizontal(|ui| {
+                    if self.batch_running {
+                        if ui.button("Cancel").clicked() {
+                            cancel = true;
+                        }
+                        ui.spinner();
+                        ui.label(
+                            RichText::new(self.batch_progress_label())
+                                .size(11.0)
+                                .color(pal().icon_bright),
+                        );
+                    } else if ui
+                        .add_enabled(
+                            files > 0 && self.batch_dir.is_some(),
+                            egui::Button::new("Run"),
+                        )
+                        .clicked()
+                    {
+                        run = true;
+                    }
+                });
+                if self.batch_running {
+                    let fraction = self.batch_fraction();
+                    ui.add(
+                        egui::ProgressBar::new(fraction)
+                            .text(format!("{:.0}%", fraction * 100.0))
+                            .desired_width(280.0),
+                    );
+                    if let Some(eta) = self.batch_eta {
+                        ui.label(
+                            RichText::new(format!("About {} left", human_duration(eta)))
+                                .size(10.5)
+                                .color(pal().muted),
+                        );
+                    }
                 }
                 if !self.batch_report.is_empty() {
                     ui.add_space(8.0);
@@ -244,9 +261,7 @@ impl YouPdfApp {
                 .pick_files()
             {
                 for path in paths {
-                    if !self.batch_files.contains(&path) {
-                        self.batch_files.push(path);
-                    }
+                    self.push_batch_file(path);
                 }
             }
         }
@@ -272,14 +287,12 @@ impl YouPdfApp {
                     .unwrap_or_default();
                 found.sort();
                 for path in found {
-                    if !self.batch_files.contains(&path) {
-                        self.batch_files.push(path);
-                    }
+                    self.push_batch_file(path);
                 }
             }
         }
         if clear {
-            self.batch_files.clear();
+            self.batch_queue.clear();
             self.batch_report.clear();
         }
         if choose_dir {
@@ -287,6 +300,9 @@ impl YouPdfApp {
         }
         if run {
             self.run_batch(ctx);
+        }
+        if cancel {
+            self.cancel_batch(ctx);
         }
         if !open {
             self.batch_open = false;
@@ -312,7 +328,11 @@ impl YouPdfApp {
             return;
         }
         let job = BatchJob {
-            files: self.batch_files.clone(),
+            files: self
+                .batch_queue
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect(),
             dir,
             text: self.batch_text,
             images: self.batch_images,
@@ -336,32 +356,299 @@ impl YouPdfApp {
             suffix: self.batch_suffix.clone(),
             print: self.batch_print,
         };
+        for entry in &mut self.batch_queue {
+            entry.reset();
+        }
+        self.batch_cancel
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let cancel = self.batch_cancel.clone();
         let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || job.run(&tx));
+        std::thread::spawn(move || job.run(&tx, &cancel));
         self.batch_rx = Some(rx);
         self.batch_running = true;
         self.batch_report.clear();
+        self.batch_started = Some(std::time::Instant::now());
+        self.batch_eta = None;
     }
 
-    /// Consomme les lignes arrivées du fil de travail.
+    /// Demande l'arrêt du lot : le fil s'arrête après le fichier en cours.
+    fn cancel_batch(&mut self, ctx: &egui::Context) {
+        if !self.batch_running {
+            return;
+        }
+        self.batch_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.toast(ctx, "Stopping after the current file".to_string());
+    }
+
+    /// Ajoute un fichier à la file, sans doublon.
+    pub(super) fn push_batch_file(&mut self, path: PathBuf) {
+        if self.batch_queue.iter().any(|entry| entry.path == path) {
+            return;
+        }
+        self.batch_queue.push(BatchEntry::new(path));
+    }
+
+    /// Consomme les événements arrivés du fil de travail.
     pub(super) fn pump_batch(&mut self) {
         let Some(rx) = self.batch_rx.as_ref() else {
             return;
         };
+        let mut finished = false;
         loop {
             match rx.try_recv() {
-                Ok(line) => {
-                    self.batch_report.push_str(&line);
-                    self.batch_report.push('\n');
+                Ok(event) => {
+                    match event {
+                        BatchEvent::Started(index) => {
+                            if let Some(entry) = self.batch_queue.get_mut(index) {
+                                entry.status = BatchStatus::Running;
+                            }
+                        }
+                        BatchEvent::Finished { index, outcome } => {
+                            if let Some(entry) = self.batch_queue.get_mut(index) {
+                                entry.status = match &outcome {
+                                    Ok(()) => BatchStatus::Done,
+                                    Err(_) => BatchStatus::Failed,
+                                };
+                                entry.detail = outcome.err();
+                            }
+                            self.batch_eta = self.estimate_eta();
+                        }
+                        BatchEvent::Note(line) => {
+                            self.batch_report.push_str(&line);
+                            self.batch_report.push('\n');
+                        }
+                    }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.batch_rx = None;
-                    self.batch_running = false;
+                    finished = true;
                     break;
                 }
             }
         }
+        if finished {
+            self.batch_rx = None;
+            self.batch_running = false;
+            self.batch_started = None;
+            self.batch_eta = None;
+            // Un fichier interrompu n'a pas d'état final : on le dit plutôt
+            // que de le laisser tourner indéfiniment.
+            for entry in &mut self.batch_queue {
+                if entry.status == BatchStatus::Running {
+                    entry.status = BatchStatus::Failed;
+                    entry.detail = Some("cancelled".to_string());
+                }
+            }
+        }
+    }
+
+    /// Part du lot déjà traitée, entre 0 et 1.
+    fn batch_fraction(&self) -> f32 {
+        if self.batch_queue.is_empty() {
+            return 0.0;
+        }
+        let settled = self
+            .batch_queue
+            .iter()
+            .filter(|entry| entry.status.is_settled())
+            .count();
+        settled as f32 / self.batch_queue.len() as f32
+    }
+
+    /// Temps restant estimé, d'après le rythme observé depuis le départ.
+    fn estimate_eta(&self) -> Option<std::time::Duration> {
+        let started = self.batch_started?;
+        let settled = self
+            .batch_queue
+            .iter()
+            .filter(|entry| entry.status.is_settled())
+            .count();
+        if settled == 0 {
+            return None;
+        }
+        let elapsed = started.elapsed();
+        let per_file = elapsed / settled as u32;
+        let remaining = self.batch_queue.len() - settled;
+        Some(per_file * remaining as u32)
+    }
+
+    /// « 3 of 10 done · 1 failed ».
+    fn batch_progress_label(&self) -> String {
+        let total = self.batch_queue.len();
+        let done = self
+            .batch_queue
+            .iter()
+            .filter(|entry| entry.status == BatchStatus::Done)
+            .count();
+        let failed = self
+            .batch_queue
+            .iter()
+            .filter(|entry| entry.status == BatchStatus::Failed)
+            .count();
+        if failed == 0 {
+            format!("{done} of {total} done")
+        } else {
+            format!("{done} of {total} done · {failed} failed")
+        }
+    }
+
+    /// Tableau de la file : index, nom, pages, taille, état.
+    fn batch_table(&mut self, ui: &mut egui::Ui) {
+        use egui::{Grid, Label};
+        ScrollArea::vertical().max_height(170.0).show(ui, |ui| {
+            Grid::new("batch-table")
+                .num_columns(5)
+                .striped(true)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    for (heading, _) in [
+                        ("#", 0.0),
+                        ("Name", 0.0),
+                        ("Pages", 0.0),
+                        ("Size", 0.0),
+                        ("Status", 0.0),
+                    ] {
+                        ui.add(Label::new(
+                            RichText::new(heading).size(10.5).color(pal().muted),
+                        ));
+                    }
+                    ui.end_row();
+                    for (index, entry) in self.batch_queue.iter().enumerate() {
+                        ui.label(
+                            RichText::new(format!("{}", index + 1))
+                                .size(10.5)
+                                .color(pal().muted),
+                        );
+                        ui.label(
+                            RichText::new(entry.name()).size(11.0).color(pal().icon_bright),
+                        );
+                        let pages = entry
+                            .pages
+                            .map(|count| count.to_string())
+                            .unwrap_or_else(|| "—".to_string());
+                        ui.label(RichText::new(pages).size(10.5).color(pal().muted));
+                        ui.label(
+                            RichText::new(human_bytes(entry.size))
+                                .size(10.5)
+                                .color(pal().muted),
+                        );
+                        let (text, colour) = entry.status.label();
+                        let mut label = RichText::new(text).size(10.5).color(colour);
+                        if let Some(detail) = &entry.detail {
+                            label = label.strong();
+                            ui.label(label).on_hover_text(detail);
+                        } else {
+                            ui.label(label);
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+    }
+}
+
+/// Un fichier de la file, avec ce que le lot en a fait.
+pub(super) struct BatchEntry {
+    path: PathBuf,
+    /// Nombre de pages, lu une fois à l'ajout.
+    pages: Option<usize>,
+    /// Taille du fichier en octets.
+    size: u64,
+    status: BatchStatus,
+    /// Message d'échec, affiché au survol.
+    detail: Option<String>,
+}
+
+impl BatchEntry {
+    fn new(path: PathBuf) -> Self {
+        let meta = path.metadata().ok();
+        let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        let pages = Document::open(&path).ok().map(|doc| doc.page_count());
+        Self {
+            path,
+            pages,
+            size,
+            status: BatchStatus::Pending,
+            detail: None,
+        }
+    }
+
+    fn name(&self) -> String {
+        self.path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.path.display().to_string())
+    }
+
+    fn reset(&mut self) {
+        self.status = BatchStatus::Pending;
+        self.detail = None;
+    }
+}
+
+/// État d'un fichier dans la file.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum BatchStatus {
+    Pending,
+    Running,
+    Done,
+    Failed,
+}
+
+impl BatchStatus {
+    fn is_settled(self) -> bool {
+        matches!(self, Self::Done | Self::Failed)
+    }
+
+    fn label(self) -> (&'static str, Color32) {
+        match self {
+            Self::Pending => ("Pending", pal().muted),
+            Self::Running => ("Processing", pal().icon_bright),
+            Self::Done => ("Done", DONE_GREEN),
+            Self::Failed => ("Error", FAILED_RED),
+        }
+    }
+}
+
+/// Événement envoyé par le fil du lot vers l'interface.
+pub(super) enum BatchEvent {
+    /// Le fichier d'index `n` commence.
+    Started(usize),
+    /// Le fichier d'index `n` est fini, avec ou sans erreur.
+    Finished { index: usize, outcome: Result<(), String> },
+    /// Ligne de journal (combine, bilan).
+    Note(String),
+}
+
+/// Vert des lignes « Done ».
+const DONE_GREEN: Color32 = Color32::from_rgb(52, 148, 92);
+/// Rouge des lignes « Error ».
+const FAILED_RED: Color32 = Color32::from_rgb(196, 62, 62);
+
+/// « 1.4 MB », « 812 B ».
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+/// « 2 min 10 s », « 8 s ».
+fn human_duration(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds < 60 {
+        format!("{seconds} s")
+    } else {
+        format!("{} min {} s", seconds / 60, seconds % 60)
     }
 }
 
@@ -430,7 +717,11 @@ impl BatchJob {
     ///
     /// Tourne dans un fil de travail : `Document` n'est pas `Send`, il est donc
     /// créé et détruit ici, et seules des `String` repartent vers l'interface.
-    fn run(self, tx: &std::sync::mpsc::Sender<String>) {
+    fn run(
+        self,
+        tx: &std::sync::mpsc::Sender<BatchEvent>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) {
         let mut done = 0usize;
         let mut failed = 0usize;
         let mut bates_next = self.bates_start.max(1);
@@ -444,44 +735,56 @@ impl BatchJob {
                         let after = merged.page_count();
                         if let Err(err) = merged.insert_pages_after(after, path) {
                             ok = false;
-                            let _ = tx.send(format!("combine: {err}"));
+                            let _ = tx.send(BatchEvent::Note(format!("combine: {err}")));
                             break;
                         }
                     }
                     if ok {
                         match merged.save(&out) {
                             Ok(()) => {
-                                let _ = tx.send(format!("combined: {}", out.display()));
+                                let _ = tx.send(BatchEvent::Note(format!(
+                                    "combined: {}",
+                                    out.display()
+                                )));
                             }
                             Err(err) => {
                                 failed += 1;
-                                let _ = tx.send(format!("combine: {err}"));
+                                let _ = tx.send(BatchEvent::Note(format!("combine: {err}")));
                             }
                         }
                     }
                 }
                 Err(err) => {
                     failed += 1;
-                    let _ = tx.send(format!("combine: {err}"));
+                    let _ = tx.send(BatchEvent::Note(format!("combine: {err}")));
                 }
             }
         }
 
-        for path in &self.files {
+        for (index, path) in self.files.iter().enumerate() {
+            // L'arrêt est demandé après le fichier en cours : un document à
+            // moitié traité laisserait une sortie incohérente sur le disque.
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = tx.send(BatchEvent::Finished {
+                    index,
+                    outcome: Err("cancelled".to_string()),
+                });
+                continue;
+            }
+            let _ = tx.send(BatchEvent::Started(index));
             let stem = path
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "document".to_owned());
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
             let stem = format!("{}{}{}", self.prefix, stem, self.suffix);
             let mut doc = match Document::open(path) {
                 Ok(doc) => doc,
                 Err(err) => {
                     failed += 1;
-                    let _ = tx.send(format!("{name}: open failed — {err}"));
+                    let _ = tx.send(BatchEvent::Finished {
+                        index,
+                        outcome: Err(format!("open failed — {err}")),
+                    });
                     continue;
                 }
             };
@@ -632,12 +935,50 @@ impl BatchJob {
             }
             if errors.is_empty() {
                 done += 1;
-                let _ = tx.send(format!("{name}: ok"));
+                let _ = tx.send(BatchEvent::Finished {
+                    index,
+                    outcome: Ok(()),
+                });
             } else {
                 failed += 1;
-                let _ = tx.send(format!("{name}: {}", errors.join("; ")));
+                let _ = tx.send(BatchEvent::Finished {
+                    index,
+                    outcome: Err(errors.join("; ")),
+                });
             }
         }
-        let _ = tx.send(format!("\n{done} done, {failed} failed"));
+        let _ = tx.send(BatchEvent::Note(format!(
+            "\n{done} done, {failed} failed"
+        )));
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::{human_bytes, human_duration, BatchStatus};
+    use std::time::Duration;
+
+    #[test]
+    fn les_tailles_sont_lisibles() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(812), "812 B");
+        assert_eq!(human_bytes(1024), "1.0 KB");
+        assert_eq!(human_bytes(1024 * 1024), "1.0 MB");
+        assert_eq!(human_bytes(3 * 1024 * 1024 * 1024), "3.0 GB");
+    }
+
+    #[test]
+    fn les_durees_sont_lisibles() {
+        assert_eq!(human_duration(Duration::from_secs(0)), "0 s");
+        assert_eq!(human_duration(Duration::from_secs(59)), "59 s");
+        assert_eq!(human_duration(Duration::from_secs(60)), "1 min 0 s");
+        assert_eq!(human_duration(Duration::from_secs(130)), "2 min 10 s");
+    }
+
+    #[test]
+    fn seuls_done_et_error_sont_regles() {
+        assert!(!BatchStatus::Pending.is_settled());
+        assert!(!BatchStatus::Running.is_settled());
+        assert!(BatchStatus::Done.is_settled());
+        assert!(BatchStatus::Failed.is_settled());
     }
 }
