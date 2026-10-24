@@ -29,6 +29,9 @@ mod prefs_ui;
 mod organize_ui;
 mod sign_ui;
 mod reader;
+mod icons;
+#[allow(unused_imports)]
+pub use icons::*;
 
 use crate::ai::AiPanel;
 use crate::home::{self, HomeCategory, HomeView, ViewMode};
@@ -12692,44 +12695,6 @@ fn pill_button(
     resp
 }
 
-/// Pastille d'outil compacte (icône seule, info-bulle au survol).
-fn icon_pill(
-    ui: &mut egui::Ui,
-    draw: IconFn,
-    chevron: bool,
-    primary: bool,
-    selected: bool,
-) -> egui::Response {
-    let width = if chevron { 38.0 } else { 30.0 };
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 26.0), Sense::click());
-    if primary || selected {
-        ui.painter().rect_filled(rect, Rounding::same(RADIUS_M), pal().accent);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(RADIUS_M), pal().hover_bg);
-    }
-    let icon_rect = Rect::from_center_size(
-        pos2(rect.min.x + 13.0, rect.center().y),
-        vec2(15.0, 15.0),
-    );
-    draw(
-        ui.painter(),
-        icon_rect,
-        if primary || selected {
-            Color32::WHITE
-        } else {
-            pal().icon
-        },
-    );
-    if chevron {
-        let ch_rect = Rect::from_center_size(
-            pos2(rect.max.x - 11.0, rect.center().y),
-            vec2(8.0, 8.0),
-        );
-        icon_chevron(ui.painter(), ch_rect, pal().muted);
-    }
-    resp
-}
-
 /// Ligne de menu cochable : la place de la coche est réservée même quand
 /// l'entrée ne l'est pas, sinon les libellés d'un même groupe danseraient
 /// d'une ligne à l'autre.
@@ -12931,23 +12896,6 @@ fn rail_button(
     resp
 }
 
-/// Bouton-icône neutre de la barre de titre.
-fn icon_button(
-    ui: &mut egui::Ui,
-    w: f32,
-    h: f32,
-    selected: bool,
-    draw: IconFn,
-) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
-    if selected || resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(RADIUS_M), pal().widget_bg);
-    }
-    let color = if resp.hovered() { pal().icon_bright } else { pal().icon };
-    draw(ui.painter(), rect.shrink(6.0), color);
-    resp
-}
-
 /// Bouton d'action d'un panneau (icône 30×28, fond si actif).
 fn panel_action(
     ui: &mut egui::Ui,
@@ -13019,17 +12967,6 @@ fn shorten(text: &str, max: usize) -> String {
 // Icônes Phosphor (police d'icônes, licence MIT)
 // --------------------------------------------------------------------------
 
-/// Trace un glyphe Phosphor centré dans `r`.
-fn glyph(p: &Painter, r: Rect, c: Color32, ch: &str) {
-    p.text(
-        r.center(),
-        Align2::CENTER_CENTER,
-        ch,
-        FontId::proportional((r.height() * 1.12).max(9.0)),
-        c,
-    );
-}
-
 /// Petit bouton d'icône de la barre d'état.
 fn status_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
     let resp = ui
@@ -13055,152 +12992,6 @@ fn page_size_label(width: f32, height: f32) -> String {
     } else {
         format!("{width:.0} × {height:.0} pt")
     }
-}
-
-fn icon_home(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::HOUSE);
-}
-fn icon_organize(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::SQUARES_FOUR);
-}
-fn icon_search(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::MAGNIFYING_GLASS);
-}
-fn icon_page(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::FILE_TEXT);
-}
-fn icon_bookmark(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::BOOKMARK_SIMPLE);
-}
-fn icon_bubble(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::CHAT_CIRCLE_DOTS);
-}
-fn icon_form(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::LIST_CHECKS);
-}
-fn icon_attach(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::PAPERCLIP);
-}
-fn icon_aspect(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::CUBE);
-}
-fn icon_plus(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::PLUS);
-}
-fn icon_close(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::X);
-}
-fn icon_caret_up(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::CARET_UP);
-}
-
-fn icon_chevron(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::CARET_DOWN);
-}
-fn icon_tools(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::TOOLBOX);
-}
-fn icon_trash(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::TRASH);
-}
-fn icon_grid(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::SQUARES_FOUR);
-}
-fn icon_rotate_left(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::ARROW_COUNTER_CLOCKWISE);
-}
-fn icon_rotate_right(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::ARROW_CLOCKWISE);
-}
-fn icon_export(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::EXPORT);
-}
-fn icon_scissors(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::SCISSORS);
-}
-fn icon_file_plus(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::FILE_PLUS);
-}
-fn icon_undo(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::ARROW_COUNTER_CLOCKWISE);
-}
-fn icon_redo(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::ARROW_CLOCKWISE);
-}
-fn icon_ellipsis(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::DOTS_THREE);
-}
-fn icon_bell(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::BELL);
-}
-fn icon_cursor(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::CURSOR);
-}
-fn icon_highlighter(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::HIGHLIGHTER);
-}
-fn icon_funnel(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::FUNNEL);
-}
-fn icon_text(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::TEXT_T);
-}
-fn icon_pen(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::PEN_NIB);
-}
-fn icon_shapes(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::SHAPES);
-}
-fn icon_link(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::LINK_SIMPLE);
-}
-fn icon_stamp(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::STAMP);
-}
-fn icon_signature(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::SIGNATURE);
-}
-fn icon_eraser(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::ERASER);
-}
-fn icon_text_field(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::TEXTBOX);
-}
-fn icon_checkbox(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::CHECK_SQUARE);
-}
-fn icon_radio(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::RADIO_BUTTON);
-}
-fn icon_dropdown(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::CARET_UP_DOWN);
-}
-fn icon_list(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::LIST_BULLETS);
-}
-fn icon_button_shape(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::RECTANGLE);
-}
-fn icon_date(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::CALENDAR);
-}
-fn icon_barcode(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::BARCODE);
-}
-fn icon_image(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::IMAGE);
-}
-fn icon_divider(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::MINUS);
-}
-fn icon_sparkle(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::SPARKLE);
-}
-fn icon_check(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::CHECK);
-}
-fn icon_layout(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::LAYOUT);
 }
 
 /// Positions `(début, fin)` des occurrences de `needle` dans `text`.
@@ -13669,10 +13460,6 @@ fn form_kind_label(kind: &FormFieldKind) -> String {    match kind {
         FormFieldKind::Barcode => "Barcode".to_owned(),
         FormFieldKind::Other(name) => format!("Field ({name})"),
     }
-}
-
-fn icon_save(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::FLOPPY_DISK);
 }
 
 /// Libellé anglais d'un type d'annotation (le cœur est en français).
