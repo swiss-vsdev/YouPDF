@@ -29,6 +29,10 @@ mod prefs_ui;
 mod organize_ui;
 mod sign_ui;
 mod reader;
+mod widgets;
+pub(crate) use widgets::*;
+mod render;
+pub(crate) use render::*;
 mod files_ui;
 mod documents_ui;
 mod annots_ui;
@@ -2165,251 +2169,24 @@ impl eframe::App for YouPdfApp {
 // Thème
 // --------------------------------------------------------------------------
 
-/// Réglages egui d'un thème. La palette et les visuels vivent dans
-/// `youpdf_shared::theme` : un seul endroit définit les couleurs.
-fn apply_theme(ctx: &egui::Context, theme: Theme) {
-    theme.apply(ctx);
-}
 
-/// Extrait le texte du document pour le contexte IA.
-///
-/// Plafonné à 40 pages et 60 000 caractères : inutile d'envoyer un roman
-/// entier au modèle à chaque question. Le plafond est volontairement large
-/// pour couvrir un contrat ou un rapport typique.
-fn extract_document_text(doc: &Document) -> String {
-    const MAX_PAGES: usize = 40;
-    const MAX_CHARS: usize = 60_000;
-
-    let total = doc.page_count().min(MAX_PAGES);
-    let mut out = String::new();
-    for page in 1..=total as u32 {
-        if let Ok(text) = doc.page_text(page) {
-            out.push_str(&text.replace('\u{c}', "\n"));
-            out.push('\n');
-        }
-    }
-    if out.chars().count() > MAX_CHARS {
-        out = out.chars().take(MAX_CHARS).collect();
-    }
-    out
-}
 
 // --------------------------------------------------------------------------
 // Widgets maison
 // --------------------------------------------------------------------------
 
-/// Pastille de mode / d'outil : icône + libellé (+ `▾`), fond si actif.
-fn pill_button(
-    ui: &mut egui::Ui,
-    label: &str,
-    draw: IconFn,
-    chevron: bool,
-    primary: bool,
-    selected: bool,
-) -> egui::Response {
-    // Texte blanc sur l'accent ; la teinte du thème ailleurs, pour rester
-    // lisible quand le thème est clair.
-    let text_color = if primary || selected {
-        Color32::WHITE
-    } else {
-        pal().icon_bright
-    };
-    let galley = ui.painter().layout_no_wrap(
-        label.to_owned(),
-        FontId::proportional(BODY),
-        text_color,
-    );
-    let width = 12.0
-        + 15.0
-        + 7.0
-        + galley.size().x
-        + if chevron { 15.0 } else { 0.0 }
-        + 12.0;
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 26.0), Sense::click());
-    if primary || selected {
-        ui.painter().rect_filled(rect, Rounding::same(RADIUS_M), pal().accent);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(RADIUS_M), pal().hover_bg);
-    }
-    let icon_rect = Rect::from_center_size(
-        pos2(rect.min.x + 12.0 + 7.5, rect.center().y),
-        vec2(15.0, 15.0),
-    );
-    draw(ui.painter(), icon_rect, text_color);
-    ui.painter().galley(
-        pos2(
-            rect.min.x + 12.0 + 15.0 + 7.0,
-            rect.center().y - galley.size().y / 2.0,
-        ),
-        galley,
-        text_color,
-    );
-    if chevron {
-        let ch_rect = Rect::from_center_size(
-            pos2(rect.max.x - 12.0 - 5.0, rect.center().y),
-            vec2(9.0, 9.0),
-        );
-        icon_chevron(ui.painter(), ch_rect, pal().muted);
-    }
-    resp
-}
 
-/// Ligne de menu cochable : la place de la coche est réservée même quand
-/// l'entrée ne l'est pas, sinon les libellés d'un même groupe danseraient
-/// d'une ligne à l'autre.
-fn menu_row_checked(ui: &mut egui::Ui, label: &str, checked: bool) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(vec2(210.0, 26.0), Sense::click());
-    if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(5.0), pal().hover_bg);
-    }
-    if checked {
-        glyph(
-            ui.painter(),
-            Rect::from_center_size(pos2(rect.min.x + 18.0, rect.center().y), vec2(15.0, 15.0)),
-            pal().accent,
-            ph::CHECK,
-        );
-    }
-    ui.painter().text(
-        pos2(rect.min.x + 32.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(BODY),
-        pal().icon_bright,
-    );
-    resp.clicked()
-}
 
-/// Séparateur de menu, aligné sur la largeur des lignes.
-fn menu_separator(ui: &mut egui::Ui) {
-    ui.add_space(SPACE_S);
-    let y = ui.cursor().top();
-    ui.painter().hline(
-        ui.max_rect().x_range(),
-        y,
-        Stroke::new(1.0_f32, pal().separator),
-    );
-    ui.add_space(SPACE_M);
-}
 
-/// Entrée qui ouvre un sous-menu au clic.
-fn menu_submenu(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
-    let text = RichText::new(format!("{label}  ▸")).size(BODY);
-    ui.menu_button(text, |ui| {
-        ui.set_min_width(180.0);
-        add(ui);
-    });
-}
 
-/// Ligne d'un sous-menu.
-fn submenu_row(ui: &mut egui::Ui, label: &str, icon: Option<fn(&egui::Painter, egui::Rect, egui::Color32)>) -> bool {
-    let desired_width = if icon.is_some() { 200.0 } else { 180.0 };
-    let button = Button::new(RichText::new(label))
-        .min_size(vec2(desired_width, 24.0));
-    let resp = ui.add(button);
-    // Draw icon if provided, positioned to the right of the label
-    if let Some(draw_icon) = icon {
-        let icon_size = 14.0; // Smaller icon for submenus
-        let icon_x = resp.rect.min.x + resp.rect.width() - 10.0 - icon_size;
-        let icon_rect = egui::Rect::from_min_max(
-            egui::pos2(icon_x, resp.rect.min.y + (resp.rect.height() - icon_size) / 2.0),
-            egui::pos2(icon_x + icon_size, resp.rect.max.y - (resp.rect.height() - icon_size) / 2.0),
-        );
-        draw_icon(ui.painter(), icon_rect, pal().icon_bright);
-    }
-    resp.clicked
-}
 
-/// Ligne de menu `Outils` : libellé à gauche, raccourci à droite.
-fn menu_row(ui: &mut egui::Ui, label: &str, shortcut: &str, icon: Option<fn(&egui::Painter, egui::Rect, egui::Color32)>) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(vec2(210.0, 26.0), Sense::click());
-    if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(5.0), pal().hover_bg);
-    }
-    let label_x = rect.min.x + 10.0;
-    let shortcut_x = rect.max.x - 10.0;
-    let icon_size = 16.0;
-    let icon_x = label_x + 20.0 + icon_size;
-    // Position icon only if provided and there's space
-    if let Some(draw_icon) = icon {
-        let icon_rect = egui::Rect::from_min_max(
-            egui::pos2(icon_x, rect.min.y + (rect.height() - icon_size) / 2.0),
-            egui::pos2(icon_x + icon_size, rect.max.y - (rect.height() - icon_size) / 2.0),
-        );
-        draw_icon(ui.painter(), icon_rect, pal().icon_bright);
-    }
-    ui.painter().text(
-        pos2(label_x, rect.center().y),
-        Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(BODY),
-        pal().icon_bright,
-    );
-    ui.painter().text(
-        pos2(shortcut_x, rect.center().y),
-        Align2::RIGHT_CENTER,
-        shortcut,
-        FontId::proportional(LABEL),
-        pal().muted,
-    );
-    resp.clicked()
-}
 
-/// Bouton-icône 38×38 avec fond sélection/hover.
-fn rail_button(
-    ui: &mut egui::Ui,
-    selected: bool,
-    draw: IconFn,
-) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(38.0, 38.0), Sense::click());
-    if selected {
-        ui.painter().rect_filled(rect, Rounding::same(RADIUS_L), pal().accent);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(RADIUS_L), pal().widget_bg);
-    }
-    let color = if selected {
-        Color32::WHITE
-    } else if resp.hovered() {
-        pal().icon_bright
-    } else {
-        pal().icon
-    };
-    draw(ui.painter(), rect.shrink(9.0), color);
-    resp
-}
 
-/// Bouton d'action d'un panneau (icône 30×28, fond si actif).
-fn panel_action(
-    ui: &mut egui::Ui,
-    selected: bool,
-    draw: IconFn,
-) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 28.0), Sense::click());
-    if selected {
-        ui.painter().rect_filled(rect, Rounding::same(RADIUS_M), pal().widget_bg);
-    } else if resp.hovered() {
-        ui.painter()
-            .rect_filled(rect, Rounding::same(RADIUS_M), Color32::from_rgb(0x33, 0x33, 0x33));
-    }
-    let color = if selected || resp.hovered() { pal().icon_bright } else { pal().icon };
-    draw(ui.painter(), rect.shrink(8.0), color);
-    resp
-}
 
 // --------------------------------------------------------------------------
 // Icônes Phosphor (police d'icônes, licence MIT)
 // --------------------------------------------------------------------------
 
-/// Petit bouton d'icône de la barre d'état.
-fn status_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
-    let resp = ui
-        .add(Button::new(RichText::new(glyph).size(TITLE).color(pal().icon)).frame(false))
-        .on_hover_text(tip);
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    resp.clicked()
-}
 
 /// Formats proposés à l'insertion d'une page blanche. `(0, 0)` reprend la
 /// taille de la page voisine.
@@ -2463,29 +2240,6 @@ enum BookmarkRequest {
     },
 }
 
-/// Bouton d'action de la fenêtre d'organisation : icône puis libellé.
-fn organize_button(ui: &mut egui::Ui, icon: IconFn, label: &str) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(vec2(116.0, 28.0), Sense::click());
-    ui.painter().rect_filled(
-        rect,
-        Rounding::same(RADIUS_M),
-        if resp.hovered() { pal().hover_bg } else { pal().widget_bg },
-    );
-    let color = if resp.hovered() { pal().icon_bright } else { pal().icon };
-    icon(
-        ui.painter(),
-        Rect::from_center_size(pos2(rect.min.x + 15.0, rect.center().y), vec2(14.0, 14.0)),
-        color,
-    );
-    ui.painter().text(
-        pos2(rect.min.x + 28.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(BODY),
-        color,
-    );
-    resp.clicked()
-}
 
 /// Réglages de zoom proposés par la pastille bas-droite.
 #[derive(Clone, Copy, PartialEq)]
@@ -2514,38 +2268,12 @@ impl ZoomMode {
 }
 
 
-/// Vrai si le réglage `mode` correspond au zoom courant de l'onglet.
-fn zoom_choice_matches(mode: ZoomMode, zoom: Option<f32>, fit_page: bool) -> bool {
-    match mode {
-        ZoomMode::FitWidth => zoom.is_none() && !fit_page,
-        ZoomMode::FitPage => zoom.is_none() && fit_page,
-        ZoomMode::Fixed(scale) => zoom.is_some_and(|z| (z - scale).abs() < 0.001),
-    }
-}
 
-/// Message centré d'un panneau vide.
-fn panel_hint(ui: &mut egui::Ui, title: &str, detail: &str) {
-    ui.add_space(14.0);
-    ui.vertical_centered(|ui| {
-        ui.label(section(title));
-        ui.add_space(SPACE_S);
-        ui.label(muted(detail, LABEL));
-    });
-}
 
 /// Aligne un rectangle de champ sur les bords et centres des champs voisins.
 ///
 
-/// Libellé anglais d'un type de champ de formulaire.
-fn form_kind_label(kind: &FormFieldKind) -> String {
-    kind.display_name().to_owned()
-}
 
-/// Libellé anglais d'un type d'annotation (alias de
-/// [`youpdf_core::annotate::AnnotationKind::display_name`]).
-fn annot_label(kind: AnnotationKind) -> &'static str {
-    kind.display_name()
-}
 /// Action demandée par la liste des pièces jointes.
 enum AttachmentAction {
     /// Ouvrir dans l'application par défaut du système.
@@ -2572,285 +2300,10 @@ enum CommentAction {
     Export(CommentFormat),
 }
 
-/// Distance au présent, en clair (« 5 min », « 3 h », « 2 d »).
-fn relative_time(when: &str, now: chrono::DateTime<chrono::Utc>) -> String {
-    let Ok(then) = chrono::DateTime::parse_from_rfc3339(when) else {
-        return when.get(..10).unwrap_or("").to_owned();
-    };
-    let seconds = (now - then.with_timezone(&chrono::Utc)).num_seconds();
-    if seconds < 60 {
-        return "now".to_owned();
-    }
-    let minutes = seconds / 60;
-    if minutes < 60 {
-        return format!("{minutes} min");
-    }
-    let hours = minutes / 60;
-    if hours < 24 {
-        return format!("{hours} h");
-    }
-    let days = hours / 24;
-    if days < 30 {
-        return format!("{days} d");
-    }
-    let months = days / 30;
-    if months < 12 {
-        return format!("{months} mo");
-    }
-    format!("{} y", months / 12)
-}
 
 
-/// Icône du marqueur d'état.
-fn comment_state_icon(state: AnnotationState) -> &'static str {
-    match state {
-        AnnotationState::None => ph::CHAT_CIRCLE,
-        AnnotationState::Accepted => ph::CHECK_CIRCLE,
-        AnnotationState::Rejected => ph::X_CIRCLE,
-        AnnotationState::Cancelled => ph::PROHIBIT,
-        AnnotationState::Completed => ph::CHECK,
-    }
-}
 
-/// Couleur du marqueur d'état.
-fn comment_state_color(state: AnnotationState) -> Color32 {
-    match state {
-        AnnotationState::None => pal().muted,
-        AnnotationState::Accepted => Color32::from_rgb(72, 168, 104),
-        AnnotationState::Rejected => Color32::from_rgb(206, 88, 84),
-        AnnotationState::Cancelled => Color32::from_rgb(206, 158, 72),
-        AnnotationState::Completed => pal().icon_bright,
-    }
-}
 
-/// Dessine les annotations d'une page ; coordonnées PDF → écran.
-fn draw_annots(
-    painter: &Painter,
-    tab: &Tab,
-    page: u32,
-    page_rect: Rect,
-    scale: f32,
-    selected: Option<usize>,
-) {
-    for (idx, annot) in tab.annots.iter().enumerate() {
-        // Une réponse vit dans le fil de discussion, pas sur la page.
-        if annot.page != page as usize || annot.reply_to.is_some() {
-            continue;
-        }
-        let to_screen =
-            |x: f32, y: f32| pos2(page_rect.min.x + x * scale, page_rect.max.y - y * scale);
-        let r = Rect::from_two_pos(
-            to_screen(annot.rect[0], annot.rect[1]),
-            to_screen(annot.rect[2], annot.rect[3]),
-        );
-        let color = Color32::from_rgb(
-            annot.style.color[0],
-            annot.style.color[1],
-            annot.style.color[2],
-        );
-        let alpha = (annot.style.opacity.clamp(0.05, 1.0) * 255.0) as u8;
-        let fill = Color32::from_rgba_unmultiplied(
-            annot.style.color[0],
-            annot.style.color[1],
-            annot.style.color[2],
-            alpha,
-        );
-        let width = (annot.style.line_width * scale.max(0.3)).max(1.0);
-        let font = (annot.style.font_size * scale).clamp(6.0, 48.0);
-        // Une mise en évidence posée sur du texte porte un quadrilatère par
-        // ligne ; sans quadrilatère, le rectangle fait la boîte.
-        let quad_rect = |q: [f32; 8]| -> Rect {
-            let points = [
-                to_screen(q[0], q[1]),
-                to_screen(q[2], q[3]),
-                to_screen(q[4], q[5]),
-                to_screen(q[6], q[7]),
-            ];
-            let mut rect = Rect::from_min_max(points[0], points[0]);
-            for point in points.iter().skip(1) {
-                rect = rect.union(Rect::from_min_max(*point, *point));
-            }
-            rect
-        };
-        let blocks: Vec<Rect> = if annot.quads.is_empty() {
-            vec![r]
-        } else {
-            annot.quads.iter().map(|q| quad_rect(*q)).collect()
-        };
-
-        match annot.kind {
-            AnnotationKind::Highlight => {
-                for block in &blocks {
-                    painter.rect_filled(*block, Rounding::same(RADIUS_XS), fill);
-                }
-            }
-            AnnotationKind::Squiggly => {
-                // Même ondulation que l'apparence enregistrée : deux crans
-                // par motif, posés sur le bas de la boîte.
-                let amp = (3.0 * scale).max(1.0);
-                for block in &blocks {
-                    let steps = ((block.width() / (4.0 * scale)).ceil() as usize * 2).max(4);
-                    let pts: Vec<egui::Pos2> = (0..=steps)
-                        .map(|i| {
-                            let t = i as f32 / steps as f32;
-                            pos2(
-                                block.min.x + t * block.width(),
-                                block.max.y - if i % 2 == 0 { amp * 0.6 } else { amp * 1.8 },
-                            )
-                        })
-                        .collect();
-                    painter.add(Shape::line(pts, Stroke::new(width, color)));
-                }
-            }
-            AnnotationKind::Underline => {
-                for block in &blocks {
-                    painter.line_segment(
-                        [pos2(block.min.x, block.max.y), pos2(block.max.x, block.max.y)],
-                        Stroke::new(width, color),
-                    );
-                }
-            }
-            AnnotationKind::StrikeOut => {
-                for block in &blocks {
-                    painter.line_segment(
-                        [
-                            pos2(block.min.x, block.center().y),
-                            pos2(block.max.x, block.center().y),
-                        ],
-                        Stroke::new(width, color),
-                    );
-                }
-            }
-            AnnotationKind::Ink => {
-                for stroke in &annot.ink_points {
-                    if stroke.len() < 2 {
-                        continue;
-                    }
-                    let pts: Vec<egui::Pos2> =
-                        stroke.iter().map(|p| to_screen(p[0], p[1])).collect();
-                    painter.add(Shape::line(pts, Stroke::new(width, color)));
-                }
-            }
-            AnnotationKind::Note => {
-                painter.rect_filled(r, Rounding::same(RADIUS_TINY), fill);
-                painter.rect_stroke(
-                    r,
-                    3.0,
-                    Stroke::new(1.0_f32, Color32::from_black_alpha(120)),
-                );
-                painter.text(
-                    r.center(),
-                    Align2::CENTER_CENTER,
-                    "!",
-                    FontId::proportional((font * 0.9).max(8.0)),
-                    Color32::from_black_alpha(200),
-                );
-            }
-            AnnotationKind::Stamp => {
-                painter.rect_stroke(r, 3.0, Stroke::new((2.0 * scale).max(1.0), color));
-                let lines: Vec<&str> = annot
-                    .content
-                    .lines()
-                    .filter(|line| !line.is_empty())
-                    .collect();
-                let first = font.max(9.0);
-                let leading = first * 1.15;
-                let block = leading * lines.len() as f32;
-                let top = r.center().y - block / 2.0 + leading / 2.0;
-                for (index, line) in lines.iter().enumerate() {
-                    let size = if index == 0 { first } else { first * 0.72 };
-                    painter.text(
-                        pos2(r.center().x, top + index as f32 * leading),
-                        Align2::CENTER_CENTER,
-                        *line,
-                        FontId::proportional(size),
-                        color,
-                    );
-                }
-            }
-            AnnotationKind::Circle => {
-                painter.add(Shape::circle_stroke(
-                    r.center(),
-                    r.width().min(r.height()) / 2.0,
-                    Stroke::new(width, color),
-                ));
-            }
-            AnnotationKind::Polygon => {
-                // Dessine le polygone à partir des points d'encre.
-                let pts: Vec<egui::Pos2> = annot
-                    .ink_points
-                    .first()
-                    .cloned()
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|p| to_screen(p[0], p[1]))
-                    .collect();
-                if pts.len() >= 3 {
-                    // Ferme le polygone en reliant le dernier au premier.
-                    let mut pts_closed = pts.clone();
-                    pts_closed.push(pts[0]);
-                    painter.add(Shape::convex_polygon(pts_closed, color, Stroke::NONE));
-                }
-            }
-            // AnnotationKind::PolyLine => {
-            //     // Dessine la polyligne ouverte.
-            //     let pts: Vec<egui::Pos2> = annot
-            //         .ink_points
-            //         .first()
-            //         .cloned()
-            //         .unwrap_or_default()
-            //         .iter()
-            //         .map(|p| to_screen(p[0], p[1]))
-            //         .collect();
-            //     if pts.len() >= 2 {
-            //         painter.add(Shape::line_strip(pts, Stroke::new(width, color)));
-            //     }
-            // }
-            AnnotationKind::Line | AnnotationKind::Arrow => {
-                let pts = annot.ink_points.first().cloned().unwrap_or_default();
-                let (a, b) = match (pts.first(), pts.get(1)) {
-                    (Some(a), Some(b)) => (to_screen(a[0], a[1]), to_screen(b[0], b[1])),
-                    _ => (r.min, r.max),
-                };
-                painter.line_segment([a, b], Stroke::new(width, color));
-                if annot.kind == AnnotationKind::Arrow {
-                    let d = b - a;
-                    let len = d.length().max(0.01);
-                    let u = d / len;
-                    let side = vec2(-u.y, u.x);
-                    let head = (len * 0.2).clamp(6.0, 20.0);
-                    painter.add(Shape::convex_polygon(
-                        vec![b, b - u * head + side * head * 0.45, b - u * head - side * head * 0.45],
-                        color,
-                        Stroke::NONE,
-                    ));
-                }
-            }
-            AnnotationKind::Link => {
-                painter.line_segment(
-                    [pos2(r.min.x, r.max.y), pos2(r.max.x, r.max.y)],
-                    Stroke::new(1.0_f32, color),
-                );
-            }
-            _ => {
-                painter.rect_stroke(r, 1.0, Stroke::new(width, color));
-                if !annot.content.is_empty() {
-                    painter.text(
-                        r.left_top() + vec2(3.0, 2.0),
-                        Align2::LEFT_TOP,
-                        &annot.content,
-                        FontId::proportional(font.max(8.0)),
-                        color,
-                    );
-                }
-            }
-        }
-
-        if selected == Some(idx) {
-            painter.rect_stroke(r.expand(3.0), 2.0, Stroke::new(1.5_f32, pal().accent));
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
