@@ -5227,7 +5227,7 @@ impl YouPdfApp {
                                     });
                                     // Texte visé par le surlignage.
                                     if let Some(quote) = quotes.get(&row.id) {
-                                        if !quote.is_empty() && is_markup(row.kind) {
+                                        if !quote.is_empty() && row.kind.is_markup() {
                                             ui.label(
                                                 RichText::new(format!("“{quote}”"))
                                                     .size(CAPTION)
@@ -5385,7 +5385,7 @@ impl YouPdfApp {
             std::collections::BTreeMap::new();
         for annot in &tab.annots {
             if annot.reply_to.is_some()
-                || !is_markup(annot.kind)
+                || !annot.kind.is_markup()
                 || comment_quotes.contains_key(&annot.id)
             {
                 continue;
@@ -13547,16 +13547,6 @@ fn safe_attachment_name(name: &str, index: usize) -> String {
 
 /// Vrai pour les annotations de marquage de texte, seules à porter une
 /// citation (« le texte visé »).
-fn is_markup(kind: AnnotationKind) -> bool {
-    matches!(
-        kind,
-        AnnotationKind::Highlight
-            | AnnotationKind::Underline
-            | AnnotationKind::StrikeOut
-            | AnnotationKind::Squiggly
-    )
-}
-
 /// Indices des commentaires, dans l'ordre de tri demandé.
 fn comment_order(annots: &[Annotation], sort: CommentSort) -> Vec<usize> {
     let mut order: Vec<usize> = (0..annots.len()).collect();
