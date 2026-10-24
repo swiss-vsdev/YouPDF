@@ -193,7 +193,11 @@ impl YouPdfApp {
                                 );
                             }
 
-                            // Actions rapides au survol.
+                            // Actions rapides au survol. `ui.put` peint sur un Ui
+                            // fils autonome : son min_rect remonte au parent, qui
+                            // recule alors son curseur de ligne jusqu'au bouton et
+                            // déplace la page suivante. On repousse le curseur sur
+                            // la carte après les deux `put`.
                             if resp.hovered() {
                                 let quick =
                                     Rect::from_min_size(img_rect.max - vec2(44.0, 20.0), vec2(40.0, 18.0));
@@ -213,6 +217,7 @@ impl YouPdfApp {
                                 if ui.put(right, Button::new(ph::X).small()).clicked() {
                                     quick_delete = Some(page as usize);
                                 }
+                                ui.advance_cursor_after_rect(rect);
                             }
 
                             // Glisser-déposer : barre d'insertion avant/après.
