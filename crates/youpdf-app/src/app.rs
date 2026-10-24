@@ -7529,6 +7529,20 @@ impl YouPdfApp {
         if self.home_open || self.tabs.is_empty() {
             return;
         }
+        // Les boîtes de dialogue de page (organiser, extraire, etc.) masquent
+        // les barres flottantes : elles gèrent leur propre interface.
+        if self.organize_open
+            || self.crop_open
+            || self.watermark_open
+            || self.background_open
+            || self.header_footer_open
+            || self.bates_open
+            || self.compress_open
+            || self.protect_open
+            || self.sign_open
+        {
+            return;
+        }
         let top = TITLE_H + 8.0;
         // Les barres flottantes sont ancrées au canevas, pas à la fenêtre :
         // le panneau latéral les décale (comme dans la référence).
