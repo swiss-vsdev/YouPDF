@@ -13,7 +13,7 @@
 
 use std::cell::Cell;
 
-use egui::{Color32, Context, FontId, RichText, Rounding, Stroke, TextStyle, Visuals};
+use egui::{Color32, Context, FontId, Frame, RichText, Rounding, Stroke, TextStyle, Visuals};
 
 /// Texte secondaire : aide, horodatages, libellés d'un seul mot.
 pub const CAPTION: f32 = 10.5;
@@ -25,6 +25,20 @@ pub const BODY: f32 = 12.0;
 pub const TITLE: f32 = 13.0;
 /// Champs et tableaux monospace.
 pub const MONO: f32 = 11.0;
+
+/// Espaces verticaux, de la plus petite à la plus grande.
+pub const SPACE_TINY: f32 = 1.0;
+pub const SPACE_XS: f32 = 2.0;
+pub const SPACE_S: f32 = 4.0;
+pub const SPACE_M: f32 = 6.0;
+pub const SPACE_L: f32 = 8.0;
+/// Coins arrondis, de la plus petite à la plus grande.
+pub const RADIUS_TINY: f32 = 3.0;
+pub const RADIUS_XS: f32 = 2.0;
+pub const RADIUS_S: f32 = 4.0;
+pub const RADIUS_M: f32 = 6.0;
+pub const RADIUS_L: f32 = 8.0;
+pub const RADIUS_XL: f32 = 10.0;
 
 /// Texte éteint à la taille voulue : toute la peinture sourde passe par là.
 pub fn muted(text: impl Into<String>, size: f32) -> RichText {
@@ -39,6 +53,15 @@ pub fn section(text: impl Into<String>) -> RichText {
 /// Texte secondaire : [`CAPTION`] éteint.
 pub fn caption(text: impl Into<String>) -> RichText {
     muted(text, CAPTION)
+}
+
+/// Cadre de fenêtre : fond de chrome et coins arrondis. [`Theme::apply`] pose
+/// le reste ; les fenêtres redimensionables et [`show_modal`] partagent celui-ci
+/// pour que toutes les surfaçes aient la même enveloppe.
+pub fn modal_frame(ctx: &Context) -> Frame {
+    Frame::window(&ctx.style())
+        .fill(pal().chrome_bg)
+        .rounding(Rounding::same(10.0))
 }
 
 /// Couleurs de l'interface, choisies par le thème.

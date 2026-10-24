@@ -1,7 +1,7 @@
 //! Fenêtre d'export et écriture des formats de sortie.
 
 use super::*;
-use youpdf_shared::t;
+use youpdf_shared::{LABEL, section, t, SPACE_L, SPACE_M};
 
 impl YouPdfApp {
     /// Fenêtre « Exporter » : choix du format de sortie.
@@ -12,7 +12,7 @@ impl YouPdfApp {
         let mut open = true;
         let mut run = false;
         self.show_modal(ctx, "modal-export", "Export", 380.0, &mut open, |app, ui| {
-            ui.label(RichText::new(t("Text")).size(12.0).color(pal().muted));
+            ui.label(section(t("Text")));
             for format in [
                 TextFormat::Plain,
                 TextFormat::Markdown,
@@ -32,8 +32,8 @@ impl YouPdfApp {
                     app.export_format = format;
                 }
             }
-            ui.add_space(6.0);
-            ui.label(RichText::new(t("Images")).size(12.0).color(pal().muted));
+            ui.add_space(SPACE_M);
+            ui.label(section(t("Images")));
             for (format, label) in [
                 (ImageFormat::Png, "PNG (one file per page)"),
                 (ImageFormat::Jpeg, "JPEG (one file per page)"),
@@ -62,7 +62,7 @@ impl YouPdfApp {
             }
             if matches!(app.export_mode, ExportMode::Image | ExportMode::LongImage) {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(t("Resolution")).size(12.0).color(pal().muted));
+                    ui.label(section(t("Resolution")));
                     ui.add(
                         egui::DragValue::new(&mut app.export_dpi)
                             .range(36.0..=600.0)
@@ -70,8 +70,8 @@ impl YouPdfApp {
                     );
                 });
             }
-            ui.add_space(6.0);
-            ui.label(RichText::new(t("Embedded images")).size(12.0).color(pal().muted));
+            ui.add_space(SPACE_M);
+            ui.label(section(t("Embedded images")));
             if ui
                 .selectable_label(
                     app.export_mode == ExportMode::Embedded,
@@ -81,8 +81,8 @@ impl YouPdfApp {
             {
                 app.export_mode = ExportMode::Embedded;
             }
-            ui.add_space(6.0);
-            ui.label(RichText::new(t("Office")).size(12.0).color(pal().muted));
+            ui.add_space(SPACE_M);
+            ui.label(section(t("Office")));
             for format in OfficeFormat::ALL {
                 if ui
                     .selectable_label(
@@ -104,7 +104,7 @@ impl YouPdfApp {
                     "Exact layout (position each text run)",
                 );
             }
-            ui.add_space(8.0);
+            ui.add_space(SPACE_L);
             ui.label(
                 RichText::new(match app.export_mode {
                     ExportMode::Image => {
@@ -129,10 +129,10 @@ impl YouPdfApp {
                          are not rebuilt, and pages without extractable text come out empty."
                     }
                 })
-                .size(11.0)
+                .size(LABEL)
                 .color(pal().muted),
             );
-            ui.add_space(8.0);
+            ui.add_space(SPACE_L);
             if ui.button(t("Export…")).clicked() {
                 run = true;
             }

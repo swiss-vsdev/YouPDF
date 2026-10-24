@@ -4,7 +4,7 @@
 //! egui et ne renvoie que des lignes de texte vers l'interface.
 
 use super::*;
-use youpdf_shared::t;
+use youpdf_shared::{CAPTION, LABEL, caption, modal_frame, muted, section, t, SPACE_S, SPACE_L, SPACE_M};
 
 impl YouPdfApp {
     pub(super) fn batch_window(&mut self, ctx: &egui::Context) {
@@ -36,9 +36,9 @@ impl YouPdfApp {
             .resizable(true)
             .default_size(vec2(520.0, 470.0))
             .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .frame(modal_frame(ctx))
             .show(ctx, |ui| {
-                ui.set_max_width(620.0);
-                ui.label(RichText::new(t("Queue")).size(12.0).color(pal().muted));
+                ui.label(section(t("Queue")));
                 ui.horizontal(|ui| {
                     if ui.button(t("Add PDFs…")).clicked() {
                         add_files = true;
@@ -49,27 +49,27 @@ impl YouPdfApp {
                     if ui.add_enabled(!self.batch_running, egui::Button::new("Clear")).clicked() {
                         clear = true;
                     }
-                    ui.label(RichText::new(format!("{files} file(s)")).size(11.0).color(pal().muted));
+                    ui.label(muted(format!("{files} file(s)"), LABEL));
                 });
-                ui.add_space(4.0);
+                ui.add_space(SPACE_S);
                 self.batch_table(ui);
-                ui.add_space(6.0);
-                ui.label(RichText::new(t("Output folder")).size(12.0).color(pal().muted));
+                ui.add_space(SPACE_M);
+                ui.label(section(t("Output folder")));
                 ui.horizontal(|ui| {
                     if ui.button(t("Choose…")).clicked() {
                         choose_dir = true;
                     }
                     ui.label(
                         RichText::new(dir.clone().unwrap_or_else(|| "Not chosen".to_owned()))
-                            .size(11.0)
+                            .size(LABEL)
                             .color(pal().muted),
                     );
                 });
-                ui.add_space(8.0);
+                ui.add_space(SPACE_L);
                 ui.separator();
-                ui.add_space(6.0);
+                ui.add_space(SPACE_M);
                 ui.label(
-                    RichText::new(t("Operations, applied in this order")).size(12.0).color(pal().muted),
+                    section(t("Operations, applied in this order")),
                 );
                 ui.checkbox(&mut self.batch_text, t("Export the text (plain text)"));
                 ui.checkbox(&mut self.batch_images, t("Export the pages as PNG (150 dpi)"));
@@ -87,7 +87,7 @@ impl YouPdfApp {
                 ui.checkbox(&mut self.batch_ocr, t("Recognise text (OCR, searchable)"));
                 if self.batch_ocr {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(t("OCR language")).size(12.0).color(pal().muted));
+                        ui.label(section(t("OCR language")));
                         let mut picked: Option<String> = None;
                         egui::ComboBox::from_id_salt("batch-ocr-lang")
                             .selected_text(language_name(&self.ocr_language))
@@ -125,10 +125,10 @@ impl YouPdfApp {
                                 .map(|n| n.to_string_lossy().into_owned())
                                 .unwrap_or_else(|| "No file chosen".to_owned()),
                         )
-                        .size(11.0)
+                        .size(LABEL)
                         .color(pal().muted),
                     );
-                    ui.label(RichText::new(t("at")).size(11.0).color(pal().muted));
+                    ui.label(muted(t("at"), LABEL));
                     let mut at_page = self.batch_insert_at.min(9999) as u32;
                     ui.add(egui::DragValue::new(&mut at_page).range(0..=9999).prefix("after "));
                     self.batch_insert_at = if at_page == 0 {
@@ -138,7 +138,7 @@ impl YouPdfApp {
                     };
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(t("Convert")).size(11.0).color(pal().muted));
+                    ui.label(muted(t("Convert"), LABEL));
                     let current = self.batch_convert;
                     egui::ComboBox::from_id_salt("batch-convert")
                         .selected_text(
@@ -161,7 +161,7 @@ impl YouPdfApp {
                         });
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(t("Remove pages")).size(11.0).color(pal().muted));
+                    ui.label(muted(t("Remove pages"), LABEL));
                     ui.add(
                         TextEdit::singleline(&mut self.batch_remove_pages)
                             .hint_text("1-2, 5")
@@ -169,7 +169,7 @@ impl YouPdfApp {
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(t("Watermark")).size(11.0).color(pal().muted));
+                    ui.label(muted(t("Watermark"), LABEL));
                     ui.add(
                         TextEdit::singleline(&mut self.batch_watermark_text)
                             .hint_text("CONFIDENTIAL")
@@ -177,7 +177,7 @@ impl YouPdfApp {
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(t("Header/footer")).size(11.0).color(pal().muted));
+                    ui.label(muted(t("Header/footer"), LABEL));
                     ui.add(
                         TextEdit::singleline(&mut self.batch_header_text)
                             .hint_text("My Company")
@@ -185,15 +185,15 @@ impl YouPdfApp {
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(t("Bates prefix")).size(11.0).color(pal().muted));
+                    ui.label(muted(t("Bates prefix"), LABEL));
                     ui.add(
                         TextEdit::singleline(&mut self.batch_bates_prefix).desired_width(80.0),
                     );
-                    ui.label(RichText::new(t("start")).size(11.0).color(pal().muted));
+                    ui.label(muted(t("start"), LABEL));
                     ui.add(egui::DragValue::new(&mut self.batch_bates_start).range(1..=999_999));
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(t("Output name")).size(11.0).color(pal().muted));
+                    ui.label(muted(t("Output name"), LABEL));
                     ui.add(
                         TextEdit::singleline(&mut self.batch_prefix)
                             .hint_text("prefix")
@@ -205,7 +205,7 @@ impl YouPdfApp {
                             .desired_width(90.0),
                     );
                 });
-                ui.add_space(8.0);
+                ui.add_space(SPACE_L);
                 ui.horizontal(|ui| {
                     if self.batch_running {
                         if ui.button(t("Cancel")).clicked() {
@@ -214,7 +214,7 @@ impl YouPdfApp {
                         ui.spinner();
                         ui.label(
                             RichText::new(self.batch_progress_label())
-                                .size(11.0)
+                                .size(LABEL)
                                 .color(pal().icon_bright),
                         );
                     } else if ui
@@ -237,19 +237,19 @@ impl YouPdfApp {
                     if let Some(eta) = self.batch_eta {
                         ui.label(
                             RichText::new(format!("About {} left", human_duration(eta)))
-                                .size(10.5)
+                                .size(CAPTION)
                                 .color(pal().muted),
                         );
                     }
                 }
                 if !self.batch_report.is_empty() {
-                    ui.add_space(8.0);
+                    ui.add_space(SPACE_L);
                     ui.separator();
-                    ui.add_space(6.0);
+                    ui.add_space(SPACE_M);
                     ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
                         ui.label(
                             RichText::new(self.batch_report.clone())
-                                .size(11.0)
+                                .size(LABEL)
                                 .color(pal().icon_bright),
                         );
                     });
@@ -511,31 +511,31 @@ impl YouPdfApp {
                         ("Status", 0.0),
                     ] {
                         ui.add(Label::new(
-                            RichText::new(heading).size(10.5).color(pal().muted),
+                            caption(heading),
                         ));
                     }
                     ui.end_row();
                     for (index, entry) in self.batch_queue.iter().enumerate() {
                         ui.label(
                             RichText::new(format!("{}", index + 1))
-                                .size(10.5)
+                                .size(CAPTION)
                                 .color(pal().muted),
                         );
                         ui.label(
-                            RichText::new(entry.name()).size(11.0).color(pal().icon_bright),
+                            RichText::new(entry.name()).size(LABEL).color(pal().icon_bright),
                         );
                         let pages = entry
                             .pages
                             .map(|count| count.to_string())
                             .unwrap_or_else(|| "—".to_string());
-                        ui.label(RichText::new(pages).size(10.5).color(pal().muted));
+                        ui.label(caption(pages));
                         ui.label(
                             RichText::new(human_bytes(entry.size))
-                                .size(10.5)
+                                .size(CAPTION)
                                 .color(pal().muted),
                         );
                         let (text, colour) = entry.status.label();
-                        let mut label = RichText::new(text).size(10.5).color(colour);
+                        let mut label = RichText::new(text).size(CAPTION).color(colour);
                         if let Some(detail) = &entry.detail {
                             label = label.strong();
                             ui.label(label).on_hover_text(detail);
