@@ -113,7 +113,7 @@ mod tests {
         assert!(bitmap.background_color_around(0.0, [0.0, 0.0, 1.0, 1.0]).is_none());
     }
 
-    use super::*;
+    
     use crate::{Annotation, AnnotationKind, Document};
 
     /// Ancienne conversion, conservée comme référence de non-régression :
