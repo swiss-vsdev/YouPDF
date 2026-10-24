@@ -76,6 +76,7 @@ use youpdf_core::annotation::comments::{
 use youpdf_core::edit::{crop_fractions_in_image, response_changed};
 use youpdf_core::annotate::author_initial;
 use youpdf_core::structure::attachments::{prune_attachment_staging, safe_attachment_name, stage_attachment, unique_stamp};
+use youpdf_core::office::hex_color;
 use youpdf_core::structure::outline::{
     bookmark_all_keys, bookmark_at, bookmark_at_mut, bookmark_insert_index, bookmark_is_ancestor,
     bookmark_key, bookmark_path, bookmark_rows, bookmark_shift_path, bookmark_take,
@@ -5067,7 +5068,7 @@ impl YouPdfApp {
                         filter.color = None;
                     }
                     for color in &colors {
-                        let label = RichText::new(hex_color(*color)).color(Color32::from_rgb(
+                        let label = RichText::new(format!("#{}", hex_color(*color))).color(Color32::from_rgb(
                             color[0], color[1], color[2],
                         ));
                         if ui
@@ -12944,10 +12945,6 @@ fn relative_time(when: &str, now: chrono::DateTime<chrono::Utc>) -> String {
     format!("{} y", months / 12)
 }
 
-/// Couleur d'affichage `#RRGGBB`.
-fn hex_color(color: [u8; 3]) -> String {
-    format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2])
-}
 
 /// Icône du marqueur d'état.
 fn comment_state_icon(state: AnnotationState) -> &'static str {

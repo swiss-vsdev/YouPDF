@@ -358,7 +358,7 @@ fn scale_to_i64(value: f32, scale: f32, floor: i64) -> i64 {
 }
 
 /// Couleur RGB en hexadécimal majuscule, pour `w:color` et `a:srgbClr`.
-fn hex_color(color: [u8; 3]) -> String {
+pub fn hex_color(color: [u8; 3]) -> String {
     format!("{:02X}{:02X}{:02X}", color[0], color[1], color[2])
 }
 
