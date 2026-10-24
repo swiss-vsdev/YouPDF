@@ -75,6 +75,7 @@ use youpdf_core::annotation::comments::{
 };
 use youpdf_core::edit::{crop_fractions_in_image, response_changed};
 use youpdf_core::annotate::author_initial;
+use youpdf_core::structure::attachments::{prune_attachment_staging, safe_attachment_name, stage_attachment, unique_stamp};
 use youpdf_core::structure::outline::{
     bookmark_all_keys, bookmark_at, bookmark_at_mut, bookmark_insert_index, bookmark_is_ancestor,
     bookmark_key, bookmark_path, bookmark_rows, bookmark_shift_path, bookmark_take,
@@ -119,6 +120,9 @@ const TITLE_H: f32 = 40.0;
 const HISTORY_LIMIT: usize = 20;
 /// Budget d'octets des états qui gardent une copie du document.
 const HISTORY_BYTES: usize = 256 * 1024 * 1024;
+
+/// Dâge maximal des dossiers d���des pièces jointes extraites.
+const ATTACHMENT_STAGING_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 const STATUS_H: f32 = 26.0;
 const RAIL_W: f32 = 52.0;
 const PANEL_W: f32 = 210.0;
@@ -12910,108 +12914,6 @@ enum CommentAction {
     Send(String, String),
     /// Exporter la liste.
     Export(CommentFormat),
-}
-
-/// Suffixe unique (horloge + processus) des fichiers extraits.
-fn unique_stamp() -> String {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis())
-        .unwrap_or(0);
-    format!("{millis}-{}", std::process::id())
-}
-
-/// Durée de conservation d'une extraction de pièce jointe temporaire.
-const ATTACHMENT_STAGING_MAX_AGE: std::time::Duration =
-    std::time::Duration::from_secs(24 * 60 * 60);
-
-/// Extrait une pièce jointe dans un dossier temporaire privé et unique.
-///
-/// Les pièces jointes peuvent être confidentielles : le dossier n'appartient
-/// qu'à son propriétaire. `create_dir` et `create_new` refusent un chemin déjà
-/// occupé, donc un lien symbolique planté à l'avance ne détourne ni le dossier
-/// ni l'écriture du fichier.
-fn stage_attachment(bytes: &[u8], file_name: &str) -> std::io::Result<std::path::PathBuf> {
-    let dir = std::env::temp_dir().join(format!("youpdf-attach-{}", unique_stamp()));
-    std::fs::create_dir(&dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    let path = dir.join(file_name);
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)?;
-    std::io::Write::write_all(&mut file, bytes)?;
-    Ok(path)
-}
-
-/// Supprime les extractions de pièces jointes plus vieilles que `max_age`.
-///
-/// Seuls les dossiers `youpdf-attach-*` créés par [`stage_attachment`] sont
-/// visés : les autres fichiers temporaires de l'application restent en place.
-fn prune_attachment_staging(max_age: std::time::Duration) -> usize {
-    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
-        return 0;
-    };
-    let mut removed = 0;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if !name.starts_with("youpdf-attach-") {
-            continue;
-        }
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        let Ok(modified) = metadata.modified() else {
-            continue;
-        };
-        let Ok(age) = std::time::SystemTime::now().duration_since(modified) else {
-            continue;
-        };
-        if age < max_age {
-            continue;
-        }
-        let path = entry.path();
-        let outcome = if metadata.is_dir() {
-            std::fs::remove_dir_all(&path)
-        } else {
-            std::fs::remove_file(&path)
-        };
-        if outcome.is_ok() {
-            removed += 1;
-        }
-    }
-    removed
-}
-
-/// Nom de fichier sûr pour l'extraction d'une pièce jointe.
-///
-/// Un nom hostile (`../../etc/passwd`, `/absolu`) ne doit pas sortir du
-/// dossier temporaire : tout caractère hors `[A-Za-z0-9._-]` devient `_`, et
-/// un nom vide ou fait de points retombe sur un nom par défaut.
-fn safe_attachment_name(name: &str, index: usize) -> String {
-    let safe: String = name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let safe = safe.trim_start_matches('.');
-    if safe.is_empty() {
-        format!("attachment-{index}")
-    } else {
-        safe.to_owned()
-    }
 }
 
 /// Distance au présent, en clair (« 5 min », « 3 h », « 2 d »).
