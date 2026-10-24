@@ -7,7 +7,7 @@
 //!
 //! Rendu net sur écrans HiDPI : les bitmaps PDFium sont rastérisés à
 //! `échelle_logique × pixels_per_point`, puis dessinés à la taille logique.
-use youpdf_shared::{BODY, CAPTION, LABEL, Language, TITLE, Theme, caption, i18n, modal_frame, muted, pal, section, set_palette, t, RADIUS_L, RADIUS_S, RADIUS_M, RADIUS_XS, SPACE_L, SPACE_M, SPACE_S, SPACE_XS};
+use youpdf_shared::{BODY, CAPTION, LABEL, Language, TITLE, Theme, caption, i18n, modal_frame, muted, pal, section, set_palette, t, RADIUS_L, RADIUS_S, RADIUS_M, RADIUS_XS, SPACE_L, SPACE_M, SPACE_S, SPACE_XS, RADIUS_TINY};
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -10007,7 +10007,7 @@ impl YouPdfApp {
                         if show_shadow {
                             ui.painter().rect_filled(
                                 page_rect.translate(vec2(0.0, 2.0)).expand(1.0),
-                                Rounding::same(3.0),
+                                Rounding::same(RADIUS_TINY),
                                 Color32::from_black_alpha(70),
                             );
                         }
@@ -14575,7 +14575,7 @@ fn draw_annots(
                 }
             }
             AnnotationKind::Note => {
-                painter.rect_filled(r, Rounding::same(3.0), fill);
+                painter.rect_filled(r, Rounding::same(RADIUS_TINY), fill);
                 painter.rect_stroke(
                     r,
                     3.0,

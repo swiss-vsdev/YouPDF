@@ -5,7 +5,7 @@
 //! fenêtres d'extraction, d'insertion, de remplacement et de découpe.
 
 use super::*;
-use youpdf_shared::{BODY, LABEL, TITLE, caption, t, SPACE_XS, SPACE_L};
+use youpdf_shared::{BODY, LABEL, TITLE, caption, t, SPACE_TINY, SPACE_XS, SPACE_L, RADIUS_TINY};
 
 /// Fenêtre ouverte par-dessus la grille.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -134,7 +134,7 @@ impl YouPdfApp {
                             let picked = selected.contains(&(page as usize));
                             ui.painter().rect_filled(
                                 img_rect.expand(3.0),
-                                Rounding::same(3.0),
+                                Rounding::same(RADIUS_TINY),
                                 if picked {
                                     pal().thumb_tint
                                 } else {
@@ -199,7 +199,7 @@ impl YouPdfApp {
                                     Rect::from_min_size(img_rect.max - vec2(44.0, 20.0), vec2(40.0, 18.0));
                                 ui.painter().rect_filled(
                                     quick,
-                                    Rounding::same(3.0),
+                                    Rounding::same(RADIUS_TINY),
                                     Color32::from_black_alpha(170),
                                 );
                                 let left = Rect::from_min_size(quick.min, vec2(20.0, 18.0));
