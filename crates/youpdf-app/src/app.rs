@@ -53,7 +53,8 @@ use youpdf_core::{
     EncryptionOptions, EncryptionStrength, ExtractedTable, FieldProperties, FormDataFormat,
     FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, LinkAction, MeasureKind,
     Measurement, NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem,
-    OutlineStyle, ImageCrop, OutlineTarget, PageRange, PageBitmap, PageLink, PatchFont,
+    OutlineStyle, ImageCrop, OutlineTarget, PageRange, PageBitmap, PatchFont,
+    PageLink,
     PdfiumRenderer, RedactionFill,
     RedactionMark, RedactionOverlay, RedactionReport, RenderOptions, Renderer, SearchIndex,
     SearchOptions, SearchResult, TextFormat,
@@ -579,11 +580,6 @@ fn mask_color_in(tab: &Tab, page: usize, rect: [f32; 4]) -> [u8; 3] {
     }
     out
 }
-
-/// Extrait et met en cache les blocs de texte d'une page, en repère affiché.
-///
-/// Répond `false` si le moteur n'a rien lu : l'appelant ne doit alors pas
-/// proposer de sélection sur cette page.
 
 /// Palier de vignette : hors de la pyramide de zoom, une vignette ne doit
 /// jamais être servie à la place d'une page rendue.
