@@ -21,6 +21,8 @@ use egui_phosphor::regular as ph;
 
 mod batch_types;
 mod batch_ui;
+mod forms_editor;
+mod forms_fields;
 mod forms_ui;
 mod decor_ui;
 mod marks_ui;
