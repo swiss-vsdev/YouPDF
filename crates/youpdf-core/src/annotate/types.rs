@@ -939,3 +939,29 @@ impl CommentFormat {
     /// Les quatre formats, dans l'ordre du menu.
     pub const ALL: [Self; 4] = [Self::Csv, Self::Markdown, Self::Xfdf, Self::Fdf];
 }
+
+/// Initiale d'auteur, pour l'avatar de la carte.
+///
+/// Première lettre en majuscule, ou `?` si le champ est vide.
+/// Initiale d'auteur, pour l'avatar de la carte.
+pub fn author_initial(author: &str) -> String {
+    author
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_owned())
+}
+
+
+#[cfg(test)]
+mod author_tests {
+    use super::author_initial;
+
+/// L'avatar reprend la première lettre de l'auteur, en capitale.
+#[test]
+fn author_initial_is_uppercased() {
+    assert_eq!(author_initial("alice"), "A");
+    assert_eq!(author_initial("Bob"), "B");
+    assert_eq!(author_initial(""), "?");
+}
+}

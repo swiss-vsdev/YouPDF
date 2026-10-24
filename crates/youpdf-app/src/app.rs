@@ -74,6 +74,7 @@ use youpdf_core::annotation::comments::{
     CommentFilter, CommentSort, CommentStateFilter, comment_rows,
 };
 use youpdf_core::edit::{crop_fractions_in_image, response_changed};
+use youpdf_core::annotate::author_initial;
 use youpdf_core::structure::outline::{
     bookmark_all_keys, bookmark_at, bookmark_at_mut, bookmark_insert_index, bookmark_is_ancestor,
     bookmark_key, bookmark_path, bookmark_rows, bookmark_shift_path, bookmark_take,
@@ -13069,15 +13070,6 @@ fn relative_time(when: &str, now: chrono::DateTime<chrono::Utc>) -> String {
     format!("{} y", months / 12)
 }
 
-/// Initiale d'auteur, pour l'avatar de la carte.
-fn author_initial(author: &str) -> String {
-    author
-        .chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_else(|| "?".to_owned())
-}
-
 /// Couleur d'affichage `#RRGGBB`.
 fn hex_color(color: [u8; 3]) -> String {
     format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2])
@@ -13726,13 +13718,6 @@ mod tests {
         assert_eq!(relative_time("hier", now), "");
     }
 
-    /// L'avatar reprend la première lettre de l'auteur, en capitale.
-    #[test]
-    fn author_initial_is_uppercased() {
-        assert_eq!(author_initial("alice"), "A");
-        assert_eq!(author_initial("Bob"), "B");
-        assert_eq!(author_initial(""), "?");
-    }
 
 
 
