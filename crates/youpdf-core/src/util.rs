@@ -108,3 +108,60 @@ mod tests {
         assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Libellés lisibles : formats de page usuels et tailles en octets.
+// ---------------------------------------------------------------------------
+
+/// Libellé lisible d'un format de page : nom usuel si connu, sinon la taille.
+pub fn page_size_label(width: f32, height: f32) -> String {
+    let near = |a: f32, b: f32| (a - b).abs() < 3.0;
+    if near(width, 595.0) && near(height, 842.0) {
+        "A4 portrait".to_owned()
+    } else if near(width, 842.0) && near(height, 595.0) {
+        "A4 landscape".to_owned()
+    } else if near(width, 612.0) && near(height, 792.0) {
+        "Letter portrait".to_owned()
+    } else if near(width, 792.0) && near(height, 612.0) {
+        "Letter landscape".to_owned()
+    } else {
+        format!("{width:.0} × {height:.0} pt")
+    }
+}
+
+
+
+
+/// Taille lisible : octets sous 1 Ko, puis Ko et Mo.
+pub fn format_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+
+#[cfg(test)]
+mod label_tests {
+    use super::{format_size, page_size_label};
+
+
+/// Les formats usuels portent un nom ; les autres la taille brute.
+#[test]
+fn page_size_label_names_common_formats() {
+    assert_eq!(page_size_label(595.0, 842.0), "A4 portrait");
+    assert_eq!(page_size_label(842.0, 595.0), "A4 landscape");
+    assert_eq!(page_size_label(612.0, 792.0), "Letter portrait");
+    assert_eq!(page_size_label(1000.0, 500.0), "1000 × 500 pt");
+}
+
+    #[test]
+    fn format_size_scales_units() {
+        assert_eq!(format_size(512), "512 B");
+        assert_eq!(format_size(2048), "2.0 KB");
+        assert_eq!(format_size(5 * 1024 * 1024), "5.0 MB");
+    }
+}

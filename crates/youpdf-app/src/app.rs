@@ -68,6 +68,7 @@ use youpdf_core::{LANGUAGES, combine_languages, language_name};
 use youpdf_core::annotate::{BorderDash, STAMP_TEMPLATES};
 use youpdf_core::annotation::transform::{annots_to_display, annots_to_page, link_at};
 use youpdf_core::search::{find_query, match_rects, replace_occurrences};
+use youpdf_core::util::{format_size, page_size_label};
 use youpdf_core::structure::outline::{
     bookmark_all_keys, bookmark_at, bookmark_at_mut, bookmark_insert_index, bookmark_is_ancestor,
     bookmark_key, bookmark_path, bookmark_rows, bookmark_shift_path, bookmark_take,
@@ -12793,25 +12794,6 @@ fn status_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
     resp.clicked()
 }
 
-/// Libellé lisible d'un format de page : nom usuel si connu, sinon la taille.
-fn page_size_label(width: f32, height: f32) -> String {
-    let near = |a: f32, b: f32| (a - b).abs() < 3.0;
-    if near(width, 595.0) && near(height, 842.0) {
-        "A4 portrait".to_owned()
-    } else if near(width, 842.0) && near(height, 595.0) {
-        "A4 landscape".to_owned()
-    } else if near(width, 612.0) && near(height, 792.0) {
-        "Letter portrait".to_owned()
-    } else if near(width, 792.0) && near(height, 612.0) {
-        "Letter landscape".to_owned()
-    } else {
-        format!("{width:.0} × {height:.0} pt")
-    }
-}
-
-
-
-
 /// Formats proposés à l'insertion d'une page blanche. `(0, 0)` reprend la
 /// taille de la page voisine.
 const BLANK_SIZES: [(&str, f32, f32); 7] = [
@@ -12921,17 +12903,6 @@ fn zoom_choice_matches(mode: ZoomMode, zoom: Option<f32>, fit_page: bool) -> boo
         ZoomMode::FitWidth => zoom.is_none() && !fit_page,
         ZoomMode::FitPage => zoom.is_none() && fit_page,
         ZoomMode::Fixed(scale) => zoom.is_some_and(|z| (z - scale).abs() < 0.001),
-    }
-}
-
-/// Taille lisible : octets sous 1 Ko, puis Ko et Mo.
-fn format_size(bytes: usize) -> String {
-    if bytes < 1024 {
-        format!("{bytes} B")
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
 
@@ -13863,15 +13834,6 @@ mod tests {
         assert_eq!(moved_active(0, 1, 0), 1);
         // Déplacement sans effet sur les index voisins.
         assert_eq!(moved_active(0, 1, 2), 0);
-    }
-
-    /// Les formats usuels portent un nom ; les autres la taille brute.
-    #[test]
-    fn page_size_label_names_common_formats() {
-        assert_eq!(page_size_label(595.0, 842.0), "A4 portrait");
-        assert_eq!(page_size_label(842.0, 595.0), "A4 landscape");
-        assert_eq!(page_size_label(612.0, 792.0), "Letter portrait");
-        assert_eq!(page_size_label(1000.0, 500.0), "1000 × 500 pt");
     }
 
     /// La recherche de texte respecte la casse et retrouve une sous-chaîne.
