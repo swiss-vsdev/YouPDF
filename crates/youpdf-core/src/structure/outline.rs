@@ -442,3 +442,268 @@ impl Document {
         }
     }
 }
+// ---------------------------------------------------------------------------
+// Aides pures du panneau Signets : chemins `(i, j, …)` dans l'arbre en
+// mémoire. Ces fonctions ne touchent pas au PDF ; l'interface édite l'arbre
+// avec elles, puis l'écrit via `Document::set_outline`.
+// ---------------------------------------------------------------------------
+
+use std::collections::BTreeSet;
+
+/// Clé de chemin d'un signet : indices de frères, séparés par `/`.
+pub fn bookmark_key(path: &[usize]) -> String {
+    path.iter()
+        .map(|index| index.to_string())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Chemin d'indices décrit par une clé de chemin.
+pub fn bookmark_path(key: &str) -> Vec<usize> {
+    key.split('/')
+        .filter_map(|part| part.parse::<usize>().ok())
+        .collect()
+}
+
+/// Position d'insertion d'un signet déplacé, dans la liste d'accueil.
+///
+/// `index` compte dans la liste d'*avant* retrait, `dest_len` en est la
+/// longueur avant retrait. Retirer un frère situé avant la cible décale
+/// celle-ci de un : sans cet ajustement, un déplacement vers le bas atterrit
+/// un cran trop loin.
+pub fn bookmark_insert_index(
+    index: Option<usize>,
+    dest_len: usize,
+    same_list: bool,
+    from_index: usize,
+) -> usize {
+    let mut at = index.unwrap_or(dest_len);
+    if same_list && from_index < at {
+        at -= 1;
+    }
+    at
+}
+
+/// Décale un chemin quand un frère qui le précède vient d'être retiré.
+///
+/// Seul le niveau du nœud retiré compte, et seulement pour ses propres frères :
+/// la cible doit partager la liste parente du nœud retiré, sinon rien ne bouge.
+/// Un `removed` préfixe de `path` (nœud visé dans le sous-arbre retiré) est
+/// écarté par l'appelant avant d'arriver ici.
+pub fn bookmark_shift_path(path: &[usize], removed: &[usize]) -> Vec<usize> {
+    let mut out = path.to_vec();
+    let depth = removed.len();
+    // Trop court pour être un frère : c'est un ancêtre, jamais décalé.
+    if depth == 0 || path.len() < depth {
+        return out;
+    }
+    // Une autre liste parente : le retrait ne la concerne pas.
+    if path[..depth - 1] != removed[..depth - 1] {
+        return out;
+    }
+    if path[depth - 1] > removed[depth - 1] {
+        out[depth - 1] -= 1;
+    }
+    out
+}
+
+/// Entrée visée par un chemin de frères.
+pub fn bookmark_at<'a>(tree: &'a [OutlineEntry], path: &[usize]) -> Option<&'a OutlineEntry> {
+    let (index, rest) = path.split_first()?;
+    let entry = tree.get(*index)?;
+    if rest.is_empty() {
+        Some(entry)
+    } else {
+        bookmark_at(&entry.children, rest)
+    }
+}
+
+/// Entrée visée par un chemin de frères, en écriture.
+pub fn bookmark_at_mut<'a>(
+    tree: &'a mut [OutlineEntry],
+    path: &[usize],
+) -> Option<&'a mut OutlineEntry> {
+    let (index, rest) = path.split_first()?;
+    let entry = tree.get_mut(*index)?;
+    if rest.is_empty() {
+        Some(entry)
+    } else {
+        bookmark_at_mut(&mut entry.children, rest)
+    }
+}
+
+/// Retire l'entrée visée de l'arbre et la renvoie.
+pub fn bookmark_take(tree: &mut Vec<OutlineEntry>, path: &[usize]) -> Option<OutlineEntry> {
+    let (index, rest) = path.split_first()?;
+    if rest.is_empty() {
+        if *index < tree.len() {
+            return Some(tree.remove(*index));
+        }
+        return None;
+    }
+    let entry = tree.get_mut(*index)?;
+    bookmark_take(&mut entry.children, rest)
+}
+
+/// Vrai si `path` est `other` ou l'un de ses ancêtres.
+pub fn bookmark_is_ancestor(path: &[usize], other: &[usize]) -> bool {
+    other.len() >= path.len() && other[..path.len()] == *path
+}
+
+/// Une ligne du panneau Signets : `(clé, titre, page, profondeur, a des
+/// enfants, replié)`.
+pub type BookmarkRow = (String, String, Option<usize>, usize, bool, bool);
+
+/// Lignes visibles d'un arbre de signets.
+pub fn bookmark_rows(tree: &[OutlineEntry], collapsed: &BTreeSet<String>) -> Vec<BookmarkRow> {
+    fn walk(
+        entries: &[OutlineEntry],
+        prefix: &mut Vec<usize>,
+        collapsed: &BTreeSet<String>,
+        rows: &mut Vec<BookmarkRow>,
+    ) {
+        for (index, entry) in entries.iter().enumerate() {
+            prefix.push(index);
+            let key = bookmark_key(prefix);
+            let folded = collapsed.contains(&key);
+            rows.push((
+                key,
+                entry.title.clone(),
+                entry.page,
+                prefix.len() - 1,
+                !entry.children.is_empty(),
+                folded,
+            ));
+            if !folded {
+                walk(&entry.children, prefix, collapsed, rows);
+            }
+            prefix.pop();
+        }
+    }
+    let mut rows = Vec::new();
+    walk(tree, &mut Vec::new(), collapsed, &mut rows);
+    rows
+}
+
+/// Toutes les clés de chemin d'un arbre (pour « Collapse all »).
+pub fn bookmark_all_keys(tree: &[OutlineEntry]) -> Vec<String> {
+    fn walk(entries: &[OutlineEntry], prefix: &mut Vec<usize>, out: &mut Vec<String>) {
+        for (index, entry) in entries.iter().enumerate() {
+            prefix.push(index);
+            out.push(bookmark_key(prefix));
+            walk(&entry.children, prefix, out);
+            prefix.pop();
+        }
+    }
+    let mut out = Vec::new();
+    walk(tree, &mut Vec::new(), &mut out);
+    out
+}
+
+
+#[cfg(test)]
+mod panel_tests {
+    use super::{
+        bookmark_all_keys, bookmark_insert_index, bookmark_is_ancestor,
+        bookmark_key, bookmark_path, bookmark_rows, bookmark_shift_path, bookmark_take,
+        OutlineEntry, OutlineTarget,
+    };
+    use std::collections::BTreeSet;
+
+/// Les lignes du panneau Signets suivent les replis et la profondeur.
+    #[test]
+    fn bookmark_rows_respect_folding() {
+        let tree = vec![OutlineEntry {
+            title: "Chapitre 1".to_owned(),
+            page: Some(1),
+            target: OutlineTarget::None,
+            children: vec![OutlineEntry {
+                title: "Section 1.1".to_owned(),
+                page: Some(2),
+                target: OutlineTarget::None,
+                children: Vec::new(),
+            }],
+        }];
+
+        let rows = bookmark_rows(&tree, &BTreeSet::new());
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.0.as_str(), row.1.as_str(), row.3, row.4))
+                .collect::<Vec<_>>(),
+            vec![("0", "Chapitre 1", 0, true), ("0/0", "Section 1.1", 1, false)]
+        );
+
+        let folded: BTreeSet<String> = ["0".to_owned()].into_iter().collect();
+        let rows = bookmark_rows(&tree, &folded);
+        assert_eq!(rows.len(), 1, "un parent replié cache ses enfants");
+        assert!(rows[0].5, "la ligne se sait repliée");
+    }
+
+    /// Déplacer un signet vers le bas ne doit pas atterrir un cran trop loin :
+    /// la cible est comptée dans la liste d'avant retrait.
+    #[test]
+    fn bookmark_insert_index_compensates_the_removal() {
+        // [A,B,C], déposer A (0) après B (index cible 2) -> insertion à 1.
+        assert_eq!(bookmark_insert_index(Some(2), 3, true, 0), 1);
+        // Déposer C (2) après A (index cible 1) : rien ne se décale -> 1.
+        assert_eq!(bookmark_insert_index(Some(1), 3, true, 2), 1);
+        // Parents différents : aucun ajustement.
+        assert_eq!(bookmark_insert_index(Some(2), 3, false, 0), 2);
+        // Sans index : en fin de liste, ajusté du retrait dans la même liste.
+        assert_eq!(bookmark_insert_index(None, 3, true, 0), 2);
+        assert_eq!(bookmark_insert_index(None, 3, false, 0), 3);
+    }
+
+    /// Le chemin du parent visé se décale quand le signet retiré le précède.
+    #[test]
+    fn bookmark_shift_path_follows_the_removal() {
+        // Retirer le frère 0 décale tout ce qui le suit d'un cran.
+        assert_eq!(bookmark_shift_path(&[1, 2], &[0]), vec![0, 2]);
+        // Retirer un frère d'un sous-niveau décale ses suivants au même niveau.
+        assert_eq!(bookmark_shift_path(&[0, 3], &[0, 2]), vec![0, 2]);
+        // Même racine, sous-arbre différent : rien ne bouge.
+        assert_eq!(bookmark_shift_path(&[1, 0], &[0, 2]), vec![1, 0]);
+        // Un ancêtre du nœud visé n'est pas décalé.
+        assert_eq!(bookmark_shift_path(&[0], &[0, 2]), vec![0]);
+    }
+
+    /// Déplacer un signet le retire de son ancien parent et le pose au bon
+    /// endroit ; on ne peut pas le déposer dans sa propre descendance.
+    #[test]
+    fn bookmark_move_reparents_and_reorders() {
+        let mut tree = vec![
+            OutlineEntry {
+                title: "A".to_owned(),
+                page: None,
+                target: OutlineTarget::None,
+                children: vec![OutlineEntry {
+                    title: "A.1".to_owned(),
+                    page: None,
+                    target: OutlineTarget::None,
+                    children: Vec::new(),
+                }],
+            },
+            OutlineEntry {
+                title: "B".to_owned(),
+                page: None,
+                target: OutlineTarget::None,
+                children: Vec::new(),
+            },
+        ];
+
+        let entry = bookmark_take(&mut tree, &bookmark_path("0/0")).expect("prise");
+        assert_eq!(entry.title, "A.1");
+        tree.push(entry);
+        assert_eq!(
+            tree.iter().map(|e| e.title.as_str()).collect::<Vec<_>>(),
+            vec!["A", "B", "A.1"]
+        );
+
+        assert!(bookmark_is_ancestor(&bookmark_path("0"), &bookmark_path("0/0")));
+        assert!(!bookmark_is_ancestor(&bookmark_path("0"), &bookmark_path("1")));
+        assert_eq!(bookmark_key(&[1, 2]), "1/2");
+        assert_eq!(bookmark_path("1/2"), vec![1, 2]);
+
+        assert_eq!(bookmark_all_keys(&tree).len(), 3);
+    }
+}
