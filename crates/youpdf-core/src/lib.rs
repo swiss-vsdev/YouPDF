@@ -75,6 +75,7 @@ pub use ocr::{
     language_name, validate_language,
 };
 pub use office::OfficeFormat;
+pub use office::hex_color;
 pub use pdfa::Conformance;
 pub use protect::{EncryptionOptions, EncryptionStrength, Permissions};
 pub use redact::{
