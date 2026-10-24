@@ -34,7 +34,7 @@ mod icons;
 pub use icons::*;
 
 use crate::ai::AiPanel;
-use crate::home::{self, HomeCategory, HomeView, ViewMode};
+use crate::home::{self, HomeCategory, HomeView, ViewMode, load_recents, save_recents, shorten};
 use crate::app::batch_ui::{BatchEntry, BatchEvent};
 use crate::inspector::{
     arrow_x, image_controls, markup_row, paint_arrow, place_inspector, text_style_row, AnnotationId,
@@ -12842,55 +12842,6 @@ fn panel_action(
     let color = if selected || resp.hovered() { pal().icon_bright } else { pal().icon };
     draw(ui.painter(), rect.shrink(8.0), color);
     resp
-}
-
-/// Tronque avec ellipse si nécessaire.
-/// Fichier des fichiers récents (`~/.youpdf/recents.txt`, un chemin par ligne).
-fn recents_file() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    Some(PathBuf::from(home).join(".youpdf").join("recents.txt"))
-}
-
-/// Lit la liste des fichiers récents ; liste vide si le fichier manque.
-fn load_recents() -> Vec<PathBuf> {
-    let Some(path) = recents_file() else {
-        return Vec::new();
-    };
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| PathBuf::from(line.trim()))
-        .take(8)
-        .collect()
-}
-
-/// Écrit la liste des fichiers récents. Une erreur d'écriture est ignorée :
-/// la liste est un confort, pas une donnée du document.
-fn save_recents(recents: &[PathBuf]) {
-    let Some(path) = recents_file() else {
-        return;
-    };
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let mut text = String::new();
-    for entry in recents {
-        text.push_str(&entry.to_string_lossy());
-        text.push('\n');
-    }
-    let _ = std::fs::write(path, text);
-}
-
-fn shorten(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        text.to_owned()
-    } else {
-        let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
-    }
 }
 
 // --------------------------------------------------------------------------
