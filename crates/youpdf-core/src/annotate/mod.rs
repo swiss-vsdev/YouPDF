@@ -30,6 +30,8 @@
 //! remplacer sans toucher aux annotations créées par d'autres outils.
 
 
+pub mod comment;
+pub(crate) mod appearance;
 mod render;
 mod types;
 
@@ -37,6 +39,7 @@ pub use render::{
     dynamic_stamp_text, quad_from_rect, smooth_polyline, stamp_id_for_pdf_name, stamp_name,
     stamp_template,
 };
+pub use comment::{CommentFormat, author_initial};
 pub use types::*;
 
 
