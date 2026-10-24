@@ -537,48 +537,14 @@ use youpdf_core::text::geometry::{
 /// bitmap de la page disponible, on répond blanc.
 fn mask_color_in(tab: &Tab, page: usize, rect: [f32; 4]) -> [u8; 3] {
     const WHITE: [u8; 3] = [255, 255, 255];
-    let Some((bitmap_page, scale, bitmap)) = tab.last_bitmap.as_ref() else {
-        return WHITE;
-    };
-    if *bitmap_page != page as u32 || *scale <= 0.0 || bitmap.width == 0 || bitmap.height == 0 {
-        return WHITE;
-    }
-
-    // Hauteur de la page en points du repère affiché.
-    let page_h = bitmap.height as f32 / *scale;
-    let [x1, y1, x2, y2] = rect;
-    let mut samples: Vec<[u8; 3]> = Vec::with_capacity(6);
-
-    // Deux rangées : juste au-dessus du bloc, juste en dessous.
-    for y in [y2 + 2.0_f32, y1 - 2.0] {
-        for t in [0.2_f32, 0.5, 0.8] {
-            let x = x1 + (x2 - x1) * t;
-            let px = (x * scale) as i64;
-            let py = ((page_h - y) * scale) as i64;
-            if px < 0 || py < 0 || px >= bitmap.width as i64 || py >= bitmap.height as i64 {
-                continue;
-            }
-            let idx = (py as usize * bitmap.width as usize + px as usize) * 4;
-            if idx + 2 < bitmap.pixels.len() {
-                samples.push([
-                    bitmap.pixels[idx],
-                    bitmap.pixels[idx + 1],
-                    bitmap.pixels[idx + 2],
-                ]);
-            }
+    match tab.last_bitmap.as_ref() {
+        Some((bitmap_page, scale, bitmap)) if *bitmap_page == page as u32 => {
+            bitmap
+                .background_color_around(*scale, rect)
+                .unwrap_or(WHITE)
         }
+        _ => WHITE,
     }
-    if samples.is_empty() {
-        return WHITE;
-    }
-
-    let mut out = WHITE;
-    for (channel, slot) in out.iter_mut().enumerate() {
-        let mut values: Vec<u8> = samples.iter().map(|s| s[channel]).collect();
-        values.sort_unstable();
-        *slot = values[values.len() / 2];
-    }
-    out
 }
 
 /// Palier de vignette : hors de la pyramide de zoom, une vignette ne doit
