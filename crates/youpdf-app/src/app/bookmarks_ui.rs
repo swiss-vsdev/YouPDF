@@ -383,3 +383,49 @@ impl YouPdfApp {
         }
 
 }
+
+// Suite du panel bookmarks_ui (extraite de `app.rs`).
+
+use super::*;
+
+impl YouPdfApp {
+
+        /// Reconstruit les signets à partir des titres du document.
+        pub(super) fn generate_bookmarks(&mut self, ctx: &egui::Context) {
+            let style = OutlineStyle::default();
+            let result = self.tabs.get_mut(self.active).map(|tab| {
+                let generated = tab.doc.generate_outline(&style);
+                if generated.is_ok() {
+                    tab.outline = tab.doc.outline();
+                }
+                generated
+            });
+            match result {
+                Some(Ok(0)) => self.toast(ctx, "No headings found"),
+                Some(Ok(count)) => {
+                    self.mark_document_changed();
+                    self.bookmark_collapsed.clear();
+                    self.toast(ctx, format!("{count} bookmark(s) created"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Bookmarks failed: {err}")),
+                None => {}
+            }
+        }
+
+        /// Retire tous les signets du document.
+        pub(super) fn clear_bookmarks(&mut self, ctx: &egui::Context) {
+            let result = self
+                .tabs
+                .get_mut(self.active)
+                .map(|tab| tab.doc.clear_outline());
+            match result {
+                Some(Ok(count)) => {
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("{count} bookmark(s) removed"));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Remove failed: {err}")),
+                None => {}
+            }
+        }
+
+}

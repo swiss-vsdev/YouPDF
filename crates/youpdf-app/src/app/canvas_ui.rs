@@ -2036,3 +2036,108 @@ impl YouPdfApp {
         }
 
 }
+
+// Suite du panel canvas_ui (extraite de `app.rs`).
+
+use super::*;
+
+impl YouPdfApp {
+
+        /// Exécute l'action d'un lien et prévient l'utilisateur du résultat.
+        ///
+        /// Une adresse part dans le navigateur du système, un saut interne change
+        /// de page, une action inconnue est dite telle : mieux vaut l'annoncer que
+        /// laisser croire que le clic n'a rien fait.
+        pub(super) fn follow_link(&mut self, action: &LinkAction, ctx: &egui::Context) {
+            match action {
+                LinkAction::Uri(url) => match self.open_url(url) {
+                    Ok(()) => self.toast(ctx, format!("Opened {url}")),
+                    Err(err) => self.toast(ctx, format!("Could not open link: {err}")),
+                },
+                LinkAction::GoTo { page } => {
+                    let total = self.tabs.get(self.active).map(|tab| tab.total()).unwrap_or(0);
+                    if total == 0 {
+                        return;
+                    }
+                    let target = (*page).clamp(1, total);
+                    self.jump = Some(target);
+                    if let Some(tab) = self.tabs.get_mut(self.active) {
+                        tab.page = target;
+                    }
+                    self.toast(ctx, format!("Page {target}"));
+                }
+                LinkAction::Unsupported(name) => {
+                    self.toast(ctx, format!("Unsupported link action: {name}"));
+                }
+            }
+        }
+
+        /// Suis le lien sous un point, s'il y en a un.
+        ///
+        /// Renvoie `true` quand un lien a été suivi : l'appelant laisse alors le
+        /// clic tranquille, sans sélection ni ouverture d'inspecteur.
+        pub(super) fn follow_link_at(&mut self, page: usize, point: [f32; 2], ctx: &egui::Context) -> bool {
+            let Some(tab) = self.tabs.get(self.active) else {
+                return false;
+            };
+            let links = tab.doc.page_links(page);
+            let Some(link) = link_at(&links, point) else {
+                return false;
+            };
+            let action = link.action.clone();
+            self.follow_link(&action, ctx);
+            true
+        }
+
+        pub(super) fn set_zoom(&mut self, zoom: Option<f32>) {
+            if let Some(tab) = self.tabs.get_mut(self.active) {
+                tab.zoom = zoom.map(|z| z.clamp(0.1, 8.0));
+                if zoom.is_none() {
+                    tab.zoom_fit_page = false;
+                }
+            }
+            self.zoom_dirty = true;
+        }
+
+        /// Applique un réglage de zoom nommé.
+        pub(super) fn set_zoom_mode(&mut self, mode: ZoomMode) {
+            if let Some(tab) = self.tabs.get_mut(self.active) {
+                match mode {
+                    ZoomMode::FitWidth => {
+                        tab.zoom = None;
+                        tab.zoom_fit_page = false;
+                    }
+                    ZoomMode::FitPage => {
+                        tab.zoom = None;
+                        tab.zoom_fit_page = true;
+                    }
+                    ZoomMode::Fixed(scale) => {
+                        tab.zoom = Some(scale.clamp(0.1, 8.0));
+                        tab.zoom_fit_page = false;
+                    }
+                }
+            }
+            self.zoom_dirty = true;
+        }
+
+        pub(super) fn zoom_by(&mut self, factor: f32) {
+            let base = self
+                .active_tab()
+                .and_then(|t| t.zoom)
+                .unwrap_or(self.last_fit.max(0.05));
+            self.set_zoom(Some(base * factor));
+        }
+
+        /// Change la disposition des pages et ramène la page courante sous les
+        /// yeux : dans une autre grille, la position de défilement n'a plus de
+        /// sens.
+        pub(super) fn set_page_layout(&mut self, ctx: &egui::Context, layout: PageLayout) {
+            if self.page_layout == layout {
+                return;
+            }
+            self.page_layout = layout;
+            self.jump = Some(self.tabs.get(self.active).map_or(1, |tab| tab.page));
+            self.toast(ctx, format!("Layout: {}", layout.label()));
+        }
+
+}
