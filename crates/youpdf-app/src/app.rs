@@ -9276,7 +9276,7 @@ impl YouPdfApp {
                     body.push('\n');
                 }
                 for row in &table.rows {
-                    let line: Vec<String> = row.iter().map(|cell| csv_cell(cell)).collect();
+                    let line: Vec<String> = row.iter().map(|cell| youpdf_core::util::csv_escape(cell)).collect();
                     body.push_str(&line.join(","));
                     body.push('\n');
                 }
@@ -9286,7 +9286,7 @@ impl YouPdfApp {
         if export_pairs {
             let mut body = String::from("key,value\n");
             for pair in &self.extract_pairs {
-                body.push_str(&format!("{},{}", csv_cell(&pair.key), csv_cell(&pair.value)));
+                body.push_str(&format!("{},{}", youpdf_core::util::csv_escape(&pair.key), youpdf_core::util::csv_escape(&pair.value)));
                 body.push('\n');
             }
             self.save_extract(ctx, "pairs.csv", &body);
@@ -12731,16 +12731,6 @@ fn menu_row(ui: &mut egui::Ui, label: &str, shortcut: &str, icon: Option<fn(&egu
         pal().muted,
     );
     resp.clicked()
-}
-
-/// Échappe une cellule CSV selon RFC 4180 : guillemets si la valeur contient
-/// une virgule, un guillemet ou un saut de ligne, guillemets internes doublés.
-fn csv_cell(value: &str) -> String {
-    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
-        format!("\"{}\"", value.replace('"', "\"\""))
-    } else {
-        value.to_owned()
-    }
 }
 
 /// Bouton-icône 38×38 avec fond sélection/hover.
