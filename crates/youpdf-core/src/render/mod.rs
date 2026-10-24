@@ -9,8 +9,6 @@
 //! présente à côté du binaire ou dans le `PATH`. Voir le README pour
 //! l'installation.
 
-#[cfg(test)]
-use std::cell::Cell;
 
 use pdfium_render::prelude::*;
 
