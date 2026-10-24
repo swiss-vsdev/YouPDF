@@ -151,7 +151,7 @@ impl YouPdfApp {
                 return;
             };
             if !tab.fragments.contains_key(&page_u32) {
-                extract_page_fragments(&*self.renderer, tab, page_u32);
+                reader::extract_page_fragments(&*self.renderer, tab, page_u32);
             }
             let Some(frags) = tab.fragments.get(&page_u32) else {
                 continue;

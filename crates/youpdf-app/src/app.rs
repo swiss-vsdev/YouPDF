@@ -28,6 +28,7 @@ mod pages_ui;
 mod prefs_ui;
 mod organize_ui;
 mod sign_ui;
+mod reader;
 
 use crate::ai::AiPanel;
 use crate::home::{self, HomeCategory, HomeView, ViewMode};
@@ -579,29 +580,6 @@ fn mask_color_in(tab: &Tab, page: usize, rect: [f32; 4]) -> [u8; 3] {
 ///
 /// Répond `false` si le moteur n'a rien lu : l'appelant ne doit alors pas
 /// proposer de sélection sur cette page.
-fn extract_page_fragments(renderer: &dyn Renderer, tab: &mut Tab, page: u32) -> bool {
-    match renderer.page_fragments(&tab.doc, page) {
-        Ok(mut frags) => {
-            for frag in &mut frags {
-                frag.rect = youpdf_core::geom::rect_to_display(&tab.doc, page as usize, frag.rect);
-                // Les boîtes de glyphes vivent dans le même repère que le
-                // fragment : sans cette conversion, la sélection au caractère
-                // serait décalée sur une page tournée ou recadrée.
-                for item in &mut frag.chars {
-                    item.rect = youpdf_core::geom::rect_to_display(&tab.doc, page as usize, item.rect);
-                }
-            }
-            let usable = !frags.is_empty();
-            tab.fragments.insert(page, frags);
-            usable
-        }
-        Err(err) => {
-            tracing::warn!(%err, page, "extraction du texte de la page");
-            tab.fragments.insert(page, Vec::new());
-            false
-        }
-    }
-}
 
 /// Palier de vignette : hors de la pyramide de zoom, une vignette ne doit
 /// jamais être servie à la place d'une page rendue.
@@ -3771,7 +3749,7 @@ impl YouPdfApp {
             return;
         };
         for page in missing {
-            extract_page_fragments(&*self.renderer, tab, page);
+            reader::extract_page_fragments(&*self.renderer, tab, page);
         }
     }
 
@@ -3795,7 +3773,7 @@ impl YouPdfApp {
             let Some(tab) = self.tabs.get_mut(self.active) else {
                 return;
             };
-            if !extract_page_fragments(&*self.renderer, tab, page) {
+            if !reader::extract_page_fragments(&*self.renderer, tab, page) {
                 return;
             }
         }
@@ -10539,7 +10517,7 @@ impl YouPdfApp {
                     if text_drag {
                         if resp.drag_started() {
                             if !tab.fragments.contains_key(&page) {
-                                extract_page_fragments(renderer, tab, page);
+                                reader::extract_page_fragments(renderer, tab, page);
                             }
                             if let Some(point) = resp.interact_pointer_pos() {
                                 let point = to_pdf(point);
@@ -10611,7 +10589,7 @@ impl YouPdfApp {
                                 match expand {
                                     Some(clicks) => {
                                         if !tab.fragments.contains_key(&page) {
-                                            extract_page_fragments(renderer, tab, page);
+                                            reader::extract_page_fragments(renderer, tab, page);
                                         }
                                         let point = resp.interact_pointer_pos().map(to_pdf);
                                         let span = point
