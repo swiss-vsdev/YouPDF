@@ -392,3 +392,118 @@ fn set_bit(flags: &mut i64, bit: i64, on: bool) {
         *flags &= !bit;
     }
 }
+
+/// Aligne un rectangle posé sur les bords (gauche/centre/droite, puis
+/// haut/centre/bas) des champs voisins de la même page, à `tol` points près.
+///
+/// Renvoie le rectangle ajusté et les lignes de rappel déclenchées
+/// `(verticale, position)`, pour que l'interface puisse les dessiner.
+/// Renvoie le rectangle ajusté et les guides à dessiner : `(vertical, position)`,
+/// en repère page. Un écart inférieur à `tol` (en points) déclenche l'aimant.
+pub fn snap_form_rect(
+    rect: [f32; 4],
+    fields: &[FormField],
+    page: usize,
+    tol: f32,
+) -> ([f32; 4], Vec<(bool, f32)>) {
+    let mut out = rect;
+    let mut guides = Vec::new();
+    let neighbors: Vec<[f32; 4]> = fields
+        .iter()
+        .filter(|field| field.page == Some(page) && field.rect != [0.0; 4])
+        .map(|field| field.rect)
+        .collect();
+    if neighbors.is_empty() || tol <= 0.0 {
+        return (out, guides);
+    }
+    // Candidats verticaux : gauche, centre, droite.
+    let mut best_x: Option<(f32, f32)> = None;
+    for neighbor in &neighbors {
+        let nx = [
+            neighbor[0].min(neighbor[2]),
+            (neighbor[0] + neighbor[2]) / 2.0,
+            neighbor[0].max(neighbor[2]),
+        ];
+        let moving = [(out[0], 0usize), ((out[0] + out[2]) / 2.0, 1), (out[2], 2)];
+        for (value, _) in moving {
+            for target in nx {
+                let delta = target - value;
+                if delta.abs() <= tol && best_x.map_or(true, |(d, _)| delta.abs() < d.abs()) {
+                    best_x = Some((delta, target));
+                }
+            }
+        }
+    }
+    if let Some((delta, target)) = best_x {
+        out[0] += delta;
+        out[2] += delta;
+        guides.push((true, target));
+    }
+    let mut best_y: Option<(f32, f32)> = None;
+    for neighbor in &neighbors {
+        let ny = [
+            neighbor[1].min(neighbor[3]),
+            (neighbor[1] + neighbor[3]) / 2.0,
+            neighbor[1].max(neighbor[3]),
+        ];
+        let moving = [(out[1], 0usize), ((out[1] + out[3]) / 2.0, 1), (out[3], 2)];
+        for (value, _) in moving {
+            for target in ny {
+                let delta = target - value;
+                if delta.abs() <= tol && best_y.map_or(true, |(d, _)| delta.abs() < d.abs()) {
+                    best_y = Some((delta, target));
+                }
+            }
+        }
+    }
+    if let Some((delta, target)) = best_y {
+        out[1] += delta;
+        out[3] += delta;
+        guides.push((false, target));
+    }
+    (out, guides)
+}
+
+
+#[cfg(test)]
+mod snap_tests {
+    use super::{FormField, FormFieldKind, snap_form_rect};
+
+
+/// L'aimant d'un champ prend le bord voisin et signale le guide.
+#[test]
+fn snap_form_rect_aligns_to_neighbor_edge() {
+    let neighbor = FormField {
+        object_id: (1, 0),
+        widget_id: (1, 0),
+        name: "a".to_string(),
+        kind: FormFieldKind::Text,
+        value: None,
+        options: Vec::new(),
+        read_only: false,
+        tooltip: String::new(),
+        required: false,
+        multiline: false,
+        page: Some(1),
+        rect: [100.0, 100.0, 200.0, 140.0],
+        states: Vec::new(),
+        state: None,
+    };
+    // Bord gauche à 2 pt de celui du voisin : il doit coller.
+    let (rect, guides) =
+        snap_form_rect([102.0, 200.0, 130.0, 220.0], std::slice::from_ref(&neighbor), 1, 6.0);
+    assert!((rect[0] - 100.0).abs() < 1e-4, "{rect:?}");
+    assert!((rect[2] - 128.0).abs() < 1e-4, "{rect:?}");
+    assert!(guides.iter().any(|(vertical, at)| *vertical && (*at - 100.0).abs() < 1e-4));
+    // Un voisin posé sur une autre page n'attire pas le champ.
+    let (other, guides) =
+        snap_form_rect([102.0, 200.0, 130.0, 220.0], std::slice::from_ref(&neighbor), 2, 6.0);
+    assert_eq!(other, [102.0, 200.0, 130.0, 220.0]);
+    assert!(guides.is_empty());
+    // Aucun voisin à portée : rien ne bouge.
+    let (far, guides) =
+        snap_form_rect([400.0, 400.0, 450.0, 420.0], &[], 1, 6.0);
+    assert_eq!(far, [400.0, 400.0, 450.0, 420.0]);
+    assert!(guides.is_empty());
+}
+}
