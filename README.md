@@ -6,6 +6,24 @@ Clean-room Rust PDF editor with a UPDF-like workflow.
 - **Privacy First**: 100% local processing. No telemetry, no forced account, optional local AI (Ollama).
 - **Free Forever**: No watermark, no feature locks, MIT licensed.
 
+## App Icon
+
+![YouPDF icon](assets/icon.png)
+
+## Screenshots
+
+### Home screen
+
+![Home](docs/screenshots/home.png)
+
+### Document view
+
+![Document view](docs/screenshots/document-view.png)
+
+### Document editor
+
+![Document editor](docs/screenshots/document-editor.png)
+
 ## Features
 
 - **Viewer**: Tab bar (pin/duplicate/reorder), Home screen (Recents, Starred, Tools), smooth zoom/pan, docked status bar.
