@@ -12877,43 +12877,15 @@ fn panel_hint(ui: &mut egui::Ui, title: &str, detail: &str) {
 ///
 
 /// Libellé anglais d'un type de champ de formulaire.
-fn form_kind_label(kind: &FormFieldKind) -> String {    match kind {
-        FormFieldKind::Text => "Text field".to_owned(),
-        FormFieldKind::Checkbox => "Checkbox".to_owned(),
-        FormFieldKind::Radio => "Radio".to_owned(),
-        FormFieldKind::Choice => "Dropdown".to_owned(),
-        FormFieldKind::MultiChoice => "List".to_owned(),
-        FormFieldKind::Signature => "Signature".to_owned(),
-        FormFieldKind::Button => "Button".to_owned(),
-        FormFieldKind::Date => "Date field".to_owned(),
-        FormFieldKind::Barcode => "Barcode".to_owned(),
-        FormFieldKind::Other(name) => format!("Field ({name})"),
-    }
+fn form_kind_label(kind: &FormFieldKind) -> String {
+    kind.display_name().to_owned()
 }
 
-/// Libellé anglais d'un type d'annotation (le cœur est en français).
+/// Libellé anglais d'un type d'annotation (alias de
+/// [`youpdf_core::annotate::AnnotationKind::display_name`]).
 fn annot_label(kind: AnnotationKind) -> &'static str {
-    match kind {
-        AnnotationKind::Highlight => "Highlight",
-        AnnotationKind::Underline => "Underline",
-        AnnotationKind::StrikeOut => "Strikeout",
-        AnnotationKind::Squiggly => "Squiggly",
-        AnnotationKind::Note => "Note",
-        AnnotationKind::FreeText => "Text",
-        AnnotationKind::Square => "Rectangle",
-        AnnotationKind::Circle => "Circle",
-        AnnotationKind::Line => "Line",
-        AnnotationKind::Arrow => "Arrow",
-        AnnotationKind::Polygon => "Polygon",
-        AnnotationKind::PolyLine => "Polyligne",
-        AnnotationKind::Ink => "Ink",
-        AnnotationKind::Stamp => "Stamp",
-        AnnotationKind::Link => "Link",
-        AnnotationKind::Callout => "Callout",
-        AnnotationKind::FileAttachment => "Attachment",
-    }
+    kind.display_name()
 }
-
 /// Action demandée par la liste des pièces jointes.
 enum AttachmentAction {
     /// Ouvrir dans l'application par défaut du système.
