@@ -5,7 +5,7 @@
 //! fenêtres d'extraction, d'insertion, de remplacement et de découpe.
 
 use super::*;
-use youpdf_shared::{BODY, LABEL, TITLE, caption, t, SPACE_TINY, SPACE_XS, SPACE_L, RADIUS_TINY};
+use youpdf_shared::{BODY, LABEL, TITLE, caption, t, SPACE_XS, SPACE_L, RADIUS_TINY};
 
 /// Fenêtre ouverte par-dessus la grille.
 #[derive(Clone, Copy, PartialEq, Eq)]

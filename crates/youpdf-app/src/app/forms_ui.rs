@@ -950,7 +950,6 @@ mod tests {
 
 // Suite du panel forms_ui (extraite de `app.rs`).
 
-use super::*;
 
 impl YouPdfApp {
 

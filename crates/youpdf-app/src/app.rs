@@ -19,6 +19,7 @@ use egui::{
 };
 use egui_phosphor::regular as ph;
 
+mod batch_types;
 mod batch_ui;
 mod forms_ui;
 mod decor_ui;
@@ -69,7 +70,7 @@ use history::trim_history;
 
 use crate::ai::AiPanel;
 use crate::home::{self, HomeCategory, HomeView, ViewMode, load_recents, save_recents, shorten};
-use crate::app::batch_ui::{BatchEntry, BatchEvent};
+use crate::app::batch_types::{BatchEntry, BatchEvent};
 use crate::inspector::{
     arrow_x, image_controls, markup_row, paint_arrow, place_inspector, text_style_row, AnnotationId,
     ImageAction, ImageId, InspectorTarget, TextBlockId, TextStyleUi, INSPECTOR_HEIGHT,
@@ -88,7 +89,6 @@ use youpdf_core::{
     FormField, FormFieldKind, HeaderFooter, ImageFormat, KeyValue, LinkAction, MeasureKind,
     Measurement, NumberStyle, OcrEngine, OcrMode, OfficeFormat, OutlineEntry, OutlineItem,
     OutlineStyle, ImageCrop, OutlineTarget, PageRange, PageBitmap, PatchFont,
-    PageLink,
     PdfiumRenderer, RedactionFill,
     RedactionMark, RedactionOverlay, RedactionReport, RenderOptions, Renderer, SearchIndex,
     SearchOptions, SearchResult, TextFormat,
@@ -106,7 +106,7 @@ use youpdf_core::annotation::comments::{
 };
 use youpdf_core::edit::{crop_fractions_in_image, response_changed};
 use youpdf_core::annotate::author_initial;
-use youpdf_core::structure::attachments::{prune_attachment_staging, safe_attachment_name, stage_attachment, unique_stamp};
+use youpdf_core::structure::attachments::{prune_attachment_staging, safe_attachment_name, stage_attachment};
 use youpdf_core::office::hex_color;
 use youpdf_core::structure::outline::{
     bookmark_all_keys, bookmark_at, bookmark_at_mut, bookmark_insert_index, bookmark_is_ancestor,
@@ -2309,7 +2309,7 @@ enum CommentAction {
 mod tests {
     use super::*;
     use std::collections::HashSet;
-    use youpdf_core::TextChar;
+    use youpdf_core::{PageLink, TextChar};
 
     fn cachet(rows: &[Vec<u32>]) -> HashSet<u32> {
         rows.iter().flatten().copied().collect()

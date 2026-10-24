@@ -2039,7 +2039,6 @@ impl YouPdfApp {
 
 // Suite du panel canvas_ui (extraite de `app.rs`).
 
-use super::*;
 
 impl YouPdfApp {
 

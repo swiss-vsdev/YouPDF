@@ -487,7 +487,6 @@ impl YouPdfApp {
 
 // Suite du panel home_ui (extraite de `app.rs`).
 
-use super::*;
 
 impl YouPdfApp {
 
