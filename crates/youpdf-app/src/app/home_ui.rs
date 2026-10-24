@@ -484,3 +484,172 @@ impl YouPdfApp {
         }
 
 }
+
+// Suite du panel home_ui (extraite de `app.rs`).
+
+use super::*;
+
+impl YouPdfApp {
+
+        /// Grille de cartes de l'écran d'accueil (onglets Récents / Favoris).
+        #[allow(clippy::too_many_arguments)]
+        pub(super) fn home_grid(
+            &mut self,
+            ui: &mut egui::Ui,
+            margin: f32,
+            ctx: &egui::Context,
+            now: i64,
+            visible: &[PathBuf],
+            open: &mut Option<PathBuf>,
+            open_new: &mut Option<PathBuf>,
+            reveal: &mut Option<PathBuf>,
+            forget: &mut Option<PathBuf>,
+            delete: &mut Option<PathBuf>,
+            star: &mut Option<PathBuf>,
+        ) {
+            let usable = (ui.available_width() - 2.0 * margin).max(CARD_W);
+            let columns = ((usable + GAP) / (CARD_W + GAP)).floor().max(1.0) as usize;
+            let mut index = 0usize;
+            while index < visible.len() {
+                ui.horizontal(|ui| {
+                    ui.add_space(margin);
+                    for path in visible.iter().skip(index).take(columns) {
+                        self.home_card(ui, ctx, now, path, open, open_new, reveal, forget, delete, star);
+                        ui.add_space(GAP);
+                    }
+                });
+                index += columns;
+                ui.add_space(GAP);
+            }
+        }
+
+        /// Grille de raccourcis d'outils de l'onglet « Tools ».
+        pub(super) fn home_tools(&mut self, ui: &mut egui::Ui, margin: f32, tool: &mut Option<&'static str>) {
+            const TOOLS: [(&str, &str); 12] = [
+                ("Search", "search"),
+                ("Thumbnails", "thumbs"),
+                ("Organize", "organize"),
+                ("Watermark", "watermark"),
+                ("Compress", "compress"),
+                ("Protect", "protect"),
+                ("Crop", "crop"),
+                ("OCR", "ocr"),
+                ("Compare", "compare"),
+                ("Measure", "measure"),
+                ("Extract data", "extract"),
+                ("Batch", "batch"),
+            ];
+            let usable = (ui.available_width() - 2.0 * margin).max(CELL_W);
+            let columns = ((usable + GAP) / (CELL_W + GAP)).floor().max(1.0) as usize;
+            let mut index = 0usize;
+            while index < TOOLS.len() {
+                ui.horizontal(|ui| {
+                    ui.add_space(margin);
+                    for (label, id) in TOOLS.iter().skip(index).take(columns) {
+                        let (rect, resp) = ui.allocate_exact_size(vec2(CELL_W, CELL_H), Sense::click());
+                        if resp.hovered() {
+                            ui.painter()
+                                .rect_filled(rect, Rounding::same(RADIUS_L), pal().widget_bg);
+                        }
+                        ui.painter().text(
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            *label,
+                            FontId::proportional(TITLE),
+                            pal().icon_bright,
+                        );
+                        if resp.clicked() {
+                            *tool = Some(id);
+                        }
+                        ui.add_space(GAP);
+                    }
+                });
+                index += columns;
+                ui.add_space(GAP);
+            }
+        }
+
+        /// Applique un raccourci d'outil choisi dans l'onglet « Tools ».
+        pub(super) fn run_home_tool(&mut self, id: &str) {
+            match id {
+                "search" => self.panel = Some(Panel::Search),
+                "thumbs" => self.panel = Some(Panel::Thumbnails),
+                "organize" => self.organize_open = true,
+                "watermark" => self.watermark_open = true,
+                "compress" => self.compress_open = true,
+                "protect" => self.protect_open = true,
+                "crop" => self.crop_open = true,
+                "ocr" => self.ocr_open = true,
+                "compare" => self.compare_open = true,
+                "measure" => self.measure_open = true,
+                "extract" => self.extract_open = true,
+                "batch" => self.batch_open = true,
+                _ => {}
+            }
+        }
+
+        /// Vignette de la première page d'un fichier, mise en cache par `mtime`.
+        ///
+        /// Renvoie `None` pour un fichier illisible, chiffré, ou sans pdfium.
+        ///
+        /// ponytail: l'ouverture et le rendu se font sur le fil de l'interface.
+        /// Acceptable pour une poignée de récents ; déporter sur un fil si la
+        /// liste s'allonge ou si des fichiers lourds font scintiller l'accueil.
+        pub(super) fn home_thumbnail(&mut self, ctx: &egui::Context, path: &std::path::Path) -> Option<TextureHandle> {
+            let meta = std::fs::metadata(path).ok()?;
+            // Un fichier énorme n'entre pas dans une vignette : on l'ignore plutôt
+            // que de le charger en entier au premier affichage.
+            if meta.len() > 64 * 1024 * 1024 {
+                return None;
+            }
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)?;
+            if let Some((cached, texture)) = self.home_thumbs.get(path) {
+                if *cached == mtime {
+                    return Some(texture.clone());
+                }
+            }
+            if !self.renderer.renders_real_content() {
+                return None;
+            }
+            let doc = Document::open(path).ok()?;
+            if doc.page_count() == 0 {
+                return None;
+            }
+            let view = doc.page_view(1);
+            let scale = (160.0 / view.width.max(1.0)).clamp(0.05, 0.5);
+            let options = RenderOptions {
+                scale,
+                ..Default::default()
+            };
+            let bitmap = self.renderer.render_page(&doc, 1, &options).ok()?;
+            let image = bitmap.to_egui_image();
+            // Même fichier, contenu changé : on réécrit la texture existante
+            // plutôt que d'en allouer une seconde puis de jeter la première.
+            let handle = match self.home_thumbs.get(path) {
+                Some((_, texture)) => {
+                    let mut texture = texture.clone();
+                    texture.set(image, TextureOptions::LINEAR);
+                    texture
+                }
+                None => ctx.load_texture(
+                    format!("home-thumb-{}", path.display()),
+                    image,
+                    TextureOptions::LINEAR,
+                ),
+            };
+            // ponytail: borne simple — vider le cache s'il déborde. Un accueil
+            // affiche une poignée de vignettes ; au-delà, les re-rendre coûte
+            // moins qu'un cache qui grossit sans fin.
+            if self.home_thumbs.len() > 128 {
+                self.home_thumbs.clear();
+            }
+            self.home_thumbs
+                .insert(path.to_path_buf(), (mtime, handle.clone()));
+            Some(handle)
+        }
+
+}

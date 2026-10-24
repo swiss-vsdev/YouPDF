@@ -947,3 +947,118 @@ mod tests {
         assert_eq!(hits, vec![1]);
     }
 }
+
+// Suite du panel forms_ui (extraite de `app.rs`).
+
+use super::*;
+
+impl YouPdfApp {
+
+        /// Fenêtre « Organiser les pages » : grille des pages avec rotation,
+        /// suppression, extraction, découpage et insertion. Les opérations
+        /// s'appliquent immédiatement au document en mémoire ; rien n'est écrit
+        /// sur le disque tant que l'utilisateur n'enregistre pas.
+        /// Description du champ à créer pour un outil donné.
+        pub(super) fn new_form_field(
+            kind: FormKind,
+            page: usize,
+            rect: [f32; 4],
+            name: String,
+        ) -> youpdf_core::forms::NewFormField {
+            use youpdf_core::forms::NewFormField;
+            match kind {
+                FormKind::Text => NewFormField::text(page as u32, rect, name),
+                FormKind::Checkbox => NewFormField::checkbox(page as u32, rect, name),
+                FormKind::Radio => {
+                    let mut field = NewFormField::checkbox(page as u32, rect, name);
+                    field.kind = FormFieldKind::Radio;
+                    field
+                }
+                FormKind::Choice => {
+                    NewFormField::choice(page as u32, rect, name, &["Option 1", "Option 2"])
+                }
+                FormKind::MultiChoice => {
+                    let mut field =
+                        NewFormField::choice(page as u32, rect, name, &["Option 1", "Option 2"]);
+                    field.kind = FormFieldKind::MultiChoice;
+                    field
+                }
+                FormKind::Signature => {
+                    let mut field = NewFormField::text(page as u32, rect, name);
+                    field.kind = FormFieldKind::Signature;
+                    field
+                }
+                FormKind::Button => {
+                    let mut field = NewFormField::text(page as u32, rect, name);
+                    field.kind = FormFieldKind::Button;
+                    field.value = Some("Button".to_string());
+                    field
+                }
+                FormKind::Date => {
+                    let mut field = NewFormField::text(page as u32, rect, name);
+                    field.kind = FormFieldKind::Date;
+                    field
+                }
+                FormKind::Barcode => {
+                    let mut field = NewFormField::text(page as u32, rect, name);
+                    field.kind = FormFieldKind::Barcode;
+                    field
+                }
+            }
+        }
+
+        /// Crée un champ de formulaire sur la zone tracée, et l'inscrit au
+        /// panneau des formulaires.
+        pub(super) fn create_form_field(
+            &mut self,
+            page: usize,
+            rect: [f32; 4],
+            kind: FormKind,
+            ctx: &egui::Context,
+        ) {
+            if (rect[2] - rect[0]) < 6.0 || (rect[3] - rect[1]) < 6.0 {
+                return;
+            }
+            let created = self.tabs.get_mut(self.active).map(|tab| {
+                // La boîte tracée est en repère affiché, le champ s'écrit en repère
+                // page.
+                let rect = youpdf_core::geom::rect_to_page(&tab.doc, page, rect);
+                // Les noms de champ sont des identifiants dans tout le document :
+                // deux champs ne peuvent pas partager le même.
+                // Les noms sont des identifiants uniques : un `contains` sur un vecteur
+                // est O(k) par candidat, O(k²) au total. Un HashSet ramène la
+                // recherche à O(1).
+                let mut existing: std::collections::HashSet<&str> =
+                    std::collections::HashSet::with_capacity(tab.forms.len());
+                for form in &tab.forms {
+                    existing.insert(form.name.as_str());
+                }
+                let mut num = tab.forms.len() + 1;
+                while existing.contains(format!("Field{num}").as_str()) {
+                    num += 1;
+                }
+                let field = Self::new_form_field(kind, page, rect, format!("Field{num}"));
+                tab.doc.create_form_field(&field)
+            });
+            match created {
+                Some(Ok(field)) => {
+                    if let Some(tab) = self.tabs.get_mut(self.active) {
+                        tab.forms.push(field);
+                    }
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("{} added", kind.label()));
+                }
+                Some(Err(err)) => self.toast(ctx, format!("Field failed: {err}")),
+                None => {}
+            }
+        }
+
+        /// Nouveau document d'une page vierge.
+        pub(super) fn new_blank_page(&mut self, ctx: &egui::Context) {
+            match blank_document(1, 595.0, 842.0) {
+                Ok(doc) => self.push_document(doc, None),
+                Err(err) => self.toast(ctx, format!("Create failed: {err}")),
+            }
+        }
+
+}
