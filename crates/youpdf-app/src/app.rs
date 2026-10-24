@@ -30,8 +30,11 @@ mod organize_ui;
 mod sign_ui;
 mod reader;
 mod icons;
+mod history;
 #[allow(unused_imports)]
 pub use icons::*;
+
+use history::trim_history;
 
 use crate::ai::AiPanel;
 use crate::home::{self, HomeCategory, HomeView, ViewMode, load_recents, save_recents, shorten};
@@ -871,36 +874,6 @@ fn fingerprint(bytes: &[u8]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
     hasher.finish()
-}
-
-/// Garde les états les plus récents dans les deux limites (nombre et octets).
-fn trim_history(stack: &mut Vec<HistoryEntry>) {
-    trim_history_to(stack, HISTORY_LIMIT, HISTORY_BYTES);
-}
-
-fn trim_history_to(stack: &mut Vec<HistoryEntry>, limit: usize, budget: usize) {
-    // `remove(0)` déplace tous les éléments suivants : O(n) par appel,
-    // donc O(n²) pour vider l'historique. `drain` est O(n) une seule fois.
-    let excess = stack.len().saturating_sub(limit);
-    if excess > 0 {
-        stack.drain(..excess);
-    }
-    // Taille cumulée des documents, de l'entrée la plus ancienne à la plus
-    // récente : on retire une tranche de tête jusqu'à ce que le budget
-    // tienne, sans repasser par `remove(0)` à chaque entrée.
-    let sizes: Vec<usize> = stack
-        .iter()
-        .filter_map(|entry| entry.doc.as_ref().map(Vec::len))
-        .collect();
-    let mut total: usize = sizes.iter().sum();
-    let mut drop_count = 0;
-    while total > budget && drop_count < stack.len().saturating_sub(1) {
-        total -= sizes[drop_count];
-        drop_count += 1;
-    }
-    if drop_count > 0 {
-        stack.drain(..drop_count);
-    }
 }
 
 struct Tab {
@@ -14088,7 +14061,7 @@ mod tests {
     #[test]
     fn history_drops_oldest_beyond_count_and_bytes() {
         let mut by_count: Vec<HistoryEntry> = (0..5).map(|n| history_entry(n, 1)).collect();
-        trim_history_to(&mut by_count, 3, usize::MAX);
+        history::trim_history_to(&mut by_count, 3, usize::MAX);
         assert_eq!(by_count.len(), 3);
         // Les plus récents restent, dans l'ordre.
         let markers: Vec<u8> = by_count
@@ -14098,7 +14071,7 @@ mod tests {
         assert_eq!(markers, vec![2, 3, 4]);
 
         let mut by_bytes = vec![history_entry(0, 4), history_entry(1, 4), history_entry(2, 4)];
-        trim_history_to(&mut by_bytes, 10, 8);
+        history::trim_history_to(&mut by_bytes, 10, 8);
         assert_eq!(by_bytes.len(), 2);
         assert_eq!(by_bytes[0].doc.as_ref().unwrap()[0], 1);
         assert_eq!(by_bytes[1].doc.as_ref().unwrap()[0], 2);
