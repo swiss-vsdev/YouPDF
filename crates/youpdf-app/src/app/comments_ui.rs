@@ -379,7 +379,6 @@ impl YouPdfApp {
 
 // Suite du panel comments_ui (extraite de `app.rs`).
 
-use super::*;
 
 impl YouPdfApp {
 

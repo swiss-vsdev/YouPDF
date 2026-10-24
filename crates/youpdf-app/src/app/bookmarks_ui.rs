@@ -386,7 +386,6 @@ impl YouPdfApp {
 
 // Suite du panel bookmarks_ui (extraite de `app.rs`).
 
-use super::*;
 
 impl YouPdfApp {
 

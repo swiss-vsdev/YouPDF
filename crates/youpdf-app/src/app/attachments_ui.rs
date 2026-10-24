@@ -127,7 +127,6 @@ impl YouPdfApp {
 
 // Suite du panel attachments_ui (extraite de `app.rs`).
 
-use super::*;
 
 impl YouPdfApp {
 
