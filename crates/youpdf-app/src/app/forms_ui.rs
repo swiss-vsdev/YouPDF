@@ -1,7 +1,7 @@
 //! Panneau Formulaires et remplissage interactif des champs.
 
 use super::*;
-use youpdf_shared::t;
+use youpdf_shared::{BODY, CAPTION, caption, t, RADIUS_L, RADIUS_M, SPACE_M, SPACE_S, SPACE_XS};
 
 /// Un champ est-il posé sur la page `page` du canevas ?
 ///
@@ -114,20 +114,20 @@ impl YouPdfApp {
                 export = true;
             }
         });
-        ui.add_space(4.0);
+        ui.add_space(SPACE_S);
         ui.horizontal(|ui| {
-            ui.add_space(2.0);
+            ui.add_space(SPACE_XS);
             ui.checkbox(&mut self.form_highlight, t("Highlight fields"));
         });
-        ui.add_space(2.0);
+        ui.add_space(SPACE_XS);
         // Outils d'alignement du mode Préparer un formulaire.
         if self.mode == Some(2) {
             let selected = self.form_selection.len();
             ui.horizontal(|ui| {
-                ui.add_space(2.0);
+                ui.add_space(SPACE_XS);
                 ui.label(
                     RichText::new(format!("{selected} selected"))
-                        .size(10.5)
+                        .size(CAPTION)
                         .color(pal().muted),
                 );
                 if ui
@@ -157,7 +157,7 @@ impl YouPdfApp {
                 }
             });
         }
-        ui.add_space(2.0);
+        ui.add_space(SPACE_XS);
 
         if reset_form {
             if let Some(tab) = self.tabs.get_mut(self.active) {
@@ -226,19 +226,19 @@ impl YouPdfApp {
         ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add_space(6.0);
+                ui.add_space(SPACE_M);
                 for (idx, (name, kind, page, read_only, value)) in rows.iter().enumerate() {
                     let (rect, resp) = ui
                         .allocate_exact_size(vec2(self.panel_w - 24.0, 40.0), Sense::click());
                     if resp.hovered() {
                         ui.painter()
-                            .rect_filled(rect, Rounding::same(6.0), pal().widget_bg);
+                            .rect_filled(rect, Rounding::same(RADIUS_M), pal().widget_bg);
                     }
                     ui.painter().text(
                         pos2(rect.min.x + 10.0, rect.min.y + 12.0),
                         Align2::LEFT_CENTER,
                         shorten(name, 26),
-                        FontId::proportional(12.0),
+                        FontId::proportional(BODY),
                         pal().icon_bright,
                     );
                     let detail = if value.is_empty() {
@@ -250,7 +250,7 @@ impl YouPdfApp {
                         pos2(rect.min.x + 10.0, rect.min.y + 28.0),
                         Align2::LEFT_CENTER,
                         if *read_only { format!("{detail} · read-only") } else { detail },
-                        FontId::proportional(10.5),
+                        FontId::proportional(CAPTION),
                         pal().muted,
                     );
                     if let Some(page) = page {
@@ -258,7 +258,7 @@ impl YouPdfApp {
                             pos2(rect.max.x - 10.0, rect.min.y + 12.0),
                             Align2::RIGHT_CENTER,
                             format!("p.{page}"),
-                            FontId::proportional(10.0),
+                            FontId::proportional(CAPTION),
                             pal().muted,
                         );
                     }
@@ -269,7 +269,7 @@ impl YouPdfApp {
                             select = Some(idx);
                         }
                     }
-                    ui.add_space(4.0);
+                    ui.add_space(SPACE_S);
                 }
             });
 
@@ -306,15 +306,15 @@ impl YouPdfApp {
         let mut close = false;
         Frame::none()
             .fill(pal().widget_bg)
-            .rounding(Rounding::same(8.0))
+            .rounding(Rounding::same(RADIUS_L))
             .inner_margin(Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
                 ui.label(
                     RichText::new(format!("{}  ({})", field.name, form_kind_label(&field.kind)))
-                        .size(11.5)
+                        .size(BODY)
                         .color(pal().icon_bright),
                 );
-                ui.add_space(4.0);
+                ui.add_space(SPACE_S);
                 match field.kind {
                     FormFieldKind::Checkbox | FormFieldKind::Radio => {
                         ui.horizontal(|ui| {
@@ -333,7 +333,7 @@ impl YouPdfApp {
                             vec2(self.panel_w - 46.0, 24.0),
                             TextEdit::singleline(&mut buffer).hint_text("Value"),
                         );
-                        ui.add_space(4.0);
+                        ui.add_space(SPACE_S);
                         ui.horizontal(|ui| {
                             if ui.button(t("Apply")).clicked() {
                                 apply = true;
@@ -345,7 +345,7 @@ impl YouPdfApp {
                     }
                 }
             });
-        ui.add_space(6.0);
+        ui.add_space(SPACE_M);
 
         // Propriétés du champ, en onglets : Général, Apparence, Options,
         // Actions, Format, Calcul.
@@ -367,11 +367,11 @@ impl YouPdfApp {
         );
         Frame::none()
             .fill(pal().widget_bg)
-            .rounding(Rounding::same(8.0))
+            .rounding(Rounding::same(RADIUS_L))
             .inner_margin(Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
-                ui.label(RichText::new(t("Properties")).size(11.5).color(pal().icon_bright));
-                ui.add_space(4.0);
+                ui.label(RichText::new(t("Properties")).size(BODY).color(pal().icon_bright));
+                ui.add_space(SPACE_S);
                 ui.horizontal_wrapped(|ui| {
                     for (index, label) in [
                         "General",
@@ -400,7 +400,7 @@ impl YouPdfApp {
                         if props.name.trim().is_empty() {
                             ui.label(
                                 RichText::new(t("A field needs a name"))
-                                    .size(10.0)
+                                    .size(CAPTION)
                                     .color(pal().muted),
                             );
                         }
@@ -437,7 +437,7 @@ impl YouPdfApp {
                         ui.checkbox(&mut props.read_only, t("Read only"));
                     }
                     1 => {
-                        ui.label(RichText::new(t("Border")).size(10.5).color(pal().muted));
+                        ui.label(caption(t("Border")));
                         ui.add(
                             egui::Slider::new(&mut props.border_width, 0.0..=8.0)
                                 .text("Width"),
@@ -465,7 +465,7 @@ impl YouPdfApp {
                                 }
                             });
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(t("Border colour")).size(10.5));
+                            ui.label(RichText::new(t("Border colour")).size(CAPTION));
                             ui.color_edit_button_srgb(&mut props.border_color);
                         });
                         ui.horizontal(|ui| {
@@ -473,7 +473,7 @@ impl YouPdfApp {
                             ui.color_edit_button_srgb(&mut props.fill_color);
                         });
                         ui.separator();
-                        ui.label(RichText::new(t("Text")).size(10.5).color(pal().muted));
+                        ui.label(caption(t("Text")));
                         egui::ComboBox::from_id_salt("form-font")
                             .width(width)
                             .selected_text(props.font.clone())
@@ -492,7 +492,7 @@ impl YouPdfApp {
                                 .text("Size (0 = auto)"),
                         );
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(t("Text colour")).size(10.5));
+                            ui.label(RichText::new(t("Text colour")).size(CAPTION));
                             ui.color_edit_button_srgb(&mut props.text_color);
                         });
                     }
@@ -553,7 +553,7 @@ impl YouPdfApp {
                     3 => {
                         ui.label(
                             RichText::new(t("Run JavaScript on click"))
-                                .size(10.5)
+                                .size(CAPTION)
                                 .color(pal().muted),
                         );
                         ui.add_sized(
@@ -586,7 +586,7 @@ impl YouPdfApp {
                             });
                         ui.label(
                             RichText::new(t("Format script"))
-                                .size(10.5)
+                                .size(CAPTION)
                                 .color(pal().muted),
                         );
                         ui.add_sized(
@@ -602,7 +602,7 @@ impl YouPdfApp {
                             .show_ui(ui, |ui| {
                                 ui.label(
                                     RichText::new(t("Source fields, comma separated"))
-                                        .size(10.0),
+                                        .size(CAPTION),
                                 );
                                 ui.add_sized(
                                     vec2(width - 20.0, 24.0),
@@ -632,7 +632,7 @@ impl YouPdfApp {
                             });
                         ui.label(
                             RichText::new(t("Calculate script"))
-                                .size(10.5)
+                                .size(CAPTION)
                                 .color(pal().muted),
                         );
                         ui.add_sized(
@@ -641,7 +641,7 @@ impl YouPdfApp {
                         );
                     }
                 }
-                ui.add_space(4.0);
+                ui.add_space(SPACE_S);
                 if ui
                     .add_enabled(!props.name.trim().is_empty(), egui::Button::new("Apply properties"))
                     .clicked()
@@ -650,7 +650,7 @@ impl YouPdfApp {
                 }
             });
         self.form_props_tab = tab;
-        ui.add_space(6.0);
+        ui.add_space(SPACE_M);
 
         if apply {
             let outcome = {

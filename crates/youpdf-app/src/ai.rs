@@ -8,6 +8,7 @@
 //!
 //! L'appel réseau tourne sur un fil de travail : l'interface ne se fige
 //! jamais, même quand le fournisseur ne répond pas.
+use youpdf_shared::{BODY, LABEL, caption, modal_frame, muted, pal, section, t, SPACE_S, SPACE_L, SPACE_M};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -18,7 +19,6 @@ use youpdf_ai::{
     build_provider, AiTask, AppSettings, ChatContext, ChatOptions, Message, ModelInfo, ProviderConfig,
     ProviderKind, SecretStore,
 };
-use youpdf_shared::{t, pal};
 
 /// Demande envoyée au fil de travail.
 ///
@@ -343,6 +343,7 @@ impl AiPanel {
             .open(&mut open)
             .default_size([560.0, 640.0])
             .min_width(420.0)
+            .frame(modal_frame(ctx))
             .show(ctx, |ui| {
                 self.body(ui, doc_text, doc_name, doc_pages);
             });
@@ -367,23 +368,23 @@ impl AiPanel {
         }
 
         if !self.settings.ai_enabled {
-            ui.add_space(8.0);
+            ui.add_space(SPACE_L);
             ui.label(
                 RichText::new(
                     "AI is off. YouPDF sends nothing anywhere while this is off: no provider is \
                      built, the system keyring is not read, and no network connection is opened.",
                 )
-                .size(12.0)
+                
                 .color(pal().muted),
             );
-            ui.add_space(8.0);
+            ui.add_space(SPACE_L);
             ui.label(
                 RichText::new(
                     "YouPDF hosts no AI of its own. When you turn this on, you pick a provider \
                      and supply your own key (or point at a local server such as Ollama). Your \
                      document text goes only to that provider, and only when you press a button.",
                 )
-                .size(12.0)
+                
                 .color(pal().muted),
             );
             return;
@@ -391,7 +392,7 @@ impl AiPanel {
 
         ui.label(
             RichText::new(t("Bring your own provider. No telemetry. Nothing leaves this machine unless you press a button."))
-                .size(11.5)
+                .size(BODY)
                 .color(pal().muted),
         );
         ui.separator();
@@ -405,7 +406,7 @@ impl AiPanel {
                 if ui.radio(active, &config.display_name).clicked() {
                     chosen = Some(config.id.clone());
                 }
-                ui.label(RichText::new(kind_label(config.kind)).size(10.5).color(pal().muted));
+                ui.label(caption(kind_label(config.kind)));
             });
         }
         if let Some(id) = chosen {
@@ -437,7 +438,7 @@ impl AiPanel {
             let config_id = config.id.clone();
             let mut changed = false;
 
-            ui.add_space(4.0);
+            ui.add_space(SPACE_S);
 
             // URL de base : utile pour les fournisseurs locaux ou compatibles.
             if matches!(
@@ -445,7 +446,7 @@ impl AiPanel {
                 ProviderKind::Ollama | ProviderKind::OpenAiCompat | ProviderKind::Gemini
             ) {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(t("Base URL")).size(11.5).color(pal().muted));
+                    ui.label(section(t("Base URL")));
                     let mut url = config.base_url.clone().unwrap_or_default();
                     if ui
                         .add(TextEdit::singleline(&mut url).desired_width(330.0))
@@ -462,7 +463,7 @@ impl AiPanel {
             }
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new(t("Model")).size(11.5).color(pal().muted));
+                ui.label(section(t("Model")));
                 let mut model = self.settings.active_model.clone().unwrap_or_default();
                 if ui
                     .add(
@@ -486,7 +487,7 @@ impl AiPanel {
 
             // Clé API : écrite dans le trousseau système, jamais dans le fichier.
             ui.horizontal(|ui| {
-                ui.label(RichText::new(t("API key")).size(11.5).color(pal().muted));
+                ui.label(section(t("API key")));
                 ui.add(
                     TextEdit::singleline(&mut self.key_input)
                         .password(true)
@@ -504,7 +505,7 @@ impl AiPanel {
             if config.kind == ProviderKind::Ollama {
                 ui.label(
                     RichText::new(t("Ollama runs locally and needs no API key."))
-                        .size(11.0)
+                        .size(LABEL)
                         .color(pal().muted),
                 );
             }
@@ -512,13 +513,13 @@ impl AiPanel {
             // Modèles proposés par le fournisseur.
             let models = self.models.clone();
             if !models.is_empty() {
-                ui.add_space(4.0);
+                ui.add_space(SPACE_S);
                 ui.horizontal_wrapped(|ui| {
                     for model in &models {
                         let selected =
                             self.settings.active_model.as_deref() == Some(model.id.as_str());
                         if ui
-                            .selectable_label(selected, RichText::new(&model.display_name).size(11.0))
+                            .selectable_label(selected, RichText::new(&model.display_name).size(LABEL))
                             .clicked()
                         {
                             self.settings.active_model = Some(model.id.clone());
@@ -560,7 +561,7 @@ impl AiPanel {
         }
 
         // --- Tâche --------------------------------------------------------
-        ui.add_space(6.0);
+        ui.add_space(SPACE_M);
         ui.separator();
         ui.label(RichText::new(t("Task")).strong());
         ui.horizontal_wrapped(|ui| {
@@ -583,7 +584,7 @@ impl AiPanel {
         });
         if self.task == AiTask::Translate {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(t("Translate to")).size(11.5).color(pal().muted));
+                ui.label(section(t("Translate to")));
                 ui.add(TextEdit::singleline(&mut self.target_language).desired_width(160.0));
             });
         }
@@ -598,7 +599,7 @@ impl AiPanel {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(context_label)
-                    .size(11.0)
+                    .size(LABEL)
                     .color(pal().muted),
             );
             if !doc_text.is_empty() && ui.button(t("Clear")).clicked() {
@@ -611,9 +612,9 @@ impl AiPanel {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for turn in &self.turns {
-                    ui.label(RichText::new(turn.role).strong().size(11.5).color(pal().accent));
-                    ui.label(RichText::new(&turn.text).size(12.0));
-                    ui.add_space(6.0);
+                    ui.label(RichText::new(turn.role).strong().size(BODY).color(pal().accent));
+                    ui.label(RichText::new(&turn.text));
+                    ui.add_space(SPACE_M);
                 }
             });
 
@@ -640,11 +641,11 @@ impl AiPanel {
         if self.busy {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(RichText::new(t("Working…")).size(11.0).color(pal().muted));
+                ui.label(muted(t("Working…"), LABEL));
             });
         }
         if let Some(status) = &self.status {
-            ui.label(RichText::new(status).size(11.0).color(pal().muted));
+            ui.label(muted(status, LABEL));
         }
 
         if do_submit {

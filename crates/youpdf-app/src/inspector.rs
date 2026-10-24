@@ -4,11 +4,11 @@
 //! panneau posé juste au-dessus d'elle, avec une flèche qui pointe vers
 //! l'élément. Le placement est calculé ici, à part de l'interface, pour rester
 //! testable : l'inspecteur ne doit jamais sortir du cadre de la fenêtre.
+use youpdf_shared::{LABEL, MONO, muted, pal, t, RADIUS_XS};
 
 use egui::{pos2, Color32, Painter, Rect, RichText, Rounding, Sense, Shape, Stroke, Vec2};
 use egui_phosphor::regular as ph;
 use youpdf_core::{AnnotationKind, ImageTransform, PatchFont, TextAlign, TextStyle};
-use youpdf_shared::{t, pal};
 
 /// Identificateur d'un bloc de texte dans la page.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -315,7 +315,7 @@ pub fn text_style_row(
             if ui
                 .selectable_label(
                     active,
-                    RichText::new(label).size(11.0).strong(),
+                    RichText::new(label).size(LABEL).strong(),
                 )
                 .clicked()
             {
@@ -337,7 +337,7 @@ pub fn text_style_row(
                 TextAlign::Justify => "J",
             };
             if ui
-                .selectable_label(style.align == align, RichText::new(label).size(11.0))
+                .selectable_label(style.align == align, RichText::new(label).size(LABEL))
                 .clicked()
             {
                 style.align = align;
@@ -382,7 +382,7 @@ pub fn text_style_row(
                     let (rect, resp) =
                         ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::click());
                     let fill = Color32::from_rgb(color[0], color[1], color[2]);
-                    ui.painter().rect_filled(rect, Rounding::same(2.0), fill);
+                    ui.painter().rect_filled(rect, Rounding::same(RADIUS_XS), fill);
                     if style.color == *color {
                         ui.painter().rect_stroke(
                             rect,
@@ -399,11 +399,11 @@ pub fn text_style_row(
             }
         });
         ui.horizontal(|ui| {
-            ui.label(RichText::new(t("#")).size(11.0).color(pal().muted));
+            ui.label(muted(t("#"), LABEL));
             let hex = ui.add(
                 egui::TextEdit::singleline(&mut state.hex)
                     .desired_width(64.0)
-                    .font(egui::FontId::monospace(11.0)),
+                    .font(egui::FontId::monospace(MONO)),
             );
             if hex.changed() {
                 if let Some(color) = parse_hex_color(&state.hex) {

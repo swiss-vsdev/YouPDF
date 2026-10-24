@@ -6,7 +6,7 @@
 //! s'affichait et aucune fonction de signature n'était appelée.
 
 use super::*;
-use youpdf_shared::t;
+use youpdf_shared::{BODY, CAPTION, LABEL, caption, muted, t, SPACE_S, SPACE_L, SPACE_M};
 use youpdf_core::signature::{CertificateRequest, SignOptions, SigningIdentity};
 
 /// Vert du bandeau « signature valide ».
@@ -97,8 +97,8 @@ impl YouPdfApp {
                 app.certificate_panel(ctx, ui);
             }
             if let Some(error) = app.sign.error.clone() {
-                ui.add_space(4.0);
-                ui.label(RichText::new(error).size(11.0).color(INVALID_RED));
+                ui.add_space(SPACE_S);
+                ui.label(RichText::new(error).size(LABEL).color(INVALID_RED));
             }
         });
         if !open {
@@ -109,7 +109,7 @@ impl YouPdfApp {
     /// Onglet « Signer » : certificat courant, apparence, bouton de signature.
     fn sign_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let pages = self.tabs.get(self.active).map_or(0, |tab| tab.total());
-        ui.label(RichText::new(t("Certificate")).size(11.0).color(pal().muted));
+        ui.label(muted(t("Certificate"), LABEL));
         match &self.sign.certificate {
             Some(cert) => {
                 ui.label(
@@ -117,7 +117,7 @@ impl YouPdfApp {
                         "{} — {} to {}",
                         cert.common_name, cert.valid_from, cert.valid_to
                     ))
-                    .size(12.0)
+                    
                     .color(pal().icon_bright),
                 );
                 let issuer = if cert.self_signed {
@@ -125,19 +125,19 @@ impl YouPdfApp {
                 } else {
                     format!("issued by {}", cert.issuer)
                 };
-                ui.label(RichText::new(issuer).size(10.5).color(pal().muted));
+                ui.label(caption(issuer));
             }
             None => {
                 ui.label(
                     RichText::new(t("No certificate loaded — see the Certificates tab."))
-                        .size(11.0)
+                        .size(LABEL)
                         .color(pal().muted),
                 );
             }
         }
 
-        ui.add_space(8.0);
-        ui.label(RichText::new(t("Appearance")).size(11.0).color(pal().muted));
+        ui.add_space(SPACE_L);
+        ui.label(muted(t("Appearance"), LABEL));
         ui.horizontal(|ui| {
             ui.label(t("Page"));
             ui.add(egui::DragValue::new(&mut self.sign.options.page).range(1..=pages.max(1)));
@@ -153,8 +153,8 @@ impl YouPdfApp {
             ui.add(TextEdit::singleline(&mut self.sign.options.location).desired_width(140.0));
         });
 
-        ui.add_space(6.0);
-        ui.label(RichText::new(t("Signature box")).size(11.0).color(pal().muted));
+        ui.add_space(SPACE_M);
+        ui.label(muted(t("Signature box"), LABEL));
         ui.horizontal(|ui| {
             for (label, index) in [("X1", 0usize), ("Y1", 1), ("X2", 2), ("Y2", 3)] {
                 ui.label(label);
@@ -180,7 +180,7 @@ impl YouPdfApp {
             } else {
                 "Load a certificate first"
             };
-            ui.label(RichText::new(why).size(10.5).color(pal().muted));
+            ui.label(caption(why));
         }
 
         ui.separator();
@@ -195,7 +195,7 @@ impl YouPdfApp {
         if self.sign.signatures.is_empty() {
             ui.label(
                 RichText::new(t("No signature found in this document"))
-                    .size(11.0)
+                    .size(LABEL)
                     .color(pal().muted),
             );
             return;
@@ -206,7 +206,7 @@ impl YouPdfApp {
             } else {
                 (INVALID_RED, "A signature was modified after signing")
             };
-            ui.label(RichText::new(headline).size(11.5).color(colour));
+            ui.label(RichText::new(headline).size(BODY).color(colour));
             let field = if info.field.is_empty() {
                 "unnamed field"
             } else {
@@ -220,7 +220,7 @@ impl YouPdfApp {
             let when = info.signed_at.as_deref().unwrap_or("no date");
             ui.label(
                 RichText::new(format!("{field} · {signer} · {when}"))
-                    .size(10.5)
+                    .size(CAPTION)
                     .color(pal().muted),
             );
             if !info.valid {
@@ -229,19 +229,19 @@ impl YouPdfApp {
                         "Covers the whole document: {}",
                         if info.covers_whole_document { "yes" } else { "no" }
                     ))
-                    .size(10.0)
+                    .size(CAPTION)
                     .color(pal().muted),
                 );
             }
             if let Some(error) = &info.error {
-                ui.label(RichText::new(error).size(10.0).color(INVALID_RED));
+                ui.label(RichText::new(error).size(CAPTION).color(INVALID_RED));
             }
         }
     }
 
     /// Onglet « Certificats » : import PKCS#12 et création auto-signée.
     fn certificate_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        ui.label(RichText::new(t("Import a PKCS#12 file")).size(11.0).color(pal().muted));
+        ui.label(muted(t("Import a PKCS#12 file"), LABEL));
         ui.horizontal(|ui| {
             ui.label(t("Password"));
             ui.add(
@@ -257,7 +257,7 @@ impl YouPdfApp {
         ui.add_space(10.0);
         ui.label(
             RichText::new(t("Or create a self-signed certificate"))
-                .size(11.0)
+                .size(LABEL)
                 .color(pal().muted),
         );
         ui.horizontal(|ui| {

@@ -14,7 +14,7 @@
 //! signature « à l'encre ».
 
 use super::*;
-use youpdf_shared::t;
+use youpdf_shared::{CAPTION, LABEL, TITLE, t, RADIUS_S, SPACE_M, SPACE_S};
 use ab_glyph::ScaleFont;
 
 /// Nombre de signatures conservées d'un côté et de l'autre.
@@ -138,13 +138,13 @@ impl YouPdfApp {
                         ui.checkbox(&mut app.marks.stamp_border, t("Border"));
                         ui.checkbox(&mut app.marks.stamp_date, t("Add the date"));
                     });
-                    ui.add_space(6.0);
+                    ui.add_space(SPACE_M);
                     ui.label(
                         RichText::new(t("The stamp is placed at the centre of the current page."))
-                            .size(10.5)
+                            .size(CAPTION)
                             .color(pal().muted),
                     );
-                    ui.add_space(6.0);
+                    ui.add_space(SPACE_M);
                     place_text = ui
                         .add_enabled(
                             !app.marks.stamp_text.trim().is_empty(),
@@ -159,18 +159,18 @@ impl YouPdfApp {
                         if !app.marks.stamp_image_name.is_empty() {
                             ui.label(
                                 RichText::new(&app.marks.stamp_image_name)
-                                    .size(10.5)
+                                    .size(CAPTION)
                                     .color(pal().muted),
                             );
                         }
                     });
-                    ui.add_space(6.0);
+                    ui.add_space(SPACE_M);
                     ui.label(
                         RichText::new(t("PNG or JPEG, drawn at a quarter of the page width."))
-                            .size(10.5)
+                            .size(CAPTION)
                             .color(pal().muted),
                     );
-                    ui.add_space(6.0);
+                    ui.add_space(SPACE_M);
                     place_image = ui
                         .add_enabled(
                             app.marks.stamp_image.is_some(),
@@ -179,8 +179,8 @@ impl YouPdfApp {
                         .clicked();
                 }
                 if let Some(error) = app.marks.error.clone() {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(error).size(11.0).color(MARKS_RED));
+                    ui.add_space(SPACE_S);
+                    ui.label(RichText::new(error).size(LABEL).color(MARKS_RED));
                 }
             },
         );
@@ -225,8 +225,8 @@ impl YouPdfApp {
                     _ => created = app.signature_image_tab(ui),
                 }
                 if let Some(error) = app.marks.error.clone() {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(error).size(11.0).color(MARKS_RED));
+                    ui.add_space(SPACE_S);
+                    ui.label(RichText::new(error).size(LABEL).color(MARKS_RED));
                 }
                 ui.separator();
                 app.stored_signatures_list(ui);
@@ -247,7 +247,7 @@ impl YouPdfApp {
             Sense::drag(),
         );
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, Rounding::same(4.0), pal().widget_bg);
+        painter.rect_filled(rect, Rounding::same(RADIUS_S), pal().widget_bg);
         painter.rect_stroke(
             rect,
             4.0,
@@ -322,17 +322,17 @@ impl YouPdfApp {
             ui.label(t("Name"));
             ui.add(TextEdit::singleline(&mut self.marks.typed_name).desired_width(280.0));
         });
-        ui.add_space(4.0);
+        ui.add_space(SPACE_S);
         let preview = self.marks.typed_name.trim().to_string();
         let (rect, _) = ui.allocate_exact_size(vec2(TYPED_WIDTH, 90.0), Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, Rounding::same(4.0), pal().widget_bg);
+        painter.rect_filled(rect, Rounding::same(RADIUS_S), pal().widget_bg);
         if preview.is_empty() {
             painter.text(
                 rect.center(),
                 Align2::CENTER_CENTER,
                 "Your name appears here",
-                FontId::proportional(13.0),
+                FontId::proportional(TITLE),
                 pal().muted,
             );
         } else {
@@ -368,20 +368,20 @@ impl YouPdfApp {
             if let Some((_, w, h)) = self.marks.imported {
                 ui.label(
                     RichText::new(format!("{w} × {h} px"))
-                        .size(10.5)
+                        .size(CAPTION)
                         .color(pal().muted),
                 );
             }
         });
-        ui.add_space(4.0);
+        ui.add_space(SPACE_S);
         ui.label(
             RichText::new(
                 "A photo or a scan works: the light background is made transparent.",
             )
-            .size(10.5)
+            .size(CAPTION)
             .color(pal().muted),
         );
-        ui.add_space(6.0);
+        ui.add_space(SPACE_M);
         ui.add_enabled_ui(self.marks.imported.is_some(), |ui| {
             if ui.button(t("Use this signature")).clicked() {
                 if let Some((rgb, width, height)) = self.marks.imported.clone() {
@@ -406,13 +406,13 @@ impl YouPdfApp {
                 "Saved signatures ({}/{STORED_SIGNATURE_LIMIT})",
                 self.marks.stored.len()
             ))
-            .size(11.0)
+            .size(LABEL)
             .color(pal().muted),
         );
         if self.marks.stored.is_empty() {
             ui.label(
                 RichText::new(t("Nothing saved yet."))
-                    .size(10.5)
+                    .size(CAPTION)
                     .color(pal().muted),
             );
             return;

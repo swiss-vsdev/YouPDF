@@ -5,7 +5,7 @@
 //! fenêtres d'extraction, d'insertion, de remplacement et de découpe.
 
 use super::*;
-use youpdf_shared::t;
+use youpdf_shared::{BODY, LABEL, TITLE, caption, t, SPACE_XS, SPACE_L};
 
 /// Fenêtre ouverte par-dessus la grille.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -39,14 +39,14 @@ impl YouPdfApp {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new(t("Organize pages"))
-                            .size(13.0)
+                            .size(TITLE)
                             .color(pal().icon_bright),
                     );
                     ui.add_space(10.0);
                     let count = if selected.is_empty() { total } else { selected.len() };
                     ui.label(
                         RichText::new(format!("{count} of {total} pages selected"))
-                            .size(11.0)
+                            .size(LABEL)
                             .color(pal().muted),
                     );
                     if ui.small_button("Select all").clicked() {
@@ -174,7 +174,7 @@ impl YouPdfApp {
                                     badge,
                                     Align2::CENTER_CENTER,
                                     ph::CHECK,
-                                    FontId::proportional(11.0),
+                                    FontId::proportional(LABEL),
                                     Color32::WHITE,
                                 );
                             }
@@ -182,7 +182,7 @@ impl YouPdfApp {
                                 pos2(rect.center().x, img_rect.max.y + 14.0),
                                 Align2::CENTER_CENTER,
                                 page.to_string(),
-                                FontId::proportional(11.0),
+                                FontId::proportional(LABEL),
                                 if picked { pal().accent } else { pal().muted },
                             );
                             if page as usize == current {
@@ -267,7 +267,7 @@ impl YouPdfApp {
                                     anchor = Some(page_usize);
                                 }
                             }
-                            ui.add_space(2.0);
+                            ui.add_space(SPACE_XS);
                         }
                     });
                     ui.add_space(16.0);
@@ -377,15 +377,15 @@ impl YouPdfApp {
         self.show_modal(ctx, "modal-delete-pages", "Delete pages", 340.0, &mut open, |_app, ui| {
             ui.label(
                 RichText::new(format!("Remove {} page(s) from this document?", pages.len()))
-                    .size(12.5)
+                    .size(BODY)
                     .color(pal().icon_bright),
             );
             ui.label(
                 RichText::new(t("The pages leave the file. Undo brings them back."))
-                    .size(11.0)
+                    .size(LABEL)
                     .color(pal().muted),
             );
-            ui.add_space(8.0);
+            ui.add_space(SPACE_L);
             ui.horizontal(|ui| {
                 if ui.button(t("Delete")).clicked() {
                     confirmed = true;
@@ -454,46 +454,42 @@ impl YouPdfApp {
         let mut open = true;
         match dialog {
             OrganizeDialog::Extract => {
-                egui::Window::new(t("Extract pages"))
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-                    .open(&mut open)
-                    .show(ctx, |ui| {
+                self.show_modal(
+                    ctx,
+                    "modal-organize-extract",
+                    "Extract pages",
+                    340.0,
+                    &mut open,
+                    |app, ui| {
+                        ui.checkbox(&mut app.organize_extract_single, "Extract as a single PDF");
                         ui.checkbox(
-                            &mut self.organize_extract_single,
-                            "Extract as a single PDF",
-                        );
-                        ui.checkbox(
-                            &mut self.organize_extract_delete,
+                            &mut app.organize_extract_delete,
                             "Delete original pages after extraction",
                         );
-                        ui.label(
-                            RichText::new(format!(
-                                "{} page(s) selected",
-                                self.organize_selected.len().max(1)
-                            ))
-                            .size(10.5)
-                            .color(pal().muted),
-                        );
+                        ui.label(caption(format!(
+                            "{} page(s) selected",
+                            app.organize_selected.len().max(1)
+                        )));
                         if ui.button(t("Extract…")).clicked() {
-                            self.run_extract(ctx);
+                            app.run_extract(ctx);
                         }
-                    });
+                    },
+                );
             }
             OrganizeDialog::Insert => {
-                egui::Window::new(t("Insert pages"))
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-                    .open(&mut open)
-                    .show(ctx, |ui| {
-                        ui.label(RichText::new(t("Position")).size(10.5).color(pal().muted));
+                self.show_modal(
+                    ctx,
+                    "modal-organize-insert",
+                    "Insert pages",
+                    340.0,
+                    &mut open,
+                    |app, ui| {
+                        ui.label(caption(t("Position")));
                         egui::ComboBox::from_id_salt("insert-where")
                             .width(170.0)
                             .selected_text(
                                 ["Before page", "After page", "First page", "Last page"]
-                                    [self.organize_insert_where.min(3) as usize],
+                                    [app.organize_insert_where.min(3) as usize],
                             )
                             .show_ui(ui, |ui| {
                                 for (value, label) in [
@@ -503,73 +499,73 @@ impl YouPdfApp {
                                     (3, "Last page"),
                                 ] {
                                     if ui
-                                        .selectable_label(
-                                            self.organize_insert_where == value,
-                                            label,
-                                        )
+                                        .selectable_label(app.organize_insert_where == value, label)
                                         .clicked()
                                     {
-                                        self.organize_insert_where = value;
+                                        app.organize_insert_where = value;
                                     }
                                 }
                             });
-                        if self.organize_insert_where <= 1 {
+                        if app.organize_insert_where <= 1 {
                             ui.add(
-                                egui::DragValue::new(&mut self.organize_insert_page)
+                                egui::DragValue::new(&mut app.organize_insert_page)
                                     .range(1..=total.max(1)),
                             );
                         }
                         ui.separator();
-                        ui.label(RichText::new(t("Source")).size(10.5).color(pal().muted));
+                        ui.label(caption(t("Source")));
                         if ui.button(t("From PDF file…")).clicked() {
-                            self.run_insert_file(ctx);
+                            app.run_insert_file(ctx);
                         }
                         if ui.button(t("Blank A4 page")).clicked() {
-                            self.run_insert_blank(ctx);
+                            app.run_insert_blank(ctx);
                         }
-                        let pasted = ui.button(t("From Clipboard")).clicked();
-                        if pasted {
-                            self.run_insert_clipboard(ctx);
+                        if ui.button(t("From Clipboard")).clicked() {
+                            app.run_insert_clipboard(ctx);
                         }
-                    });
+                    },
+                );
             }
             OrganizeDialog::Replace => {
-                egui::Window::new(t("Replace pages"))
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-                    .open(&mut open)
-                    .show(ctx, |ui| {
+                self.show_modal(
+                    ctx,
+                    "modal-organize-replace",
+                    "Replace pages",
+                    340.0,
+                    &mut open,
+                    |app, ui| {
                         ui.horizontal(|ui| {
                             ui.label(t("Pages"));
                             ui.add(
-                                egui::DragValue::new(&mut self.organize_replace_from)
+                                egui::DragValue::new(&mut app.organize_replace_from)
                                     .range(1..=total.max(1)),
                             );
                             ui.label(t("to"));
                             ui.add(
-                                egui::DragValue::new(&mut self.organize_replace_to)
+                                egui::DragValue::new(&mut app.organize_replace_to)
                                     .range(1..=total.max(1)),
                             );
                         });
-                        ui.label(RichText::new(t("with pages from a PDF")).size(10.5).color(pal().muted));
+                        ui.label(caption(t("with pages from a PDF")));
                         if ui.button(t("Choose file and replace…")).clicked() {
-                            self.run_replace(ctx);
+                            app.run_replace(ctx);
                         }
-                    });
+                    },
+                );
             }
             OrganizeDialog::Split => {
-                egui::Window::new(t("Split document"))
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-                    .open(&mut open)
-                    .show(ctx, |ui| {
+                self.show_modal(
+                    ctx,
+                    "modal-organize-split",
+                    "Split document",
+                    340.0,
+                    &mut open,
+                    |app, ui| {
                         egui::ComboBox::from_id_salt("split-mode")
                             .width(200.0)
                             .selected_text(
                                 ["Every N pages", "Maximum file size", "Top-level bookmarks"]
-                                    [self.organize_split_mode.min(2) as usize],
+                                    [app.organize_split_mode.min(2) as usize],
                             )
                             .show_ui(ui, |ui| {
                                 for (value, label) in [
@@ -578,44 +574,38 @@ impl YouPdfApp {
                                     (2, "Top-level bookmarks"),
                                 ] {
                                     if ui
-                                        .selectable_label(
-                                            self.organize_split_mode == value,
-                                            label,
-                                        )
+                                        .selectable_label(app.organize_split_mode == value, label)
                                         .clicked()
                                     {
-                                        self.organize_split_mode = value;
+                                        app.organize_split_mode = value;
                                     }
                                 }
                             });
-                        match self.organize_split_mode {
+                        match app.organize_split_mode {
                             0 => {
                                 ui.add(
-                                    egui::DragValue::new(&mut self.organize_split)
+                                    egui::DragValue::new(&mut app.organize_split)
                                         .range(1..=200)
                                         .speed(0.2),
                                 );
                             }
                             1 => {
                                 ui.add(
-                                    egui::DragValue::new(&mut self.organize_split_mb)
+                                    egui::DragValue::new(&mut app.organize_split_mb)
                                         .range(0.1..=500.0)
                                         .speed(0.1)
                                         .suffix(" MB"),
                                 );
                             }
                             _ => {
-                                ui.label(
-                                    RichText::new(t("One file per top-level bookmark"))
-                                        .size(10.5)
-                                        .color(pal().muted),
-                                );
+                                ui.label(caption(t("One file per top-level bookmark")));
                             }
                         }
                         if ui.button(t("Choose folder and split…")).clicked() {
-                            self.run_split(ctx);
+                            app.run_split(ctx);
                         }
-                    });
+                    },
+                );
             }
         }
         if !open {

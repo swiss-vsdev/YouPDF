@@ -1,7 +1,7 @@
 //! Fenêtres d'habillage : filigrane, en-tête et pied de page, compression.
 
 use super::*;
-use youpdf_shared::t;
+use youpdf_shared::{BODY, LABEL, muted, section, t, SPACE_S, SPACE_L, SPACE_M};
 
 impl YouPdfApp {
     /// Fenêtre « Filigrane ».
@@ -15,22 +15,22 @@ impl YouPdfApp {
         let total = self.active_total();
         self.show_modal(ctx, "modal-watermark", "Watermark", 360.0, &mut open, |app, ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(t("Text")).size(12.0).color(pal().muted));
+                ui.label(section(t("Text")));
                 ui.add(TextEdit::singleline(&mut app.watermark.text).desired_width(230.0));
             });
             ui.horizontal(|ui| {
-                ui.label(RichText::new(t("Size")).size(12.0).color(pal().muted));
+                ui.label(section(t("Size")));
                 ui.add(
                     egui::DragValue::new(&mut app.watermark.font_size).range(6.0..=200.0),
                 );
-                ui.label(RichText::new(t("Angle")).size(12.0).color(pal().muted));
+                ui.label(section(t("Angle")));
                 ui.add(
                     egui::DragValue::new(&mut app.watermark.rotation_deg).range(-90.0..=90.0),
                 );
                 ui.checkbox(&mut app.watermark.tiled, t("Tiled"));
             });
             ui.horizontal(|ui| {
-                ui.label(RichText::new(t("Position")).size(12.0).color(pal().muted));
+                ui.label(section(t("Position")));
                 use youpdf_core::watermark::WatermarkPosition as Pos;
                 let current = app.watermark.position;
                 egui::ComboBox::from_id_salt("wm-position")
@@ -56,7 +56,7 @@ impl YouPdfApp {
                             }
                         }
                     });
-                ui.label(RichText::new(t("Offset")).size(12.0).color(pal().muted));
+                ui.label(section(t("Offset")));
                 ui.add(
                     egui::DragValue::new(&mut app.watermark.offset_x)
                         .range(-400.0..=400.0)
@@ -70,7 +70,7 @@ impl YouPdfApp {
             });
             if app.watermark.tiled {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(t("Tile gap")).size(12.0).color(pal().muted));
+                    ui.label(section(t("Tile gap")));
                     ui.add(
                         egui::DragValue::new(&mut app.watermark.tile_gap).range(0.0..=400.0),
                     );
@@ -78,16 +78,16 @@ impl YouPdfApp {
             }
             ui.checkbox(&mut app.watermark.behind, t("Behind page content"));
             ui.horizontal(|ui| {
-                ui.label(RichText::new(t("Opacity")).size(12.0).color(pal().muted));
+                ui.label(section(t("Opacity")));
                 ui.add(
                     egui::Slider::new(&mut app.watermark.opacity, 0.05..=1.0).show_value(false),
                 );
                 ui.label(
                     RichText::new(format!("{:.0} %", app.watermark.opacity * 100.0))
-                        .size(12.0)
+                        
                         .color(pal().icon_bright),
                 );
-                ui.label(RichText::new(t("Grey")).size(12.0).color(pal().muted));
+                ui.label(section(t("Grey")));
                 let mut grey = app.watermark.color[0];
                 if ui
                     .add(egui::Slider::new(&mut grey, 0..=255).show_value(false))
@@ -97,17 +97,17 @@ impl YouPdfApp {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label(RichText::new(t("Pages")).size(12.0).color(pal().muted));
+                ui.label(section(t("Pages")));
                 let mut all = app.watermark_from.is_none();
                 if ui.checkbox(&mut all, format!("All ({total})")).changed() {
                     app.watermark_from = if all { None } else { Some(1) };
                 }
                 if let Some(from) = app.watermark_from.as_mut() {
-                    ui.label(RichText::new(t("then from")).size(12.0).color(pal().muted));
+                    ui.label(section(t("then from")));
                     ui.add(egui::DragValue::new(from).range(1..=total));
                 }
             });
-            ui.add_space(8.0);
+            ui.add_space(SPACE_L);
             ui.horizontal(|ui| {
                 if ui.button(t("Apply")).clicked() {
                     apply = true;
@@ -168,32 +168,32 @@ impl YouPdfApp {
                     "Each band has its own three slots; the page number joins the \
                      footer centre.",
                 )
-                .size(11.0)
+                .size(LABEL)
                 .color(pal().muted),
             );
-            ui.add_space(4.0);
+            ui.add_space(SPACE_S);
             for (label, slots) in [
                 ("Header", &mut app.header_footer.header),
                 ("Footer", &mut app.header_footer.footer),
             ] {
-                ui.label(RichText::new(label).size(11.5).color(pal().icon_bright));
+                ui.label(RichText::new(label).size(BODY).color(pal().icon_bright));
                 egui::Grid::new(format!("hf-grid-{label}"))
                     .num_columns(3)
                     .spacing([8.0, 4.0])
                     .show(ui, |ui| {
-                        ui.label(RichText::new(t("Left")).size(11.0).color(pal().muted));
-                        ui.label(RichText::new(t("Centre")).size(11.0).color(pal().muted));
-                        ui.label(RichText::new(t("Right")).size(11.0).color(pal().muted));
+                        ui.label(muted(t("Left"), LABEL));
+                        ui.label(muted(t("Centre"), LABEL));
+                        ui.label(muted(t("Right"), LABEL));
                         ui.end_row();
                         ui.add(TextEdit::singleline(&mut slots.left).desired_width(140.0));
                         ui.add(TextEdit::singleline(&mut slots.center).desired_width(140.0));
                         ui.add(TextEdit::singleline(&mut slots.right).desired_width(140.0));
                         ui.end_row();
                     });
-                ui.add_space(4.0);
+                ui.add_space(SPACE_S);
             }
             ui.horizontal(|ui| {
-                ui.label(RichText::new(t("Page numbers")).size(12.0).color(pal().muted));
+                ui.label(section(t("Page numbers")));
                 for (text, style) in [
                     ("None", None),
                     ("1", Some(NumberStyle::Numeric)),
@@ -209,26 +209,26 @@ impl YouPdfApp {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label(RichText::new(t("Start at")).size(12.0).color(pal().muted));
+                ui.label(section(t("Start at")));
                 ui.add(egui::DragValue::new(&mut app.header_footer.start_page).range(1..=total));
                 ui.checkbox(&mut app.header_footer.skip_first_page, t("Skip first page"));
-                ui.label(RichText::new(t("Size")).size(12.0).color(pal().muted));
+                ui.label(section(t("Size")));
                 ui.add(egui::DragValue::new(&mut app.header_footer.font_size).range(4.0..=36.0));
-                ui.label(RichText::new(t("Margin")).size(12.0).color(pal().muted));
+                ui.label(section(t("Margin")));
                 ui.add(egui::DragValue::new(&mut app.header_footer.margin).range(0.0..=120.0));
             });
             ui.horizontal(|ui| {
-                ui.label(RichText::new(t("Pages")).size(12.0).color(pal().muted));
+                ui.label(section(t("Pages")));
                 let mut all = app.header_footer_from.is_none();
                 if ui.checkbox(&mut all, format!("All ({total})")).changed() {
                     app.header_footer_from = if all { None } else { Some(1) };
                 }
                 if let Some(from) = app.header_footer_from.as_mut() {
-                    ui.label(RichText::new(t("then from")).size(12.0).color(pal().muted));
+                    ui.label(section(t("then from")));
                     ui.add(egui::DragValue::new(from).range(1..=total));
                 }
             });
-            ui.add_space(8.0);
+            ui.add_space(SPACE_L);
             ui.horizontal(|ui| {
                 if ui.button(t("Apply")).clicked() {
                     apply = true;
@@ -284,14 +284,10 @@ impl YouPdfApp {
         let mut estimate = false;
         self.show_modal(ctx, "modal-compress", "Compress", 380.0, &mut open, |app, ui| {
             ui.label(
-                RichText::new(
-                    "Streams are deflated and unreachable objects are dropped.                          Fonts are not subset, so a text-only file barely shrinks.",
-                )
-                .size(12.0)
-                .color(pal().muted),
+                section("Streams are deflated and unreachable objects are dropped.                          Fonts are not subset, so a text-only file barely shrinks.",),
             );
-            ui.add_space(8.0);
-            ui.label(RichText::new(t("Image quality")).size(12.0).color(pal().muted));
+            ui.add_space(SPACE_L);
+            ui.label(section(t("Image quality")));
             for level in CompressionLevel::ALL {
                 if ui
                     .selectable_label(app.compress_level == level, level.display_name())
@@ -300,16 +296,16 @@ impl YouPdfApp {
                     app.compress_level = level;
                 }
             }
-            ui.add_space(6.0);
+            ui.add_space(SPACE_M);
             ui.label(
                 RichText::new(
                     "Images are resampled to the chosen resolution and re-encoded as JPEG.                          A stream is replaced only when the result is smaller.",
                 )
-                .size(11.0)
+                .size(LABEL)
                 .color(pal().muted),
             );
-            ui.add_space(6.0);
-            ui.label(RichText::new(t("Also remove")).size(12.0).color(pal().muted));
+            ui.add_space(SPACE_M);
+            ui.label(section(t("Also remove")));
             ui.checkbox(&mut app.compress_extras.strip_metadata, t("Metadata and XMP"));
             ui.checkbox(&mut app.compress_extras.strip_thumbnails, t("Page thumbnails"));
             ui.checkbox(&mut app.compress_extras.strip_bookmarks, t("Bookmarks"));
@@ -333,16 +329,16 @@ impl YouPdfApp {
                             before as f64 / 1024.0,
                             after as f64 / 1024.0
                         ))
-                        .size(11.0)
+                        .size(LABEL)
                         .color(pal().icon_bright),
                     );
                 }
             });
             if let Some(report) = app.compress_report.clone() {
-                ui.add_space(6.0);
-                ui.label(RichText::new(report).size(12.0).color(pal().icon_bright));
+                ui.add_space(SPACE_M);
+                ui.label(RichText::new(report).color(pal().icon_bright));
             }
-            ui.add_space(8.0);
+            ui.add_space(SPACE_L);
             if ui.button(t("Save compressed copy…")).clicked() {
                 run = true;
             }
@@ -367,7 +363,6 @@ impl YouPdfApp {
             self.compress_open = false;
         }
     }
-
 
     /// Écrit une copie compressée du document, et retient le bilan.
     pub(super) fn compress_active(&mut self, ctx: &egui::Context) {

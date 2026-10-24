@@ -13,4 +13,7 @@ pub mod theme;
 
 pub use error::{Error, Result};
 pub use i18n::{t, Language};
-pub use theme::{pal, set_palette, Palette, Theme};
+pub use theme::{
+    caption, modal_frame, muted, pal, section, set_palette, Palette, Theme, BODY, CAPTION, LABEL,
+    MONO, TITLE, RADIUS_L, RADIUS_M, RADIUS_S, RADIUS_XS, SPACE_L, SPACE_M, SPACE_S, SPACE_XS,
+};
