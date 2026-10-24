@@ -22,6 +22,7 @@
 //! - [`util`]     : aides partagées (zlib, échappement XML/CSV)
 
 pub mod annotate;
+pub mod annotation;
 pub mod compare;
 pub mod compress;
 pub mod convert;
@@ -45,6 +46,7 @@ pub mod render;
 pub mod search;
 pub mod signature;
 pub mod structure;
+pub mod text;
 pub mod units;
 pub mod util;
 pub mod watermark;

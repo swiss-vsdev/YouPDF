@@ -245,7 +245,7 @@ impl YouPdfApp {
             let Some(path) = tab.path.clone() else {
                 continue;
             };
-            let annots = annots_to_page(&tab.doc, &tab.annots);
+            let annots = youpdf_core::annotation::transform::annots_to_page(&tab.doc, &tab.annots);
             if tab.doc.save_with_annotations(&path, &annots).is_ok() {
                 tab.dirty = false;
                 tab.structural_dirty = false;
