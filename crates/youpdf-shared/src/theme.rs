@@ -6,11 +6,40 @@
 //! thème sans redémarrer.
 //!
 //! **Aucune couleur en dur ailleurs que dans ce fichier** : tout le chrome
-//! passe par les jetons de [`Palette`].
+//! passe par les jetons de [`Palette`]. Les tailles de texte ont la même règle :
+//! l'échelle [`CAPTION`] → [`BODY`] → [`TITLE`] est posée une fois pour toutes
+//! dans [`Theme::apply`], un simple `ui.label` en hérite donc, et les variantes
+//! éteintes se posent avec [`section`] et [`caption`].
 
 use std::cell::Cell;
 
-use egui::{Color32, Context, Rounding, Stroke, Visuals};
+use egui::{Color32, Context, FontId, RichText, Rounding, Stroke, TextStyle, Visuals};
+
+/// Texte secondaire : aide, horodatages, libellés d'un seul mot.
+pub const CAPTION: f32 = 10.5;
+/// Libellés de champ et lignes denses, entre l'aide et le texte courant.
+pub const LABEL: f32 = 11.0;
+/// Texte courant, boutons, titres de section : la taille de base.
+pub const BODY: f32 = 12.0;
+/// Titres de panneau, d'onglet, de fenêtre et d'écran d'accueil.
+pub const TITLE: f32 = 13.0;
+/// Champs et tableaux monospace.
+pub const MONO: f32 = 11.0;
+
+/// Texte éteint à la taille voulue : toute la peinture sourde passe par là.
+pub fn muted(text: impl Into<String>, size: f32) -> RichText {
+    RichText::new(text).size(size).color(pal().muted)
+}
+
+/// Titre de section : [`BODY`] éteint.
+pub fn section(text: impl Into<String>) -> RichText {
+    muted(text, BODY)
+}
+
+/// Texte secondaire : [`CAPTION`] éteint.
+pub fn caption(text: impl Into<String>) -> RichText {
+    muted(text, CAPTION)
+}
 
 /// Couleurs de l'interface, choisies par le thème.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,6 +165,19 @@ impl Theme {
         ctx.style_mut(|style| {
             style.spacing.button_padding = egui::vec2(8.0, 4.0);
             style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+
+            // Échelle typographique : posée ici, nulle part ailleurs. Un
+            // `ui.label` ou un `ui.button` sans `RichText` lit ces entrées, il
+            // n'a donc pas besoin d'être recalibré à l'appel.
+            for (text_style, font) in [
+                (TextStyle::Small, FontId::proportional(CAPTION)),
+                (TextStyle::Body, FontId::proportional(BODY)),
+                (TextStyle::Button, FontId::proportional(BODY)),
+                (TextStyle::Monospace, FontId::monospace(MONO)),
+                (TextStyle::Heading, FontId::proportional(TITLE)),
+            ] {
+                style.text_styles.insert(text_style, font);
+            }
         });
     }
 }
