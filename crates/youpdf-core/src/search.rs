@@ -290,3 +290,235 @@ impl SearchIndex {
         &self.text
     }
 }
+
+/// Positions `(début, fin)` des occurrences de `needle` dans `text`.
+///
+/// C'est la règle de correspondance de la recherche, appliquée à une ligne
+/// de fragment : `needle` est le texte **brut** de la requête (non plié), et
+/// [`SearchOptions`] décide de la casse et du mot entier. Les positions sont
+/// des indices d'octets dans `text` : le pliage de [`fold_case`] préserve la
+/// longueur en octets.
+pub fn query_matches(text: &str, needle: &str, options: SearchOptions) -> Vec<(usize, usize)> {
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let (haystack, needle): (std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>) =
+        if options.case_sensitive {
+            (text.into(), needle.into())
+        } else {
+            (fold_case(text).into(), fold_case(needle).into())
+        };
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(offset) = haystack[cursor..].find(needle.as_ref()) {
+        let start = cursor + offset;
+        let end = start + needle.len();
+        // Le pliage préserve la longueur, mais `find` peut tomber sur une
+        // frontière valide sans que `end` le soit : on ne découpe jamais
+        // au milieu d'un caractère.
+        if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            cursor = end.max(start + 1);
+            continue;
+        }
+        // Comme l'index : un mot entier se juge sur le texte d'origine.
+        if options.whole_word && !is_whole_word(text, start, end) {
+            cursor = end.max(start + 1);
+            continue;
+        }
+        out.push((start, end));
+        cursor = end.max(start + 1);
+    }
+    out
+}
+
+/// Sous-rectangles d'une ligne couvrant chaque occurrence de `needle`.
+///
+/// Le texte d'un fragment est une ligne : la position de la correspondance
+/// dans la chaîne donne sa place proportionnelle dans la largeur du
+/// rectangle. C'est une approximation (police proportionnelle), suffisante
+/// pour surligner ou marquer une correspondance.
+///
+/// `needle` est le texte brut de la requête : la casse et le mot entier sont
+/// ceux de `options`, exactement comme pour les résultats de l'index.
+pub fn match_rects(
+    text: &str,
+    rect: [f32; 4],
+    needle: &str,
+    options: SearchOptions,
+) -> Vec<[f32; 4]> {
+    let total = text.len().max(1) as f32;
+    let width = rect[2] - rect[0];
+    let mut out = Vec::new();
+    for (start, end) in query_matches(text, needle, options) {
+        let before = start as f32 / total;
+        let hit = ((end - start) as f32 / total).min(1.0 - before);
+        let left = rect[0] + width * before;
+        let right = (rect[0] + width * (before + hit)).max(left + 2.0);
+        out.push([left, rect[1], right, rect[3]]);
+    }
+    out
+}
+
+/// Remplace toutes les occurrences de `needle` dans `text`.
+///
+/// `needle` est le texte brut de la requête ; `options` applique les mêmes
+/// règles que [`match_rects`] et que l'index de recherche.
+pub fn replace_occurrences(
+    text: &str,
+    needle: &str,
+    replacement: &str,
+    options: SearchOptions,
+) -> String {
+    let hits = query_matches(text, needle, options);
+    if hits.is_empty() {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+    for (start, end) in hits {
+        out.push_str(&text[cursor..start]);
+        out.push_str(replacement);
+        cursor = end;
+    }
+    out.push_str(&text[cursor..]);
+    out
+}
+
+/// Première occurrence de `needle` dans `hay`, avec les filtres de `options`.
+///
+/// Les signets et les commentaires ne passent pas par l'index : sans ce
+/// détour par [`query_matches`], une recherche « mot entier » y trouverait
+/// encore des sous-chaînes que la page, elle, refuse.
+pub fn find_query(hay: &str, needle: &str, options: SearchOptions) -> Option<(usize, usize)> {
+    query_matches(hay, needle, options).first().copied()
+}
+
+
+#[cfg(test)]
+mod match_tests {
+    use super::{find_query, match_rects, query_matches, replace_occurrences, SearchOptions};
+
+    #[test]
+    fn find_query_matches_with_and_without_case() {
+        let insensitive = SearchOptions::default();
+        let sensitive = SearchOptions {
+            case_sensitive: true,
+            whole_word: false,
+        };
+        let whole = SearchOptions {
+            case_sensitive: false,
+            whole_word: true,
+        };
+        assert_eq!(find_query("Hello World", "world", insensitive), Some((6, 11)));
+        assert_eq!(find_query("Hello World", "world", sensitive), None);
+        assert_eq!(find_query("accents ÉglIsE", "église", insensitive), Some((8, 15)));
+        // Les signets et les commentaires suivent le même filtre « mot
+        // entier » que les pages.
+        assert_eq!(find_query("Worldwide", "world", whole), None);
+        assert_eq!(find_query("Hello World", "world", whole), Some((6, 11)));
+    }
+
+    /// Les correspondances d'un fragment suivent la casse et le mot entier :
+    /// les mêmes règles que l'index, sans quoi le surlignage mentirait.
+
+    #[test]
+    fn query_matches_honours_case_and_whole_word() {
+        let insensitive = SearchOptions::default();
+        let sensitive = SearchOptions {
+            case_sensitive: true,
+            whole_word: false,
+        };
+        let whole = SearchOptions {
+            case_sensitive: false,
+            whole_word: true,
+        };
+        assert_eq!(
+            query_matches("cat Cat catalog", "cat", insensitive),
+            vec![(0, 3), (4, 7), (8, 11)]
+        );
+        assert_eq!(
+            query_matches("cat Cat catalog", "cat", sensitive),
+            vec![(0, 3), (8, 11)]
+        );
+        // « catalog » n'est pas un mot : seules les occurrences isolées
+        // comptent, mais « Cat » en est une.
+        assert_eq!(
+            query_matches("cat Cat catalog", "cat", whole),
+            vec![(0, 3), (4, 7)]
+        );
+        assert_eq!(query_matches("a scat here", "cat", whole), Vec::new());
+        // Une requête vide ne correspond à rien, même contre du vide.
+        assert!(query_matches("abc", "   ", insensitive).is_empty());
+    }
+
+    /// Le remplacement applique les mêmes filtres que le surlignage.
+
+    #[test]
+    fn replace_occurrences_honours_case_and_whole_word() {
+        let insensitive = SearchOptions::default();
+        let sensitive = SearchOptions {
+            case_sensitive: true,
+            whole_word: false,
+        };
+        let whole = SearchOptions {
+            case_sensitive: false,
+            whole_word: true,
+        };
+        assert_eq!(
+            replace_occurrences("cat Cat catalog", "cat", "dog", insensitive),
+            "dog dog dogalog"
+        );
+        assert_eq!(
+            replace_occurrences("cat Cat catalog", "cat", "dog", sensitive),
+            "dog Cat dogalog"
+        );
+        assert_eq!(
+            replace_occurrences("cat Cat catalog", "cat", "dog", whole),
+            "dog dog catalog"
+        );
+        // Aucune occurrence : la chaîne revient intacte.
+        assert_eq!(
+            replace_occurrences("scatter", "cat", "dog", whole),
+            "scatter"
+        );
+    }
+
+    /// Les rectangles de surlignage se placent proportionnellement dans la
+    /// ligne et ne marquent pas les correspondances refusées par les filtres.
+
+    #[test]
+    fn match_rects_places_only_accepted_matches() {
+        let rect = [0.0, 10.0, 110.0, 20.0]; // 11 caractères → 10 pt chacun
+        let insensitive = SearchOptions::default();
+        let whole = SearchOptions {
+            case_sensitive: false,
+            whole_word: true,
+        };
+        let sensitive = SearchOptions {
+            case_sensitive: true,
+            whole_word: false,
+        };
+
+        let all = match_rects("cat cat cat", rect, "cat", insensitive);
+        assert_eq!(all.len(), 3);
+        let lefts: Vec<f32> = all.iter().map(|r| r[0]).collect();
+        for (got, want) in lefts.iter().zip([0.0, 40.0, 80.0]) {
+            assert!((got - want).abs() < 0.5, "gauche {got} ≠ {want}");
+        }
+        // Chaque rectangle couvre la largeur de la correspondance, et garde
+        // la hauteur de la ligne.
+        for r in &all {
+            assert!((r[2] - r[0] - 30.0).abs() < 0.5, "largeur {}", r[2] - r[0]);
+            assert_eq!(r[1], rect[1]);
+            assert_eq!(r[3], rect[3]);
+        }
+
+        // « catalog » : le mot entier refuse la correspondance.
+        assert!(match_rects("catalog", rect, "cat", whole).is_empty());
+        // Sensible à la casse : « Cat » ne compte pas.
+        assert_eq!(match_rects("cat Cat", rect, "cat", sensitive).len(), 1);
+        // Requête vide : aucun rectangle.
+        assert!(match_rects("cat", rect, " ", insensitive).is_empty());
+    }
+}
