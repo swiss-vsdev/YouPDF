@@ -81,6 +81,49 @@ impl PageBitmap {
         }
     }
 
+    /// Couleur de fond autour d'un rectangle : echantillonne six points juste
+    /// exterieur au bloc (deux rangees, trois positions horizontales) et prend
+    /// la mediane par canal. `None` si aucun point ne tombe dans le bitmap.
+    ///
+    /// `rect` est en repere affiche, `scale` le rapport pixels/point du bitmap.
+    pub fn background_color_around(&self, scale: f32, rect: [f32; 4]) -> Option<[u8; 3]> {
+        if scale <= 0.0 || self.width == 0 || self.height == 0 {
+            return None;
+        }
+        // Hauteur de la page en points du repere affiche.
+        let page_h = self.height as f32 / scale;
+        let [x1, y1, x2, y2] = rect;
+        let mut samples: Vec<[u8; 3]> = Vec::with_capacity(6);
+        for y in [y2 + 2.0_f32, y1 - 2.0] {
+            for t in [0.2_f32, 0.5, 0.8] {
+                let x = x1 + (x2 - x1) * t;
+                let px = (x * scale) as i64;
+                let py = ((page_h - y) * scale) as i64;
+                if px < 0 || py < 0 || px >= self.width as i64 || py >= self.height as i64 {
+                    continue;
+                }
+                let idx = (py as usize * self.width as usize + px as usize) * 4;
+                if idx + 2 < self.pixels.len() {
+                    samples.push([
+                        self.pixels[idx],
+                        self.pixels[idx + 1],
+                        self.pixels[idx + 2],
+                    ]);
+                }
+            }
+        }
+        if samples.is_empty() {
+            return None;
+        }
+        let mut out = [0u8; 3];
+        for (channel, slot) in out.iter_mut().enumerate() {
+            let mut values: Vec<u8> = samples.iter().map(|s| s[channel]).collect();
+            values.sort_unstable();
+            *slot = values[values.len() / 2];
+        }
+        Some(out)
+    }
+
     /// Construit un `egui::ColorImage` à partir du bitmap.
     ///
     /// Conversion directe : pdfium produit du BGRA, egui attend du RGBA.
@@ -546,6 +589,41 @@ impl Renderer for NullRenderer {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn background_color_around_takes_median_of_border_samples() {
+        // Trois bandes verticales : noir (x < 42), gris 128 (42..58), blanc.
+        // Un bloc centre echantillonne x = 38, 50, 62 sur deux rangees :
+        // la mediane par canal est le gris du milieu.
+        let w = 100;
+        let h = 100;
+        let mut pixels = vec![0u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let v = if x < 42 { 0 } else if x < 58 { 128 } else { 255 };
+                let i = (y * w + x) * 4;
+                pixels[i] = v;
+                pixels[i + 1] = v;
+                pixels[i + 2] = v;
+                pixels[i + 3] = 255;
+            }
+        }
+        let bitmap = PageBitmap {
+            width: w as u32,
+            height: h as u32,
+            pixels,
+        };
+        // rect en repere affiche (y vers le haut), scale = 1 pt = 1 px.
+        let color = bitmap
+            .background_color_around(1.0, [30.0, 40.0, 70.0, 60.0])
+            .unwrap();
+        assert_eq!(color, [128, 128, 128], "mediane attendue au milieu : {color:?}");
+        // Aucun point utilisable hors bitmap -> None.
+        assert!(bitmap
+            .background_color_around(1.0, [500.0, 500.0, 600.0, 600.0])
+            .is_none());
+        assert!(bitmap.background_color_around(0.0, [0.0, 0.0, 1.0, 1.0]).is_none());
+    }
+
     use super::*;
     use crate::{Annotation, AnnotationKind};
 
