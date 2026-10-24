@@ -162,6 +162,57 @@ pub fn toggle_star(stars: &mut Vec<PathBuf>, path: &Path) -> bool {
     }
 }
 
+/// Fichier des fichiers récents (`~/.youpdf/recents.txt`, un chemin par ligne).
+fn recents_file() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join(".youpdf").join("recents.txt"))
+}
+
+/// Lit la liste des fichiers récents ; liste vide si le fichier manque.
+pub fn load_recents() -> Vec<PathBuf> {
+    let Some(path) = recents_file() else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| PathBuf::from(line.trim()))
+        .take(8)
+        .collect()
+}
+
+/// Écrit la liste des fichiers récents. Une erreur d'écriture est ignorée :
+/// la liste est un confort, pas une donnée du document.
+pub fn save_recents(recents: &[PathBuf]) {
+    let Some(path) = recents_file() else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let body: String = recents
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = std::fs::write(path, body);
+}
+
+/// Tronque `text` à `max` caractères, en ajoutant un point de suspension
+/// si elle dépasse. Une chaîne de longueur exacte ou inférieure est renvoyée
+/// telle quelle.
+pub fn shorten(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        text.to_owned()
+    } else {
+        let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+        out.push('\u{2026}');
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
