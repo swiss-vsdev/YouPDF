@@ -848,20 +848,7 @@ impl YouPdfApp {
                             &mut content_drag, inspector_hovered,
                         );
 
-                        // Repères de la page : le même calcul sert aux outils
-                        // d'annotation et à la sélection de texte.
-                        let to_pdf = |pos: egui::Pos2| -> [f32; 2] {
-                            [
-                                (pos.x - page_rect.min.x) / scale,
-                                (page_rect.max.y - pos.y) / scale,
-                            ]
-                        };
-                        let to_screen = |p: [f32; 2]| -> egui::Pos2 {
-                            pos2(
-                                page_rect.min.x + p[0] * scale,
-                                page_rect.max.y - p[1] * scale,
-                            )
-                        };
+
 
                         // Sélection de texte : c'est l'état de lecture, donc elle
                         // ne dépend pas de l'outil. Elle est active quand aucun

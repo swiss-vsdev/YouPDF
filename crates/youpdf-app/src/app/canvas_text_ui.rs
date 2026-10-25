@@ -9,18 +9,18 @@ use super::canvas_ui::CanvasFrame;
 /// (copie, tout sélectionner, mise en évidence) sont différées dans
 /// `frame`.
 pub(super) fn page_text_select(
-    ui: &mut egui::Ui,
+    _ui: &mut egui::Ui,
     tab: &mut Tab,
     renderer: &dyn Renderer,
     frame: &mut CanvasFrame,
     page: u32,
-    rect: Rect,
+    _rect: Rect,
     page_rect: Rect,
     scale: f32,
     resp: &egui::Response,
-    active: usize,
-    mode: Option<usize>,
-    action: ToolAction,
+    _active: usize,
+    _mode: Option<usize>,
+    _action: ToolAction,
     markup_kind: Option<AnnotationKind>,
     text_drag: bool,
 ) {
