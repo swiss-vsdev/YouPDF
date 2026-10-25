@@ -397,10 +397,6 @@ pub fn unique_stamp() -> String {
     format!("{millis}-{}", std::process::id())
 }
 
-/// Durée de conservation d'une extraction de pièce jointe temporaire.
-const ATTACHMENT_STAGING_MAX_AGE: std::time::Duration =
-    std::time::Duration::from_secs(24 * 60 * 60);
-
 /// Extrait une pièce jointe dans un dossier temporaire privé et unique.
 ///
 /// Les pièces jointes peuvent être confidentielles : le dossier n'appartient

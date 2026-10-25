@@ -10,8 +10,6 @@
 //! l'installation.
 
 
-use pdfium_render::prelude::*;
-
 use youpdf_shared::{Error, Result};
 
 use crate::document::Document;
