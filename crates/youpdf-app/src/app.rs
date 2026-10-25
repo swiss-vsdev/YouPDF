@@ -46,6 +46,7 @@ mod text_edit_ui;
 mod slideshow_ui;
 mod tabs_ui;
 mod windows_ui;
+mod canvas_commit;
 mod canvas_ui;
 mod toolbar_ui;
 mod comments_ui;

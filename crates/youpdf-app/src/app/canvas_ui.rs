@@ -3,6 +3,80 @@
 
 use super::*;
 
+
+/// Ce que la trame du canevas relève pendant le dessiné des pages,
+/// et que `YouPdfApp::commit_canvas_frame` applique à la fin de la
+/// trame. Les rectangles sont en repère page sauf mention contraire.
+pub(super) struct CanvasFrame {
+    pub(super) ctx: egui::Context,
+    pub(super) action: ToolAction,
+    pub(super) sel: Option<TextSel>,
+    pub(super) sel_all: bool,
+    pub(super) sel_copy: bool,
+    pub(super) sel_markup: Option<AnnotationKind>,
+    pub(super) form_draft: Option<(usize, String)>,
+    pub(super) form_commit: bool,
+    pub(super) form_cancel: bool,
+    pub(super) edit_commit: bool,
+    pub(super) edit_cancel: bool,
+    pub(super) inspector_target: Option<InspectorTarget>,
+    pub(super) crop_next: Option<ImageCrop>,
+    pub(super) pending_text_move: Option<(TextFragment, [f32; 2], f32)>,
+    pub(super) pending_image_move: Option<(SelectedImage, [f32; 2], f32)>,
+    pub(super) pending_image_scale: Option<(SelectedImage, [f32; 6])>,
+    pub(super) pending_image_rotate: Option<(SelectedImage, f32)>,
+    pub(super) pending_rect: Option<(usize, AnnotationKind, [f32; 4])>,
+    pub(super) pending_markup: Option<(usize, AnnotationKind, Vec<[f32; 8]>)>,
+    pub(super) pending_ink: Option<(usize, Vec<[f32; 2]>)>,
+    pub(super) pending_click: Option<(usize, [f32; 2])>,
+    pub(super) pending_hit: Option<(usize, [f32; 2])>,
+    pub(super) pending_erase_segment: Option<(usize, [f32; 2], [f32; 2])>,
+    pub(super) pending_edit: Option<(usize, [f32; 2])>,
+    pub(super) pending_image: Option<(usize, [f32; 2])>,
+    pub(super) pending_redact: Option<(usize, [f32; 4])>,
+    pub(super) pending_form: Option<(usize, [f32; 4], FormKind)>,
+    pub(super) pending_form_select: Option<(usize, [f32; 4])>,
+    pub(super) pending_measure: Option<(usize, [f32; 2], [f32; 2])>,
+    pub(super) pending_link: Option<LinkAction>,
+}
+
+impl Default for CanvasFrame {
+    fn default() -> Self {
+        Self {
+            ctx: egui::Context::default(),
+            action: ToolAction::None,
+            sel: None,
+            sel_all: false,
+            sel_copy: false,
+            sel_markup: None,
+            form_draft: None,
+            form_commit: false,
+            form_cancel: false,
+            edit_commit: false,
+            edit_cancel: false,
+            inspector_target: None,
+            crop_next: None,
+            pending_text_move: None,
+            pending_image_move: None,
+            pending_image_scale: None,
+            pending_image_rotate: None,
+            pending_rect: None,
+            pending_markup: None,
+            pending_ink: None,
+            pending_click: None,
+            pending_hit: None,
+            pending_erase_segment: None,
+            pending_edit: None,
+            pending_image: None,
+            pending_redact: None,
+            pending_form: None,
+            pending_form_select: None,
+            pending_measure: None,
+            pending_link: None,
+        }
+    }
+}
+
 impl YouPdfApp {
 
         /// Fenêtre « Traitement par lots » : plusieurs fichiers, mêmes opérations.
@@ -69,8 +143,13 @@ impl YouPdfApp {
                 Some(d) => self.mask_color(d.fragment.page, d.fragment.rect),
                 None => [255, 255, 255],
             };
-            let mut edit_commit = false;
-            let mut edit_cancel = false;
+            let mut frame = CanvasFrame {
+                ctx: ctx.clone(),
+                action,
+                sel: self.text_sel,
+                form_draft: self.form_edit.take(),
+                ..Default::default()
+            };
             // Sélection de texte : c'est l'état de lecture. Elle est active quand
             // aucun mode n'est ouvert, ou dans le mode Commentaire sans outil ou
             // avec l'outil Sélection. Aucun de ces états ne consomme le glissé.
@@ -84,13 +163,8 @@ impl YouPdfApp {
                 _ => None,
             };
             let text_drag = select_text_tool || markup_kind.is_some();
-            let mut sel = self.text_sel;
-            let mut sel_copy = false;
-            let mut sel_all = false;
-            let mut sel_markup: Option<AnnotationKind> = None;
             // Un clic suivi sur un lien est exécuté après la trame : l'action
             // touche le document et le focus, pas le canevas.
-            let mut pending_link: Option<LinkAction> = None;
             let renderer = &*self.renderer;
             let status = &mut self.render_status;
             let last_fit = &mut self.last_fit;
@@ -107,18 +181,6 @@ impl YouPdfApp {
             let ink_current = &mut self.ink_current;
             let drag_from = &mut self.drag_from;
             let drag_to = &mut self.drag_to;
-            let mut pending_rect: Option<(usize, AnnotationKind, [f32; 4])> = None;
-            let mut pending_markup: Option<(usize, AnnotationKind, Vec<[f32; 8]>)> = None;
-            let mut pending_ink: Option<(usize, Vec<[f32; 2]>)> = None;
-            let mut pending_click: Option<(usize, [f32; 2])> = None;
-            let mut pending_hit: Option<(usize, [f32; 2])> = None;
-            let mut pending_erase_segment: Option<(usize, [f32; 2], [f32; 2])> = None;
-            let mut pending_edit: Option<(usize, [f32; 2])> = None;
-            let mut pending_image: Option<(usize, [f32; 2])> = None;
-            let mut pending_redact: Option<(usize, [f32; 4])> = None;
-            let mut pending_form: Option<(usize, [f32; 4], FormKind)> = None;
-            let mut pending_form_select: Option<(usize, [f32; 4])> = None;
-            let mut pending_measure: Option<(usize, [f32; 2], [f32; 2])> = None;
             let redact_marks = &self.redact_marks;
             let callout_pending = self.callout_pending;
             let search_rects = &self.search_rects;
@@ -149,20 +211,11 @@ impl YouPdfApp {
             let form_editing = self.form_editing;
             let form_hover = self.form_hover;
             let form_selection = self.form_selection.clone();
-            let mut form_draft = self.form_edit.take();
-            let mut form_commit = false;
-            let mut form_cancel = false;
-            let mut inspector_target: Option<InspectorTarget> = None;
             // L'image sélectionnée et le rognage en cours sont lus une fois : la
             // trame du canevas emprunte les onglets, elle ne peut pas toucher à
             // `self` en même temps.
             let selected_image = self.selected_image.clone();
             let crop_draft = self.image_crop;
-            let mut crop_next: Option<ImageCrop> = None;
-            let mut pending_text_move: Option<(TextFragment, [f32; 2], f32)> = None;
-            let mut pending_image_move: Option<(SelectedImage, [f32; 2], f32)> = None;
-            let mut pending_image_scale: Option<(SelectedImage, [f32; 6])> = None;
-            let mut pending_image_rotate: Option<(SelectedImage, f32)> = None;
 
             // Réserve pour les barres flottantes : les pages commencent sous la
             // barre d'outils, sinon la première page passe dessous.
@@ -337,7 +390,7 @@ impl YouPdfApp {
                             }
 
                             // Sélection de texte en cours.
-                            if let Some(s) = sel.as_ref() {
+                            if let Some(s) = frame.sel.as_ref() {
                                 if s.page == page {
                                     if let Some(frags) = tab.fragments.get(&page) {
                                         for [x1, y1, x2, y2] in hit_rects(frags, s.span) {
@@ -475,7 +528,7 @@ impl YouPdfApp {
                             }
 
                             // Éditeur en place du champ de formulaire touché.
-                            if let Some((idx, buffer)) = form_draft.as_mut() {
+                            if let Some((idx, buffer)) = frame.form_draft.as_mut() {
                                 if let Some(field) = tab.forms.get(*idx) {
                                     if field.page == Some(page as usize) && field.rect != [0.0; 4] {
                                         let [x1, y1, x2, y2] = field.rect;
@@ -518,7 +571,7 @@ impl YouPdfApp {
                                                             .clicked()
                                                         {
                                                             *buffer = option.clone();
-                                                            form_commit = true;
+                                                            frame.form_commit = true;
                                                         }
                                                     }
                                                 });
@@ -541,12 +594,12 @@ impl YouPdfApp {
                                                 resp.request_focus();
                                             }
                                             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                                form_cancel = true;
+                                                frame.form_cancel = true;
                                             } else if (single_line
                                                 && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                                                 || (resp.lost_focus() && !inspector_hovered)
                                             {
-                                                form_commit = true;
+                                                frame.form_commit = true;
                                             }
                                         }
                                     }
@@ -569,7 +622,7 @@ impl YouPdfApp {
                                                     page_rect.max.y - annot.rect[1] * scale,
                                                 ),
                                             );
-                                            inspector_target = Some(InspectorTarget::AnnotationElement {
+                                            frame.inspector_target = Some(InspectorTarget::AnnotationElement {
                                                 page: annot.page,
                                                 id: AnnotationId(idx),
                                                 bounds: screen,
@@ -632,7 +685,7 @@ impl YouPdfApp {
                                     }
                                     let block = block.translate(vec2(offset[0], offset[1]));
                                     if let Some((fragment, off)) = move_pending {
-                                        pending_text_move =
+                                        frame.pending_text_move =
                                             Some((fragment, off, scale));
                                     }
                                     // Un seul masque, au moins aussi grand que le
@@ -764,7 +817,7 @@ impl YouPdfApp {
                                                 })
                                             })
                                             .unwrap_or(0);
-                                        inspector_target =
+                                        frame.inspector_target =
                                             Some(InspectorTarget::TextElement {
                                                 page: d.fragment.page,
                                                 id: TextBlockId(block_id),
@@ -776,12 +829,12 @@ impl YouPdfApp {
                                         d.fresh = false;
                                     }
                                     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                        edit_cancel = true;
+                                        frame.edit_cancel = true;
                                     } else if (single_line
                                         && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                                         || (resp.lost_focus() && !inspector_hovered)
                                     {
-                                        edit_commit = true;
+                                        frame.edit_commit = true;
                                     }
                                 }
                             }
@@ -829,7 +882,7 @@ impl YouPdfApp {
                                         }
                                         offset = *o;
                                         if drag_resp.drag_stopped() {
-                                            pending_image_move =
+                                            frame.pending_image_move =
                                                 Some((image.clone(), offset, scale));
                                             content_drag = None;
                                         }
@@ -844,7 +897,7 @@ impl YouPdfApp {
                                     Rounding::same(RADIUS_XS),
                                     Stroke::new(1.5_f32, pal().accent),
                                 );
-                                inspector_target = Some(InspectorTarget::ImageElement {
+                                frame.inspector_target = Some(InspectorTarget::ImageElement {
                                     page: image.page,
                                     id: ImageId(image.index),
                                     bounds: box_screen,
@@ -942,7 +995,7 @@ impl YouPdfApp {
                                         scale_pending = Some([na, b, c, nd, ne, nf]);
                                     }
                                     if let Some(matrix) = scale_pending {
-                                        pending_image_scale =
+                                        frame.pending_image_scale =
                                             Some((image.clone(), matrix));
                                     }
                                     // Poignée de rotation au centre : un glissé
@@ -1011,7 +1064,7 @@ impl YouPdfApp {
                                             }
                                             if rotate_resp.drag_stopped() {
                                                 if accumulated.abs() > 0.5 {
-                                                    pending_image_rotate = Some((
+                                                    frame.pending_image_rotate = Some((
                                                         image.clone(),
                                                         *accumulated,
                                                     ));
@@ -1122,7 +1175,7 @@ impl YouPdfApp {
                                         }
                                     }
                                     if response_changed(crop, dragged) {
-                                        crop_next = Some(dragged);
+                                        frame.crop_next = Some(dragged);
                                     }
                                 }
                             }
@@ -1160,7 +1213,7 @@ impl YouPdfApp {
                                         .get(&page)
                                         .and_then(|frags| text_hit(frags, point));
                                     if let Some(hit) = hit {
-                                        sel = Some(TextSel {
+                                        frame.sel = Some(TextSel {
                                             page,
                                             span: Some((hit, hit)),
                                         });
@@ -1173,7 +1226,7 @@ impl YouPdfApp {
                                         .fragments
                                         .get(&page)
                                         .and_then(|frags| text_hit(frags, point));
-                                    if let (Some(s), Some(hit)) = (sel.as_mut(), hit) {
+                                    if let (Some(s), Some(hit)) = (frame.sel.as_mut(), hit) {
                                         if s.page == page {
                                             if let Some((_, head)) = s.span.as_mut() {
                                                 *head = hit;
@@ -1188,13 +1241,13 @@ impl YouPdfApp {
                                 if let Some(kind) = markup_kind {
                                     if let Some(frags) = tab.fragments.get(&page) {
                                         let quads =
-                                            hit_quads(frags, sel.and_then(|s| s.span));
+                                            hit_quads(frags, frame.sel.and_then(|s| s.span));
                                         if !quads.is_empty() {
-                                            pending_markup =
+                                            frame.pending_markup =
                                                 Some((page as usize, kind, quads));
                                         }
                                     }
-                                    sel = None;
+                                    frame.sel = None;
                                 }
                             }
                             if resp.clicked() {
@@ -1207,8 +1260,8 @@ impl YouPdfApp {
                                     link_at(&links, point).map(|link| link.action.clone())
                                 });
                                 if let Some(action) = link {
-                                    pending_link = Some(action);
-                                    sel = None;
+                                    frame.pending_link = Some(action);
+                                    frame.sel = None;
                                 } else {
                                     // Un double-clic prend le mot sous le pointeur, un
                                     // triple-clic la ligne entière. Un clic simple
@@ -1238,25 +1291,25 @@ impl YouPdfApp {
                                                         })
                                                     })
                                                 });
-                                            sel = span.map(|(start, end)| TextSel {
+                                            frame.sel = span.map(|(start, end)| TextSel {
                                                 page,
                                                 span: Some((start, end)),
                                             });
                                         }
-                                        None => sel = None,
+                                        None => frame.sel = None,
                                     }
                                 }
                             }
-                            let on_page = sel.map(|s| s.page == page).unwrap_or(false);
+                            let on_page = frame.sel.map(|s| s.page == page).unwrap_or(false);
                             // Un glissé explicite ouvre l'inspecteur ; « tout
                             // sélectionner » (sans ancre) couvrirait la page
                             // entière et n'apprendrait rien.
-                            let explicit_sel = sel.map(|s| s.span.is_some()).unwrap_or(false);
+                            let explicit_sel = frame.sel.map(|s| s.span.is_some()).unwrap_or(false);
                             if on_page && explicit_sel && markup_kind.is_none() {
                                 // Inspecteur de la sélection de texte : enveloppe
                                 // des blocs sélectionnés.
                                 if let Some(frags) = tab.fragments.get(&page) {
-                                    let runs = hit_runs(frags, sel.and_then(|s| s.span));
+                                    let runs = hit_runs(frags, frame.sel.and_then(|s| s.span));
                                     let mut union: Option<Rect> = None;
                                     for (index, _, _) in runs.iter().copied() {
                                         let frag = &frags[index];
@@ -1274,7 +1327,7 @@ impl YouPdfApp {
                                             runs.first().map(|run| run.0).unwrap_or(0),
                                             runs.last().map(|run| run.0).unwrap_or(0),
                                         );
-                                        inspector_target = Some(InspectorTarget::TextSelection {
+                                        frame.inspector_target = Some(InspectorTarget::TextSelection {
                                             page: page as usize,
                                             range,
                                             bounds,
@@ -1285,11 +1338,11 @@ impl YouPdfApp {
                             if on_page {
                                 resp.context_menu(|ui| {
                                     if ui.button(t("Copy")).clicked() {
-                                        sel_copy = true;
+                                        frame.sel_copy = true;
                                         ui.close_menu();
                                     }
                                     if ui.button(t("Select all")).clicked() {
-                                        sel_all = true;
+                                        frame.sel_all = true;
                                         ui.close_menu();
                                     }
                                     // Les quatre mises en évidence se posent sur
@@ -1298,7 +1351,7 @@ impl YouPdfApp {
                                     if explicit_sel {
                                         for (kind, label) in MARKUP_KINDS {
                                             if ui.button(label).clicked() {
-                                                sel_markup = Some(kind);
+                                                frame.sel_markup = Some(kind);
                                                 ui.close_menu();
                                             }
                                         }
@@ -1352,7 +1405,7 @@ impl YouPdfApp {
                                         let from = drag_from.take();
                                         let to = drag_to.take();
                                         if let (Some(a), Some(b)) = (from, to) {
-                                            pending_rect = Some((
+                                            frame.pending_rect = Some((
                                                 page as usize,
                                                 kind,
                                                 [
@@ -1426,7 +1479,7 @@ impl YouPdfApp {
                                     if resp.drag_stopped() {
                                         let smooth = smooth_polyline(ink_current, 4);
                                         ink_current.clear();
-                                        pending_ink = Some((page as usize, smooth));
+                                        frame.pending_ink = Some((page as usize, smooth));
                                     }
                                     if ink_current.len() > 1 {
                                         let pts: Vec<egui::Pos2> =
@@ -1440,7 +1493,7 @@ impl YouPdfApp {
                                 ToolAction::Click(_) => {
                                     if resp.clicked() {
                                         if let Some(p) = resp.interact_pointer_pos() {
-                                            pending_click = Some((page as usize, to_pdf(p)));
+                                            frame.pending_click = Some((page as usize, to_pdf(p)));
                                         }
                                     }
                                 }
@@ -1449,9 +1502,9 @@ impl YouPdfApp {
                                         if let Some(p) = resp.interact_pointer_pos() {
                                             let point = to_pdf(p);
                                             if action == ToolAction::EditText {
-                                                pending_edit = Some((page as usize, point));
+                                                frame.pending_edit = Some((page as usize, point));
                                             } else {
-                                                pending_image = Some((page as usize, point));
+                                                frame.pending_image = Some((page as usize, point));
                                             }
                                         }
                                     }
@@ -1470,7 +1523,7 @@ impl YouPdfApp {
                                         let from = drag_from.take();
                                         let to = drag_to.take();
                                         if let (Some(a), Some(b)) = (from, to) {
-                                            pending_redact = Some((
+                                            frame.pending_redact = Some((
                                                 page as usize,
                                                 [
                                                     a[0].min(b[0]),
@@ -1520,7 +1573,7 @@ impl YouPdfApp {
                                             } else {
                                                 (a, b)
                                             };
-                                            pending_measure = Some((page as usize, a, b));
+                                            frame.pending_measure = Some((page as usize, a, b));
                                         }
                                     }
                                     if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
@@ -1558,7 +1611,7 @@ impl YouPdfApp {
                                                 page as usize,
                                                 6.0 / scale,
                                             );
-                                            pending_form = Some((page as usize, rect, kind));
+                                            frame.pending_form = Some((page as usize, rect, kind));
                                         }
                                     }
                                     if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
@@ -1626,7 +1679,7 @@ impl YouPdfApp {
                                         }
                                         if resp.drag_stopped() {
                                             if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
-                                                pending_erase_segment = Some((page as usize, a, b));
+                                                frame.pending_erase_segment = Some((page as usize, a, b));
                                             }
                                             *drag_from = None;
                                             *drag_to = None;
@@ -1640,7 +1693,7 @@ impl YouPdfApp {
                                         }
                                     } else if resp.clicked() {
                                         if let Some(p) = resp.interact_pointer_pos() {
-                                            pending_hit = Some((page as usize, to_pdf(p)));
+                                            frame.pending_hit = Some((page as usize, to_pdf(p)));
                                         }
                                     }
                                 }
@@ -1667,7 +1720,7 @@ impl YouPdfApp {
                                                     a[0].max(b[0]),
                                                     a[1].max(b[1]),
                                                 ];
-                                                pending_form_select = Some((page as usize, rect));
+                                                frame.pending_form_select = Some((page as usize, rect));
                                             }
                                         }
                                         if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
@@ -1686,7 +1739,7 @@ impl YouPdfApp {
                                     }
                                     if resp.clicked() {
                                         if let Some(p) = resp.interact_pointer_pos() {
-                                            pending_hit = Some((page as usize, to_pdf(p)));
+                                            frame.pending_hit = Some((page as usize, to_pdf(p)));
                                         }
                                     }
                                 }
@@ -1736,303 +1789,7 @@ impl YouPdfApp {
 
             self.edit_text = draft;
             self.content_drag = content_drag;
-            if let Some((fragment, off, scale)) = pending_text_move {
-                self.commit_text_block_move(&fragment, off, scale, &ctx);
-                self.edit_text = None;
-            }
-            if let Some((image, off, scale)) = pending_image_move {
-                self.commit_image_move(&image, off, scale, &ctx);
-            }
-            if let Some((image, matrix)) = pending_image_scale {
-                self.commit_image_scale(&image, matrix, &ctx);
-            }
-            if let Some((image, degrees)) = pending_image_rotate {
-                self.commit_image_rotate(&image, degrees, &ctx);
-            }
-            self.form_edit = form_draft;
-            if form_cancel {
-                self.form_edit = None;
-                self.form_editing = None;
-            } else if form_commit {
-                self.commit_form_edit();
-            }
-            self.text_sel = sel;
-            self.inspector_target = inspector_target;
-            if let Some(crop) = crop_next {
-                self.image_crop = Some(crop);
-            }
-            if edit_cancel {
-                self.edit_text = None;
-            } else if edit_commit {
-                self.replace_fragment(&ctx);
-            }
-
-            if sel_all {
-                self.select_page_text();
-            } else if sel_copy {
-                self.copy_selection(&ctx);
-            }
-            if let Some(kind) = sel_markup {
-                self.markup_selection(kind, &ctx);
-            }
-
-            if let Some((page, kind, rect)) = pending_rect {
-                self.add_rect_annot(page, kind, rect);
-            }
-            if let Some((page, kind, quads)) = pending_markup {
-                self.add_markup_annot(page, kind, quads);
-            }
-            if let Some((page, points)) = pending_ink {
-                self.add_ink_annot(page, points);
-            }
-            if let Some((page, point)) = pending_edit {
-                self.edit_text_at(page, point, &ctx);
-            }
-            if let Some((page, point)) = pending_image {
-                self.insert_image_at(page, point, &ctx);
-            }
-            if let Some((page, point)) = pending_click {
-                self.open_draft(page, point);
-            }
-            if let Some((page, rect, kind)) = pending_form {
-                self.create_form_field(page, rect, kind, &ctx);
-            }
-            if let Some((page, rect)) = pending_form_select {
-                self.select_form_fields_in(page, rect);
-            }
-            if let Some((page, rect)) = pending_redact {
-                if (rect[2] - rect[0]).abs() > 2.0 && (rect[3] - rect[1]).abs() > 2.0 {
-                    // L'apparence est figée au moment du marquage : changer le
-                    // remplissage ensuite ne touche que les zones nouvelles.
-                    let fill = self.redact_fill;
-                    let overlay = self.overlay_for(fill);
-                    self.redact_marks.push(RedactionMark {
-                        page,
-                        rect,
-                        fill,
-                        overlay,
-                    });
-                }
-            }
-            if let Some((page, from, to)) = pending_measure {
-                // Le glissé est en repère affiché ; la mesure s'écrit en repère page.
-                let (from, to) = match self.tabs.get(self.active) {
-                    Some(tab) => (
-                        youpdf_core::geom::point_to_page(&tab.doc, page, from),
-                        youpdf_core::geom::point_to_page(&tab.doc, page, to),
-                    ),
-                    None => (from, to),
-                };
-                let low = [from[0].min(to[0]), from[1].min(to[1])];
-                let high = [from[0].max(to[0]), from[1].max(to[1])];
-                let points = match self.measure_kind {
-                    // Un glissé donne deux points : la distance va de l'un à
-                    // l'autre, le périmètre et l'aire prennent le rectangle.
-                    MeasureKind::Distance => vec![from, to],
-                    MeasureKind::Perimeter => vec![
-                        low,
-                        [high[0], low[1]],
-                        high,
-                        [low[0], high[1]],
-                        low,
-                    ],
-                    MeasureKind::Area => vec![low, [high[0], low[1]], high, [low[0], high[1]]],
-                };
-                let drawing_len = ((from[0] - to[0]).powi(2) + (from[1] - to[1]).powi(2)).sqrt();
-                self.measure_last_len = Some(drawing_len);
-                let measurement = Measurement {
-                    kind: self.measure_kind,
-                    points,
-                    scale: self.measure_scale,
-                    unit: self.measure_unit.clone(),
-                };
-                let page = page as u32;
-                let result = self
-                    .tabs
-                    .get_mut(self.active)
-                    .map(|tab| tab.doc.add_measurement(page, &measurement));
-                match result {
-                    Some(Ok(())) => {
-                        self.mark_document_changed();
-                        self.toast(&ctx, "Measurement added");
-                    }
-                    Some(Err(err)) => self.toast(&ctx, format!("Measure failed: {err}")),
-                    None => {}
-                }
-            }
-            if let Some((page, from, to)) = pending_erase_segment {
-                self.erase_ink_segment(page, from, to, &ctx);
-            }
-            if let Some(action) = pending_link {
-                self.follow_link(&action, &ctx);
-            }
-            if let Some((page, point)) = pending_hit {
-                // Un lien prime sur tout le reste : c'est le geste attendu du
-                // lecteur, et un clic sur un lien ne doit pas sélectionner autre
-                // chose. Le point est ici en repère page, comme les liens.
-                if self.follow_link_at(page, point, &ctx) {
-                    return;
-                }
-                // Vérifier d'abord si un champ de formulaire a été touché (mode Lecture).
-                if matches!(self.mode, None | Some(0) | Some(2)) {
-                    // La liste des champs n'est chargée qu'à la demande : sans
-                    // cela, un clic sur un formulaire ne trouve rien tant que le
-                    // panneau n'a pas été ouvert.
-                    self.ensure_structure();
-                    if let Some(form_idx) = self.form_hit_test(page, point) {
-                        // En mode Préparer, le clic sélectionne le champ (Maj :
-                        // ajoute ou retire de la sélection).
-                        if self.mode == Some(2) {
-                            self.toggle_form_selection(form_idx);
-                        } else {
-                        let field = self.tabs[self.active].forms[form_idx].clone();
-                        match &field.kind {
-                            FormFieldKind::Text => {
-                                self.form_editing = Some(form_idx);
-                                self.form_edit =
-                                    Some((form_idx, field.value.clone().unwrap_or_default()));
-                            }
-                            FormFieldKind::Checkbox => {
-                                let checked = field
-                                    .value
-                                    .as_deref()
-                                    .is_some_and(|value| value != "Off")
-                                    || field
-                                        .state
-                                        .as_deref()
-                                        .is_some_and(|state| state != "Off");
-                                let on_state = field
-                                    .states
-                                    .first()
-                                    .cloned()
-                                    .unwrap_or_else(|| "Yes".to_string());
-                                let new_value = if checked { "Off" } else { on_state.as_str() };
-                                let filled = if let Some(tab) = self.tabs.get_mut(self.active) {
-                                    let filled = tab.doc.fill_form_field(&field, new_value).is_ok();
-                                    tab.forms = tab.doc.read_form_fields();
-                                    filled
-                                } else {
-                                    false
-                                };
-                                if filled {
-                                    self.mark_document_changed();
-                                }
-                                self.form_editing = None;
-                            }
-                            FormFieldKind::Radio => {
-                                let on_state = field
-                                    .states
-                                    .first()
-                                    .cloned()
-                                    .unwrap_or_else(|| "Yes".to_string());
-                                let filled = if let Some(tab) = self.tabs.get_mut(self.active) {
-                                    let filled =
-                                        tab.doc.fill_form_field(&field, &on_state).is_ok();
-                                    // Le groupe partage `/V` : relire tous les
-                                    // boutons remet leurs `/AS` à jour.
-                                    tab.forms = tab.doc.read_form_fields();
-                                    filled
-                                } else {
-                                    false
-                                };
-                                if filled {
-                                    self.mark_document_changed();
-                                }
-                                self.form_editing = None;
-                            }
-                            _ => {
-                                self.form_editing = Some(form_idx);
-                                self.form_edit =
-                                    Some((form_idx, field.value.clone().unwrap_or_default()));
-                            }
-                        }
-                        }
-                    }
-                }
-                match action {
-                    ToolAction::Select => {
-                        if let Some(idx) = self.hit_test(page, point) {
-                            self.selected_annot = idx;
-                            self.has_annot_selection = true;
-                            self.selected_image = None;
-                        } else {
-                            self.has_annot_selection = false;
-                            // En mode Édition, le clic à vide cherche une image :
-                            // c'est ainsi qu'on ouvre l'inspecteur d'image.
-                            if self.mode == Some(1) {
-                                self.select_image_at(page, point);
-                            } else {
-                                self.selected_image = None;
-                            }
-                        }
-                    }
-                    ToolAction::Callout => {
-                        // Mode callout : 3 clics pour poser la flèche + texte.
-                        // L'état vit dans l'application, pas dans la trame : sans
-                        // cela, chaque clic repartirait du premier.
-                        let pending = match self.callout_pending {
-                            // Premier clic : le départ de la flèche.
-                            None => Some(CalloutPending {
-                                page,
-                                start: point,
-                                knee: None,
-                                text_corner: None,
-                            }),
-                            // Deuxième clic : le genou de la flèche.
-                            Some(p) if p.knee.is_none() => Some(CalloutPending {
-                                knee: Some(point),
-                                ..p
-                            }),
-                            // Troisième clic : le coin du texte, l'annotation est complète.
-                            Some(p) if p.text_corner.is_none() => {
-                                let p = CalloutPending {
-                                    text_corner: Some(point),
-                                    ..p
-                                };
-                                let knee = p.knee.unwrap_or(p.start);
-                                let corner = p.text_corner.unwrap_or(p.start);
-                                let mut annot = Annotation::new(p.page, AnnotationKind::Callout, [
-                                    p.start[0].min(knee[0]).min(corner[0]),
-                                    p.start[1].min(knee[1]).min(corner[1]),
-                                    (p.start[0].max(knee[0]).max(corner[0])
-                                        - p.start[0].min(knee[0]).min(corner[0]))
-                                    .max(20.0),
-                                    (p.start[1].max(knee[1]).max(corner[1])
-                                        - p.start[1].min(knee[1]).min(corner[1]))
-                                    .max(20.0),
-                                ]);
-                                annot.style = self.annot_style(AnnotationKind::Callout);
-                                annot.content = format!(
-                                    "Callout: arrow from ({:.1}, {:.1}) to knee ({:.1}, {:.1}), text at ({:.1}, {:.1})",
-                                    p.start[0], p.start[1], knee[0], knee[1], corner[0], corner[1]
-                                );
-                                annot.ink_points = vec![vec![p.start, knee, corner]];
-                                annot.recompute_ink_bbox();
-                                self.push_annot(annot);
-                                None
-                            }
-                            // Le callout est déjà complet : on repart d'un nouveau.
-                            Some(_) => Some(CalloutPending {
-                                page,
-                                start: point,
-                                knee: None,
-                                text_corner: None,
-                            }),
-                        };
-                        self.callout_pending = pending;
-                    }
-                    ToolAction::Erase => {
-                        // Mode trait : un clic efface le trait entier sous le
-                        // pointeur. Tous ses tracés partent avec lui — c'est la
-                        // différence avec le mode segment, qui n'en coupe qu'un
-                        // morceau.
-                        if let Some(idx) = self.ink_hit_test(page, point) {
-                            self.remove_annot(idx);
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            self.commit_canvas_frame(frame);
         }
 
 }
