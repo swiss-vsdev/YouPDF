@@ -12,16 +12,16 @@ pub(super) fn page_image_overlay(
     tab: &mut Tab,
     frame: &mut CanvasFrame,
     page: u32,
-    rect: Rect,
+    _rect: Rect,
     page_rect: Rect,
     scale: f32,
-    resp: &egui::Response,
-    mode: Option<usize>,
-    total: usize,
+    _resp: &egui::Response,
+    _mode: Option<usize>,
+    _total: usize,
     crop_draft: Option<ImageCrop>,
     selected_image: &Option<SelectedImage>,
     content_drag: &mut Option<ContentDrag>,
-    inspector_hovered: bool,
+    _inspector_hovered: bool,
 ) {
 if let Some(image) = &selected_image {
     if image.page == page as usize {

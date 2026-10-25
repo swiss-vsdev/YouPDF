@@ -12,7 +12,7 @@ pub(super) fn page_tool_interaction(
     tab: &mut Tab,
     frame: &mut CanvasFrame,
     page: u32,
-    rect: Rect,
+    _rect: Rect,
     page_rect: Rect,
     scale: f32,
     resp: &egui::Response,
