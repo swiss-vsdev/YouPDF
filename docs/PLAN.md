@@ -52,14 +52,18 @@ Cold open < 500 ms; 60 fps scroll; no blank frame on zoom (low-res first, refine
 
 ## Remaining tasks
 
-The three tracked gaps are closed (see `docs/GAP.md`):
+All originally tracked tasks are closed (see `docs/GAP.md`):
 
 1. **Task 4.2** — content element arrange: done (`e21c6f6`).
 2. **Task 12.2** — PDF comparison view modes: done (`c37981a`).
 3. **Task 14.2** — full localization (i18n) wiring: done (`f1a6f64`).
 
+Next up: the Tier 1 list in `docs/GAP.md` (signature validity banner, read-aloud/TTS,
+word count, link appearance, redaction/measure extras, security-properties matrix,
+Open Quickly, presenter view).
+
 ## Open items
 
-1. Home/start page design (recents grid) — not inventoried; design fresh.
-2. i18n framework choice (brief requires no hard-coded strings from first commit; 12+ languages, RTL-ready).
-3. Verify the earlier workspace compiles as-is before porting (do this on the OLD copy, not in the new repo).
+1. i18n wiring is done (365-entry EN/FR dictionary, coverage gate); shipping more of the
+   12+ target languages is now a translation task, not a code task.
+2. Cloud/account/subscription surface — a product decision, not a sprint (see `docs/GAP.md` Tier 3).

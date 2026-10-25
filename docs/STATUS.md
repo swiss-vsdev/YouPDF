@@ -1,7 +1,8 @@
 # Status — YouPDF
 
-- **Last commit**: `c37981a` feat(compare): overlay blend view and per-page difference highlights (Task 12.2)
-- **Branch**: `main` (clean, 13 commits ahead of `origin/main`)
+- **Last commit:** `d5151d04` — Fix: remove all compiler warnings (unused imports, dead code, private types in public interfaces)
+- **Branch:** `main` (up to date with `origin/main`; only these docs modified)
+- **Phase:** Phase 5 refactoring complete — `youpdf-core` split into modular subdirectories (`organize/`, `signature/`, `ocr/`, `redact/`, `forms/`, `edit/`, `watermark/`, `protect/`, `render/`, `annotate/`).
 
 ## Verification Commands (authoritative)
 
@@ -12,19 +13,35 @@ cargo test --workspace
 python3 scripts/i18n_extract.py --check   # i18n coverage gate
 ```
 
-## Open Parity Tasks (see `docs/GAP.md`)
+## Parity Summary (see `docs/GAP.md`)
 
-None — all three tracked gaps (4.2, 12.2, 14.2) are closed.
+| Verdict | Count |
+|---|---|
+| ✅ Done | 10 |
+| 🟡 Partial | 4 |
 
-## Done
+**14 feature families tracked.** All three originally tracked gaps (4.2, 12.2, 14.2) are closed.
 
-- **Docs consolidation** (`c490b43`) — nine overlapping planning files folded into `PLAN.md`, `GAP.md`, `STATUS.md`.
-- **Task 14.2 — i18n** (`f1a6f64`) — all user-facing strings now go through `t()`; 365-entry EN/FR dictionary; coverage gate in `scripts/i18n_extract.py`.
-- **Task 12.2 — Compare view modes** (`98c6a9c`, `c37981a`) — side-by-side view with shared page navigation; ignore-whitespace/case options; `compare_with_options()` in the engine; overlay blend with an opacity slider; per-page difference highlights (amber frame + counter) fed by the report.
-- **Task 4.2 — Content element arrange** (`45d48f2`) — drag-to-move for images (`commit_image_move`) and text blocks (`commit_text_block_move`); `set_image_z_order()` in the engine; Bring to front / Send to back in the image inspector.
-- **Task 4.2 — Canvas wiring** (`2c8888d`) — both drag gestures wired into the ScrollArea canvas using the file's take-and-commit-locally pattern; `commit_image_move` body repaired (was a single line of literal `\n` escapes).
-- **Task 4.2 — Completed (`e21c6f6`)** — canvas drag-to-move wiring, corner resize handles and a free-angle rotation grip (`rotate_image` in the engine: the drawing matrix turns around the box centre, pixels never re-encoded). The engine test `rotation_libre_fait_tourner_autour_du_centre` renders a 45° turn and checks the halves swap vertically.
+## Recently Closed
+
+- **Task 4.2 — Content element arrange** (`e21c6f6`) — drag-to-move (`commit_image_move`, `commit_text_block_move`), corner resize, free-angle rotation (`rotate_image`), z-order (`set_image_z_order`, Bring to front / Send to back in image inspector).
+- **Task 12.2 — Compare view modes** (`c37981a`) — side-by-side with shared page navigation, overlay blend with opacity slider, per-page difference highlights (amber frame + counter) fed by report.
+- **Task 14.2 — i18n wiring** (`f1a6f64`) — 365-entry EN/FR dictionary, `t()` wired throughout UI, coverage gate in `scripts/i18n_extract.py`.
+- **Digital signature UI** — `sign_ui.rs`: `sign_window()`, `certificate_panel()` (create/import/self-sign), `validate_signatures()` called from UI.
+
+## Open High-Priority Gaps
+
+See `docs/GAP.md` §"Open Parity Gaps" for Tier 1/2/3 backlog. Top 5 by value:
+
+1. **Digital signature polish** — validity banner, invalidation warning, timestamp trust note.
+2. **Read-aloud / TTS** — macOS AVSpeechSynthesizer wrapper, voice + speed.
+3. **Word count / document stats** — words, CJK chars, spaces, total.
+4. **Link appearance editor** — invisible/visible rect, border style, thickness, colour.
+5. **Redaction extras** — code sets (U.S. Privacy Act / FOIA), repeat-mark-across-pages, fill colour, auto-size.
 
 ## Notes
 
-- The canvas code cannot call `self` while it borrows `renderer`/`tabs`: take state out before the `show_viewport` closure, commit into `pending_*` locals, write after the closure.
+- **Phase 5 refactoring:** `app.rs` reduced from ~7000 lines to ~2946 lines via 20+ panel module extractions. `youpdf-core` split into 10+ submodules for maintainability.
+- **i18n:** 365 dictionary entries, 2 languages (EN/FR), 290 `t()` call sites (365-entry EN/FR dictionary). Coverage gate ensures new UI strings are added to dictionary.
+- **Signature engine:** `crates/youpdf-core/src/signature/` (6 files: `identity.rs`, `mod.rs`, `sign.rs`, `util.rs`, `verify.rs`, `visual.rs`) — detached RSA-SHA-256, PKCS#12/PEM import, `validate_signatures`, visual signature rendering.
+- **Canvas borrow pattern:** Canvas code cannot call `self` while it borrows `renderer`/`tabs`: take state out before `show_viewport` closure, commit into `pending_*` locals, write after closure.
