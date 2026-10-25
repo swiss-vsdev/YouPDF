@@ -30,6 +30,8 @@ mod signature_ui;
 mod export_ui;
 mod pages_ui;
 mod prefs_ui;
+mod organize_dialogs;
+mod organize_ops;
 mod organize_ui;
 mod sign_ui;
 mod reader;
