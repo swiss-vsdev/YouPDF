@@ -236,7 +236,7 @@ pub(crate) fn organize_button(ui: &mut egui::Ui, icon: IconFn, label: &str) -> b
 }
 
 /// Vrai si le réglage `mode` correspond au zoom courant de l'onglet.
-pub(crate) fn zoom_choice_matches(mode: ZoomMode, zoom: Option<f32>, fit_page: bool) -> bool {
+pub(super) fn zoom_choice_matches(mode: ZoomMode, zoom: Option<f32>, fit_page: bool) -> bool {
     match mode {
         ZoomMode::FitWidth => zoom.is_none() && !fit_page,
         ZoomMode::FitPage => zoom.is_none() && fit_page,

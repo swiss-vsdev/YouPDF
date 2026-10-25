@@ -19,9 +19,7 @@
 
 use std::path::Path;
 
-use cbc::cipher::KeyIvInit;
 use lopdf::Object;
-use md5::Digest as Md5Digest;
 
 use youpdf_shared::{Error, Result};
 

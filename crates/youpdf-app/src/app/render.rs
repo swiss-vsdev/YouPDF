@@ -94,7 +94,7 @@ pub(crate) fn comment_state_color(state: AnnotationState) -> Color32 {
 }
 
 /// Dessine les annotations d'une page ; coordonnées PDF → écran.
-pub(crate) fn draw_annots(
+pub(super) fn draw_annots(
     painter: &Painter,
     tab: &Tab,
     page: u32,

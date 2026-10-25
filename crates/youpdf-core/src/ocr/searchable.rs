@@ -9,7 +9,6 @@ use youpdf_shared::{Error, Result};
 
 use crate::document::Document;
 use crate::edit::encode_pdf_literal;
-use crate::render::Renderer;
 
 use super::{OcrEngine, OcrMode, validate_language};
 
