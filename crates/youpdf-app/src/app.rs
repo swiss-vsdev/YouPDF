@@ -26,6 +26,7 @@ mod forms_fields;
 mod forms_ui;
 mod decor_ui;
 mod marks_ui;
+mod signature_ui;
 mod export_ui;
 mod pages_ui;
 mod prefs_ui;
