@@ -356,7 +356,60 @@ impl YouPdfApp {
             });
         }
 
-        /// Liste compacte de l'écran d'accueil.
+    /// Fenêtre « Open Quickly » (⌘⇧O) : recherche par sous-suite des récents,
+    /// façon Spotlight — champ en haut-centre, douze lignes, Entrée ouvre le
+    /// premier, Échap ferme.
+    pub(super) fn open_quickly_panel(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Open Quickly")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 100.0])
+            .show(ctx, |ui| {
+                ui.add(TextEdit::singleline(&mut self.open_query).desired_width(400.0))
+                    .request_focus();
+
+                // On garde les indices, pas les chemins : `recents` doit rester
+                // libre pour l'ouverture.
+                let mut matches: Vec<(usize, usize)> = self
+                    .recents
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, path)| {
+                        let score = subsequence_score(&path.display().to_string(), &self.open_query);
+                        if score > 0 {
+                            Some((index, score))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                // Tri stable décroissant : à score égal, l'ordre des récents
+                // (du plus récent au plus ancien) est conservé.
+                matches.sort_by_key(|a| std::cmp::Reverse(a.1));
+
+                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+
+                for (rank, (index, _score)) in matches.iter().take(12).enumerate() {
+                    let label = self.recents[*index].display().to_string();
+                    let clicked = ui.selectable_label(false, label).clicked();
+                    if clicked || (enter && rank == 0) {
+                        let path = self.recents[*index].clone();
+                        self.open_path(path);
+                        self.open_quickly_open = false;
+                        break;
+                    }
+                }
+                if matches.is_empty() {
+                    ui.label(RichText::new("No match").color(pal().muted));
+                }
+                if escape {
+                    self.open_quickly_open = false;
+                }
+            });
+    }
+
+    /// Liste compacte de l'écran d'accueil.
         #[allow(clippy::too_many_arguments)]
         pub(super) fn home_list(
             &mut self,
@@ -594,7 +647,7 @@ impl YouPdfApp {
         /// ponytail: l'ouverture et le rendu se font sur le fil de l'interface.
         /// Acceptable pour une poignée de récents ; déporter sur un fil si la
         /// liste s'allonge ou si des fichiers lourds font scintiller l'accueil.
-        pub(super) fn home_thumbnail(&mut self, ctx: &egui::Context, path: &std::path::Path) -> Option<TextureHandle> {
+                pub(super) fn home_thumbnail(&mut self, ctx: &egui::Context, path: &std::path::Path) -> Option<TextureHandle> {
             let meta = std::fs::metadata(path).ok()?;
             // Un fichier énorme n'entre pas dans une vignette : on l'ignore plutôt
             // que de le charger en entier au premier affichage.
@@ -651,4 +704,70 @@ impl YouPdfApp {
             Some(handle)
         }
 
+}
+
+/// Score de correspondance par sous-suite : combien de caractères de `needle`
+/// se retrouvent dans `haystack`, dans l'ordre. Renvoie 0 dès qu'un caractère
+/// manque — « pas de correspondance » et score 0 se confondent ici, ce qui
+/// suffit à un filtre.
+///
+/// Comparaison insensible à la casse. Le score brut (nombre de caractères
+/// trouvés) suffit à classer une liste de récents : tout le monde ne cherche
+/// qu'à retrouver un nom de fichier déjà ouvert.
+///
+/// ponytail: pas de crate `fuzzy-matcher`, pas d'index — une recherche
+/// sous-suite en O(n·m) sur une liste de ~50 entrées. Ajouter un index à
+/// trigrammes si les récents dépassent 500.
+fn subsequence_score(haystack: &str, needle: &str) -> usize {
+    let needle = &needle.to_lowercase();
+    if needle.is_empty() {
+        return 0;
+    }
+    let haystack = haystack.to_lowercase();
+    let mut hp = 0usize;
+    let hbytes = haystack.as_bytes();
+    for wanted in needle.bytes() {
+        let mut found = false;
+        while hp < hbytes.len() {
+            if hbytes[hp] == wanted {
+                hp += 1;
+                found = true;
+                break;
+            }
+            hp += 1;
+        }
+        if !found {
+            return 0;
+        }
+    }
+    needle.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::subsequence_score;
+
+    #[test]
+    fn sous_suite_scoree_et_triee() {
+        // La requête se lit dans le chemin, dans l'ordre, sans casse.
+        assert_eq!(subsequence_score("/tmp/Rapport Annuel.pdf", "rapport"), 7);
+        assert_eq!(subsequence_score("/tmp/a.pdf", "a"), 1);
+        // Un caractère manquant élimine : rien ne mérite d'être affiché.
+        assert_eq!(subsequence_score("/tmp/a.pdf", "zzz"), 0);
+        // Ordre respecté : « za » n'existe pas dans « az ».
+        assert_eq!(subsequence_score("/tmp/az.pdf", "za"), 0);
+        // Requête vide : rien à filtrer, on n'affiche personne.
+        assert_eq!(subsequence_score("/tmp/a.pdf", ""), 0);
+        // Le meilleur score passe en tête d'un tri décroissant.
+        let paths = ["/tmp/bilan-2024.pdf", "/tmp/rapport-annuel-2024.pdf"];
+        let mut ranked: Vec<_> = paths
+            .iter()
+            .filter_map(|p| {
+                let score = subsequence_score(p, "rap2024");
+                (score > 0).then_some((p, score))
+            })
+            .collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1));
+        assert_eq!(ranked.first().map(|(p, _)| *p), Some(&"/tmp/rapport-annuel-2024.pdf"));
+    }
 }

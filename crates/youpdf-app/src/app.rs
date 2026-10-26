@@ -46,6 +46,7 @@ mod text_edit_ui;
 mod slideshow_ui;
 mod tabs_ui;
 mod windows_ui;
+mod readaloud_ui;
 mod canvas_commit;
 mod canvas_image_ui;
 mod canvas_text_ui;
@@ -88,9 +89,11 @@ use crate::inspector::{
 };
 use youpdf_core::compress::CompressionLevel;
 use youpdf_core::render::NullRenderer;
+use youpdf_core::TtsEngine;
 use youpdf_core::ocr::{make_ocr, TesseractEngine};
 use youpdf_core::{
-    blank_document, document_from_images, export_comments, Annotation,
+    blank_document, document_from_image_bytes, document_from_images, export_comments,
+    Annotation,
     AnnotationKind, AnnotationState, AnnotationStyle, AttachmentInfo, Background, BandSlots, Bates,
     BatesPosition, CommentFormat, ComparisonReport, CompressionExtras, Conformance, CropMargins,
     DifferenceKind, Document,
@@ -1278,6 +1281,14 @@ pub struct YouPdfApp {
     applied_theme: Theme,
     /// Présentation plein écran, une page à la fois.
     slideshow: bool,
+    /// Fenêtre « Presenter View » (page courante + page suivante).
+    presenter_open: bool,
+    /// État de la vue présentateur : chronomètre, page suivante.
+    presenter: slideshow_ui::PresenterView,
+    /// Fenêtre « Read Aloud » : voix, vitesse, lecture du texte de la page.
+    readaloud_open: bool,
+    /// Moteur de synthèse vocale (un processus `say` à la fois).
+    tts: TtsEngine,
     /// Fenêtre « Traitement par lots ».
     batch_open: bool,
     /// File d'attente du lot : un état par fichier, plus ce que la ligne
@@ -1376,6 +1387,10 @@ pub struct YouPdfApp {
     page_entry: String,
     /// Surface d'accueil (fichiers récents) affichée à la place du canevas.
     home_open: bool,
+    /// Fenêtre « Open Quickly » (⌘⇧O) : requête de recherche floue sur les récents.
+    open_quickly_open: bool,
+    /// Brouillon de la requête de la fenêtre « Open Quickly ».
+    open_query: String,
     /// Onglet en cours de glissé dans la barre de titre (réordonnancement).
     dragging_tab: Option<usize>,
     /// Onglet survolé pendant le glissé : cible du dépôt.
@@ -1677,6 +1692,10 @@ impl YouPdfApp {
             theme,
             applied_theme: theme,
             slideshow: false,
+            presenter_open: false,
+            presenter: slideshow_ui::PresenterView::default(),
+            readaloud_open: false,
+            tts: TtsEngine::new(),
             batch_open: false,
             batch_queue: Vec::new(),
             batch_dir: None,
@@ -1731,6 +1750,8 @@ impl YouPdfApp {
             search_comments: false,
             page_entry: String::new(),
             home_open: initial.is_none(),
+            open_quickly_open: false,
+            open_query: String::new(),
             dragging_tab: None,
             drag_target: None,
             home: HomeView::default(),
@@ -2117,6 +2138,7 @@ impl eframe::App for YouPdfApp {
         self.sync_theme(ctx);
         if self.slideshow {
             self.slideshow_view(ctx);
+            self.presenter_window(ctx);
             return;
         }
         self.shortcuts(ctx);
@@ -2153,6 +2175,7 @@ impl eframe::App for YouPdfApp {
         self.bates_window(ctx);
         self.compare_window(ctx);
         self.ocr_window(ctx);
+        self.readaloud_window(ctx);
         self.create_window(ctx);
         self.sign_window(ctx);
         self.stamp_window(ctx);
@@ -2166,6 +2189,9 @@ impl eframe::App for YouPdfApp {
         self.page_props_window(ctx);
         self.activity_window(ctx);
         self.ai_window(ctx);
+        if self.open_quickly_open {
+            self.open_quickly_panel(ctx);
+        }
         if !self.render_status.is_empty() {
             let message = std::mem::take(&mut self.render_status);
             self.toast(ctx, message);
@@ -2281,8 +2307,6 @@ impl ZoomMode {
 
 /// Aligne un rectangle de champ sur les bords et centres des champs voisins.
 ///
-
-
 /// Action demandée par la liste des pièces jointes.
 enum AttachmentAction {
     /// Ouvrir dans l'application par défaut du système.

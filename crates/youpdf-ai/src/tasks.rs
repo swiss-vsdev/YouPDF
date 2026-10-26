@@ -82,6 +82,44 @@ pub enum AiTask {
     LegalReview,
     /// Analyse financière (tableaux, ratios).
     FinancialReview,
+    /// Amélioration d'un texte (grammaire, clarté, flow).
+    Polish,
+    /// Raccourcissement d'un texte tout en conservant l'essentiel.
+    Shorten,
+    /// Développement d'un texte pour le rendre plus explicatif.
+    Expand,
+    /// Relève d'un texte (fautes, style).
+    Proofread,
+    /// Réécriture dans un ton donné.
+    Tone {
+        /// Ton souhaité.
+        style: ToneStyle,
+    },
+}
+
+/// Ton d'écriture pour la tâche [`AiTask::Tone`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToneStyle {
+    /// Ton formel, adapté aux documents business/officiels.
+    Professional,
+    /// Ton décontracté, proche de la conversation.
+    Casual,
+    /// Ton assuré, sans hésitation.
+    Confident,
+    /// Ton chaleureux et amical.
+    Friendly,
+}
+
+impl ToneStyle {
+    /// Nom lisible du ton, en anglais minuscule.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ToneStyle::Professional => "professional",
+            ToneStyle::Casual => "casual",
+            ToneStyle::Confident => "confident",
+            ToneStyle::Friendly => "friendly",
+        }
+    }
 }
 
 impl AiTask {
@@ -135,6 +173,66 @@ impl AiTask {
                  manière structurée. Ne fais pas de prédiction ni de recommandation \
                  d'investissement."
             }
+            AiTask::Polish => {
+                "Tu es un relecteur professionnel. Améliore le texte fourni : \
+                 corrige la grammaire et l'orthographe, améliore la clarté et le \
+                 flow des phrases, garde le sens et le ton d'origine. Ne réécris pas \
+                 le texte de A à Z : travaille page par page, paragraphe par \
+                 paragraphe. Réponds uniquement avec le texte amélioré, sans \
+                 commentary."
+            }
+            AiTask::Shorten => {
+                "Tu es un assistant de rédaction. Raccourcis le texte fourni en \
+                 conservant l'essentiel : les idées clés, les chiffres, les noms \
+                 propres. Supprime les répétitions, les phrases superflues et les \
+                 tournures lourdes. Réponds uniquement avec le texte réduit, sans \
+                 commentary."
+            }
+            AiTask::Expand => {
+                "Tu es un assistant de rédaction. Développe le texte fourni pour le \
+                 rendre plus explicatif et pédagogique : ajoute des explications, des \
+                 exemples concrets et des transitions naturelles entre les idées. \
+                 Garde le sens d'origine et le ton. Réponds uniquement avec le texte \
+                 développé, sans commentary."
+            }
+            AiTask::Proofread => {
+                "Tu es un relecteur attentif. Relève le texte fourni : fautes \
+                 d'orthographe, de grammaire, de conjugaison, coquilles, incohérences \
+                 de style, ponctuation incorrecte. Présente le résultat sous forme de \
+                 liste numérotée par page, avec la citation de la faute et sa \
+                 correction proposée. Réponds dans la langue du texte."
+            }
+            AiTask::Tone { style } => {
+                match style {
+                    ToneStyle::Professional => {
+                        "Tu es un rédacteur professionnel. Réécris le texte fourni \
+                         dans un ton formel, adapté à un document business ou officiel : \
+                         phrases complètes, vocabulaire précis, pas de familiarités. \
+                         Garde le fond inchangé. Réponds uniquement avec le texte \
+                         réécrit, sans commentary."
+                    }
+                    ToneStyle::Casual => {
+                        "Tu es un rédacteur décontracté. Réécris le texte fourni dans \
+                         un ton casual, proche de la conversation : phrases courtes, \
+                         vocabulaire courant, pas de jargon inutile. Garde le fond \
+                         inchangé. Réponds uniquement avec le texte réécrit, sans \
+                         commentary."
+                    }
+                    ToneStyle::Confident => {
+                        "Tu es un rédacteur assuré. Réécris le texte fourni dans un ton \
+                         confiant, sans hésitation : affirmations nettes, pas de \
+                         tournures hésitantes, pas de conditionnels inutiles. Garde le \
+                         fond inchangé. Réponds uniquement avec le texte réécrit, sans \
+                         commentary."
+                    }
+                    ToneStyle::Friendly => {
+                        "Tu es un rédacteur chaleureux. Réécris le texte fourni dans un \
+                         ton friendly et amical : phrases accueillantes, vocabulaire \
+                         positif, pas de ton sec. Garde le fond inchangé. Réponds \
+                         uniquement avec le texte réécrit, sans commentary."
+                    }
+                }
+            }
         }
     }
 
@@ -177,6 +275,21 @@ impl AiTask {
             }
             AiTask::KeyPoints => {
                 messages.push(Message::user("Extrais les points clés de ce document."));
+            }
+            AiTask::Polish => {
+                messages.push(Message::user("Améliore le texte fourni."));
+            }
+            AiTask::Shorten => {
+                messages.push(Message::user("Raccourcis le texte fourni."));
+            }
+            AiTask::Expand => {
+                messages.push(Message::user("Développe le texte fourni."));
+            }
+            AiTask::Proofread => {
+                messages.push(Message::user("Relève le texte fourni."));
+            }
+            AiTask::Tone { .. } => {
+                messages.push(Message::user("Réécris le texte fourni dans le ton demandé."));
             }
             _ => {
                 if !user_input.trim().is_empty() {

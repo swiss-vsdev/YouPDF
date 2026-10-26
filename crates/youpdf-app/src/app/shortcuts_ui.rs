@@ -74,6 +74,13 @@ impl YouPdfApp {
                 self.search_step(if shift { -1 } else { 1 });
                 return;
             }
+            // ⌘⇧O : Open Quickly — fenêtre flottante de recherche sur les
+            // récents, façon Spotlight. Le ⌘O seul ouvre le dialogue « Ouvrir ».
+            if cmd && shift && open {
+                self.open_quickly_open = true;
+                self.open_query.clear();
+                return;
+            }
             // Raccourcis Ctrl+1..0 du menu « Outils ». Ils sont lus avant le
             // garde `cmd` ci-dessous : sinon toutes les combinaisons Ctrl seules
             // seraient ignorées.

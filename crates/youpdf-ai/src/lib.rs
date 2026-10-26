@@ -35,4 +35,4 @@ pub use message::{ChatOptions, ChatResponse, Message, ModelInfo, Role, Usage};
 pub use provider::AiProvider;
 pub use providers::build_provider;
 pub use registry::{ProviderId, ProviderRegistry};
-pub use tasks::{AiTask, ChatContext};
+pub use tasks::{AiTask, ChatContext, ToneStyle};

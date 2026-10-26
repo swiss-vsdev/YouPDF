@@ -132,6 +132,123 @@ pub struct RedactionReport {
     pub images_burned: usize,
 }
 
+/// Options de traduction bilingale, en place, sans réflow.
+///
+/// Le principe : on remplace le texte original par la traduction en
+/// **réduisant le corps** jusqu'à ce que la traduction tienne dans la
+/// boîte d'origine. Aucun moteur de mise en page : c'est le point de
+/// départ, et la dégradation est marquée par un commentaire
+/// `ponytail` dans [`Document::translate_pages`].
+#[derive(Debug, Clone, Default)]
+pub struct TranslationOptions {
+    /// Langue cible, telle que l'utilisateur la saisit.
+    pub target_language: String,
+    /// Vrai : original + traduction empilés dans la même boîte.
+    pub bilingual: bool,
+    /// Vrai : réduire le corps pour faire tenir le texte (pas de réflow).
+    pub preserve_layout: bool,
+}
+
+/// Bilan d'une traduction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TranslationReport {
+    /// Pages dont le texte a été remplacé.
+    pub pages_translated: usize,
+    /// Pages qui ont dû être rasterisées en repli.
+    pub pages_rasterized: usize,
+    /// Pages sautées (sans texte, ou sans boîte exploitable).
+    pub pages_skipped: usize,
+    /// Lignes posées sur le document.
+    pub lines_placed: usize,
+}
+
+/// Zebra les lignes originales et les lignes traduites par index.
+///
+/// ponytail: zip par position, pas par correspondance de contenu. Une
+/// traduction qui compte un nombre de lignes différent garde les N
+/// premières lignes originales alignées sur les N premières lignes
+/// traduites ; les lignes excédentes de l'un ou l'autre côté sont
+/// ignorées. Un vrai alignement nécessiterait des boîtes par fragment.
+pub fn zip_lines<'a>(original: &'a [String], translated: &'a [String]) -> Vec<(&'a String, &'a String)> {
+    original.iter().zip(translated.iter()).collect()
+}
+
+/// Taille de police qui fait tenir `lines` dans la boîte `box_w × box_h`,
+/// en partant de `start` et en baisse par paliers de 0.5 pt.
+///
+/// Le plancher est 4.0 pt : en dessous, le texte est illisible et
+/// l'opération n'a plus de sens.
+///
+/// ponytail: un seul colonne, modèle de largeur proportionnelles
+/// (`average_width × size × nb_caractères`). Aucun word-wrap : un mot long
+/// peut déborder la colonne même au plancher. Ajouter un vrai moteur de
+/// mise en page si du justifié ou de la césure est un jour nécessaire.
+pub fn fit_block_from(
+    lines: &[String],
+    box_w: f32,
+    box_h: f32,
+    line_spacing: f32,
+    start: f32,
+) -> f32 {
+    if lines.is_empty() || box_w <= 0.0 || box_h <= 0.0 {
+        return 4.0;
+    }
+    let fits = |s: f32| {
+        if s < 4.0 {
+            return false;
+        }
+        let row = s * line_spacing;
+        if (lines.len() as f32) * row > box_h {
+            return false;
+        }
+        lines
+            .iter()
+            .all(|l| geometry::estimate_width(l, s, "Helvetica") <= box_w)
+    };
+    let mut size = start.max(4.0);
+    while !fits(size) && size > 4.0 {
+        size -= 0.5;
+    }
+    size
+}
+
+/// Comme [`fit_block_from`], en partant de 24 pt par défaut.
+pub fn fit_block(lines: &[String], box_w: f32, box_h: f32, line_spacing: f32) -> f32 {
+    fit_block_from(lines, box_w, box_h, line_spacing, 24.0)
+}
+
+/// Répartit `lines` en bandes horizontales, du haut vers le bas de `rect`.
+///
+/// Chaque bande a pour hauteur `size * spacing`. Les bandes sont bornées
+/// à l'intérieur de `rect` : si l'empilement dépasse, les dernières
+/// bandes sont aplaties et la ligne correspondante est posée de façon
+/// dégradée (c'est le cas du plancher 4 pt).
+///
+/// ponytail: simple empilement, aucune tentative de rééchelonnement ou de
+/// césure. Renvoie toujours `lines.len()` rectangles.
+pub fn line_strips(lines: &[String], rect: [f32; 4], size: f32, spacing: f32) -> Vec<[f32; 4]> {
+    let row = size * spacing;
+    (0..lines.len())
+        .map(|i| {
+            let top = rect[3] - i as f32 * row;
+            let bottom = top - row;
+            let top = top.min(rect[3]).max(rect[1]);
+            let bottom = bottom.max(rect[1]);
+            let top = top.max(bottom);
+            [rect[0], bottom, rect[2], top]
+        })
+        .collect()
+}
+
+/// Scinde une chaîne de page en lignes, en tronçant les sauts de page et
+/// les sauts de ligne, et en supprimant les lignes vides.
+fn split_lines(text: &str) -> Vec<String> {
+    text.split(['\n', '\u{c}'])
+        .map(|l| l.trim_end().to_string())
+        .filter(|l| !l.trim().is_empty())
+        .collect()
+}
+
 impl Document {
     /// Applique un caviardage destructif par chirurgie du flux de contenu.
     ///
@@ -684,6 +801,118 @@ impl Document {
 
         Ok(())
     }
+
+    /// Traduit une page en place, en préservant l'aspect par réduction du corps.
+    ///
+    /// `translated_lines` est la traduction de la page, déjà découpée en
+    /// lignes. La région de texte original est effacée par la primitive de
+    /// caviardage (remplissage blanc), et la traduction est posée dans la
+    /// même boîte à un corps réduit jusqu'à ce qu'elle tienne (planche 4,0
+    /// pt). En mode `bilingual`, les lignes originales sont empilées sous la
+    /// traduction, à 0,8× du corps.
+    ///
+    /// ponytail: page-level blocks only. `rect` est la boîte d'affichage
+    /// entière ; les boîtes par fragment de texte nécessiteraient un
+    /// extracteur de flux de contenu. Ajouter un tel extracteur si les
+    /// documents multi-colonnes ou à tableaux doivent survivre à la
+    /// traduction. Les pages sans texte extractible (scans) sont sautées.
+    pub fn translate_page(
+        &mut self,
+        page: u32,
+        options: &TranslationOptions,
+        translated_lines: &[String],
+        renderer: &dyn Renderer,
+    ) -> Result<()> {
+        let view = self.page_view(page);
+        let (w, h) = view.display_size();
+        if w <= 0.0 || h <= 0.0 {
+            return Ok(());
+        }
+
+        // Une page scannée n'a pas de texte à remplacer : laisser la
+        // région en place éviterait de recouvrir l'image de fond.
+        let original_text = self.page_text(page).unwrap_or_default();
+        if original_text.trim().is_empty() || self.looks_scanned(page) {
+            return Ok(());
+        }
+
+        let spacing = 1.15f32;
+        let box_rect = [0.0, 0.0, w, h];
+        let mut marks: Vec<RedactionMark> = Vec::new();
+
+        // La boîte entière est effacée : c'est la primitive de caviardage
+        // qui retire le texte original du flux et pose le remplissage.
+        marks.push(RedactionMark {
+            page: page as usize,
+            rect: box_rect,
+            fill: RedactionFill::White,
+            overlay: None,
+        });
+
+        if !translated_lines.is_empty() {
+            if options.bilingual {
+                let half = h / 2.0;
+                let upper = [0.0, half, w, h];
+                let lower = [0.0, 0.0, w, half];
+                let tsize = fit_block_from(translated_lines, w, half, spacing, 24.0);
+                let strips = line_strips(translated_lines, upper, tsize, spacing);
+                for (i, line) in translated_lines.iter().enumerate() {
+                    if let Some(strip) = strips.get(i) {
+                        marks.push(RedactionMark {
+                            page: page as usize,
+                            rect: *strip,
+                            fill: RedactionFill::White,
+                            overlay: Some(RedactionOverlay {
+                                text: line.clone(),
+                                font: PatchFont::Helvetica,
+                                size: tsize,
+                                color: [0, 0, 0],
+                            }),
+                        });
+                    }
+                }
+                let osize = (tsize * 0.8).max(4.0);
+                let original_lines = split_lines(&original_text);
+                let ostrips = line_strips(&original_lines, lower, osize, spacing);
+                for (i, line) in original_lines.iter().enumerate() {
+                    if let Some(strip) = ostrips.get(i) {
+                        marks.push(RedactionMark {
+                            page: page as usize,
+                            rect: *strip,
+                            fill: RedactionFill::White,
+                            overlay: Some(RedactionOverlay {
+                                text: line.clone(),
+                                font: PatchFont::Helvetica,
+                                size: osize,
+                                color: [0, 0, 0],
+                            }),
+                        });
+                    }
+                }
+            } else {
+                let tsize = fit_block_from(translated_lines, w, h, spacing, 24.0);
+                let strips = line_strips(translated_lines, box_rect, tsize, spacing);
+                for (i, line) in translated_lines.iter().enumerate() {
+                    if let Some(strip) = strips.get(i) {
+                        marks.push(RedactionMark {
+                            page: page as usize,
+                            rect: *strip,
+                            fill: RedactionFill::White,
+                            overlay: Some(RedactionOverlay {
+                                text: line.clone(),
+                                font: PatchFont::Helvetica,
+                                size: tsize,
+                                color: [0, 0, 0],
+                            }),
+                        });
+                    }
+                }
+            }
+        }
+
+        self.redact_marks(&marks, renderer)?;
+        Ok(())
+    }
 }
 
 /// Vrai si deux rectangles PDF se recouvrent (aire strictement positive).
@@ -748,5 +977,87 @@ fn paint_black_rect(
                 pixels[idx + 3] = 255; // A
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod translate_tests {
+    use super::{fit_block, fit_block_from, line_strips, zip_lines};
+    use crate::create::blank_document;
+
+    /// Le réducteur de corps baisse jusqu'à ce que chaque ligne tienne, et
+    /// s'arrête au plancher de 4,0 pt. Une boîte trop petite pour un seul
+    /// mot long reste au plancher, jamais en dessous.
+    #[test]
+    fn fit_block_respects_floor_and_width() {
+        let lines = vec!["un mot tres long qui ne tient pas".to_string()];
+        // Boîte étroite : le texte ne tient même pas à 4 pt.
+        assert_eq!(fit_block(&lines, 10.0, 100.0, 1.0), 4.0);
+        // Boîte très large : le texte tient à 24 pt, on ne descend pas.
+        assert_eq!(fit_block(&lines, 500.0, 100.0, 1.0), 24.0);
+        // Boîte moyenne : on descend d'un cran, sans passer sous le plancher.
+        let size = fit_block(&lines, 120.0, 100.0, 1.0);
+        assert!(size >= 4.0 && size < 24.0);
+        // Une ligne vide renvoie le plancher.
+        assert_eq!(fit_block(&[], 100.0, 100.0, 1.0), 4.0);
+    }
+
+    /// `fit_block_from` part d'un corps donné : plus on commence haut, plus
+    /// on peut rester haut si le texte tient.
+    #[test]
+    fn fit_block_from_start_matters() {
+        let lines = vec!["court".to_string()];
+        assert_eq!(fit_block_from(&lines, 400.0, 100.0, 1.0, 12.0), 12.0);
+        assert_eq!(fit_block_from(&lines, 400.0, 100.0, 1.0, 24.0), 24.0);
+    }
+
+    /// Les bandes sont empilées du haut vers le bas, bornées à l'intérieur
+    /// de la boîte, et il y en a autant que de lignes.
+    #[test]
+    fn line_strips_stack_top_down() {
+        let rect = [0.0, 0.0, 100.0, 100.0];
+        let strips = line_strips(&["a".to_string(), "b".to_string(), "c".to_string()], rect, 10.0, 1.0);
+        assert_eq!(strips.len(), 3);
+        // La première ligne est collée au haut de la boîte.
+        assert!((strips[0][3] - 100.0).abs() < 0.001);
+        // Les lignes sont empilées vers le bas, sans chevauchement.
+        assert!((strips[0][1] - 90.0).abs() < 0.001);
+        assert!((strips[1][3] - 90.0).abs() < 0.001);
+        assert!((strips[2][1] - 70.0).abs() < 0.001);
+        // Les bandes ne débordent pas la boîte.
+        for s in &strips {
+            assert!(s[0] >= rect[0] - 0.001);
+            assert!(s[2] <= rect[2] + 0.001);
+            assert!(s[1] >= rect[1] - 0.001);
+            assert!(s[3] <= rect[3] + 0.001);
+        }
+    }
+
+    /// `zip_lines` zippe par position, pas par correspondance de contenu.
+    #[test]
+    fn zip_lines_pairs_by_index() {
+        let original = vec!["a".to_string(), "b".to_string()];
+        let translated = vec!["A".to_string()];
+        let pairs = zip_lines(&original, &translated);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].0, &"a".to_string());
+        assert_eq!(pairs[0].1, &"A".to_string());
+    }
+
+    /// Une page sans texte n'a rien à traduire : `translate_page` est un
+    /// chemin de production, on le vérifie par l'absence d'erreur sur un
+    /// document vide.
+    #[test]
+    fn translate_blank_page_is_noop() {
+        let mut doc = blank_document(1, 595.0, 842.0).expect("document vide");
+        let opts = crate::TranslationOptions {
+            target_language: "English".to_string(),
+            bilingual: false,
+            preserve_layout: true,
+        };
+        let renderer = crate::render::NullRenderer;
+        // Une page blanche n'a pas de texte : l'opération est un no-op.
+        let result = doc.translate_page(1, &opts, &["bonjour".to_string()], &renderer);
+        assert!(result.is_ok());
     }
 }

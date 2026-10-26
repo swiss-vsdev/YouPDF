@@ -370,10 +370,60 @@ impl YouPdfApp {
                 Some(tab) => (Some(tab.title.clone()), Some(tab.total())),
                 None => (None, None),
             };
-            self.ai.show(ctx, &self.ai_doc_text, name.as_deref(), pages);
+            self.ai.show(
+                ctx,
+                self.tabs.get(self.active).map(|tab| &tab.doc),
+                &self.ai_doc_text,
+                name.as_deref(),
+                pages,
+            );
+            // La fenêtre de traduction a besoin du document actif, et de
+            // l'application qui possède le document mutable : c'est elle qui
+            // écrit le résultat dans l'onglet.
+            let doc_ref = self.tabs.get(self.active).map(|tab| &tab.doc);
+            self.ai.translate_window(ctx, doc_ref);
+            if self.ai.translate_apply.take() == Some(true) {
+                self.apply_translation(ctx);
+            }
+            if let Some(page) = self.ai.goto_page.take() {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.page = page;
+                }
+                self.jump = Some(page);
+            }
         }
 
-        /// Fenêtre « Créer » : page vierge ou PDF à partir d'images.
+        /// Applique la traduction bilingale stockée dans le panneau IA au
+    /// document actif.
+    ///
+    /// C'est l'interface qui écrit le résultat : le fil de travail a seulement
+    /// traduit le texte, page par page. Le document est modifié en place par
+    /// [`Document::translate_page`], qui utilise la primitive de caviardage
+    /// pour effacer l'original et poser la traduction à un corps réduit.
+    ///
+    /// ponytail: page-level blocks only. Les boîtes par fragment de texte
+    /// nécessiteraient un extracteur de flux de contenu ; sans elles, la
+    /// traduction recouvre toute la page et réduit le corps jusqu'à ce que
+    /// la traduction tienne. Les documents multi-colonnes ou à tableaux
+    /// ne survivent pas à l'opération telle qu'elle est implémentée.
+    pub(super) fn apply_translation(&mut self, ctx: &egui::Context) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let renderer = &*self.renderer;
+        let result = self.ai.apply_translation(&mut tab.doc, renderer);
+        match result {
+            Ok(()) => {
+                self.mark_document_changed();
+                self.toast(ctx, "Translation applied to the document.");
+            }
+            Err(err) => {
+                self.toast(ctx, format!("Translation failed: {err}"));
+            }
+        }
+    }
+
+    /// Fenêtre « Créer » : page vierge ou PDF à partir d'images.
         pub(super) fn create_window(&mut self, ctx: &egui::Context) {
             if !self.create_open {
                 return;
@@ -381,6 +431,7 @@ impl YouPdfApp {
             let mut open = true;
             let mut make_blank = false;
             let mut images = false;
+            let mut capture: Option<bool> = None;
             self.show_modal(ctx, "modal-create", "Create", 380.0, &mut open, |app, ui| {
                 ui.label(section(t("Blank document")));
                 ui.horizontal(|ui| {
@@ -405,8 +456,29 @@ impl YouPdfApp {
                 if ui.button(t("Choose images…")).clicked() {
                     images = true;
                 }
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(10.0);
+                ui.label(section(t("From capture")));
+                ui.label(
+                    RichText::new("macOS only: the screen selection crosshair, or a PNG image already on the clipboard.")
+                        .size(LABEL)
+                        .color(pal().muted),
+                );
+                ui.add_space(SPACE_S);
+                ui.horizontal(|ui| {
+                    if ui.button(t("Screen selection…")).clicked() {
+                        capture = Some(false);
+                    }
+                    if ui.button(t("Clipboard")).clicked() {
+                        capture = Some(true);
+                    }
+                });
             });
 
+            if let Some(from_clipboard) = capture {
+                self.import_capture(ctx, from_clipboard);
+            }
             if make_blank {
                 match blank_document(self.create_pages.max(1), 595.0, 842.0) {
                     Ok(doc) => {

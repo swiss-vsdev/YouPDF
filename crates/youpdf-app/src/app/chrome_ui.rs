@@ -367,6 +367,7 @@ impl YouPdfApp {
             let mut layout_choice: Option<PageLayout> = None;
             let mut zoom_choice: Option<ZoomMode> = None;
             let mut slideshow = false;
+            let mut readaloud = false;
 
             TopBottomPanel::bottom("statusbar")
                 .exact_height(STATUS_H)
@@ -493,6 +494,10 @@ impl YouPdfApp {
                             slideshow = true;
                         }
 
+                        if status_button(ui, ph::SPEAKER_SIMPLE_HIGH, "Read Aloud") {
+                            readaloud = true;
+                        }
+
                         // Graphe de droite : dimensions et protection.
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.add_space(SPACE_M);
@@ -534,6 +539,9 @@ impl YouPdfApp {
             }
             if slideshow {
                 self.enter_slideshow(ctx);
+            }
+            if readaloud {
+                self.readaloud_open = true;
             }
         }
 
