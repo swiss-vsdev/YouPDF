@@ -235,3 +235,161 @@ fn annot_rect(dict: &Dictionary) -> Option<[f32; 4]> {
     let y2 = number(3)?;
     Some([x1.min(x2), y1.min(y2), x1.max(x2), y1.max(y2)])
 }
+
+/// Apparence d'un lien : ce que l'on voit de son cadre.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinkAppearance {
+    /// Le trait est-il visible ?
+    pub visible: bool,
+    /// Épaisseur du trait, en points.
+    pub width: f32,
+    /// Pointillé `/D` : `[dash, gap]`. `None` = trait plein.
+    pub dash: Option<Vec<f32>>,
+    /// Couleur RVB du trait.
+    pub color: [u8; 3],
+}
+
+impl Default for LinkAppearance {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            width: 1.0,
+            dash: None,
+            color: [0, 0, 255],
+        }
+    }
+}
+
+impl LinkAppearance {
+    /// Un lien visible, fin, bleu, sans pointillé.
+    pub fn default_visible() -> Self {
+        Self::default()
+    }
+}
+
+/// Cherche l'`ObjectId` de l'annotation `Link` de `doc` dont le `/Rect`
+/// est à `rect` (aux erreurs flottantes près), sur la page `page`.
+fn find_link_id(doc: &Document, page: usize, rect: [f32; 4]) -> Option<lopdf::ObjectId> {
+    let page_id = doc.page_id(page as u32).ok()?;
+    let page_dict = doc.inner().get_dictionary(page_id).ok()?;
+    let annots = page_dict.get(b"Annots").ok()?;
+    let items: Vec<Object> = match annots {
+        Object::Array(items) => items.clone(),
+        Object::Reference(id) => doc
+            .inner()
+            .get_object(*id)
+            .ok()
+            .and_then(|o| o.as_array().ok())
+            .cloned()
+            .unwrap_or_default(),
+        _ => return None,
+    };
+    for item in &items {
+        let id = match item {
+            Object::Reference(id) => *id,
+            _ => continue,
+        };
+        let Ok(dict) = doc.inner().get_dictionary(id) else {
+            continue;
+        };
+        if dict.get(b"Subtype").ok().and_then(|o| o.as_name().ok()) != Some(b"Link") {
+            continue;
+        }
+        let Some(found) = annot_rect(dict) else {
+            continue;
+        };
+        let close = (found[0] - rect[0]).abs() < 0.01
+            && (found[1] - rect[1]).abs() < 0.01
+            && (found[2] - rect[2]).abs() < 0.01
+            && (found[3] - rect[3]).abs() < 0.01;
+        if close {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// Cherche le dictionnaire de l'annotation `Link` en lecture seule.
+fn find_link_annot(doc: &Document, page: usize, rect: [f32; 4]) -> Option<&Dictionary> {
+    let id = find_link_id(doc, page, rect)?;
+    doc.inner().get_dictionary(id).ok()
+}
+
+/// Écris l'apparence (`/Border`, `/C`) dans le dictionnaire de l'annotation.
+///
+/// `/Border` = `[dash_array_width h v dash_pattern]`, où `width=0` rend le
+/// trait invisible. `/C` porte la couleur RVB normalisée.
+pub fn set_link_appearance(
+    doc: &mut Document,
+    page: usize,
+    rect: [f32; 4],
+    appearance: &LinkAppearance,
+) -> youpdf_shared::Result<()> {
+    let width = if appearance.visible { appearance.width } else { 0.0 };
+    let dash_array: Vec<Object> = appearance
+        .dash
+        .as_ref()
+        .map(|v| v.iter().map(|&x| Object::Real(x)).collect())
+        .unwrap_or_default();
+    let border = Object::Array(vec![
+        Object::Real(0.0),
+        Object::Real(0.0),
+        Object::Real(width),
+        Object::Array(dash_array),
+    ]);
+    let color = Object::Array(vec![
+        Object::Real(appearance.color[0] as f32 / 255.0),
+        Object::Real(appearance.color[1] as f32 / 255.0),
+        Object::Real(appearance.color[2] as f32 / 255.0),
+    ]);
+    let dict = {
+        let id = find_link_id(doc, page, rect).ok_or_else(|| {
+            youpdf_shared::Error::Pdf("link annotation not found".into())
+        })?;
+        doc.inner_mut().get_dictionary_mut(id).map_err(|e| {
+            youpdf_shared::Error::Pdf(e.to_string())
+        })?
+    };
+    dict.set(b"Border", border);
+    dict.set(b"C", color);
+    Ok(())
+}
+
+/// Relit l'apparence depuis `/Border` et `/C`.
+pub fn get_link_appearance(
+    doc: &Document,
+    page: usize,
+    rect: [f32; 4],
+) -> Option<LinkAppearance> {
+    let dict = find_link_annot(doc, page, rect)?;
+    let mut appearance = LinkAppearance::default();
+    if let Ok(Object::Array(items)) = dict.get(b"Border") {
+        if let Some(w) = items.get(2).and_then(|o| o.as_float().ok()) {
+            appearance.visible = w > 0.0;
+            appearance.width = w;
+        }
+        if let Some(Object::Array(dash)) = items.get(3) {
+            if !dash.is_empty() {
+                appearance.dash = Some(
+                    dash.iter()
+                        .filter_map(|o| o.as_float().ok())
+                        .collect(),
+                );
+            }
+        }
+    }
+    if let Ok(Object::Array(items)) = dict.get(b"C") {
+        let c: Vec<f32> = items
+            .iter()
+            .filter_map(|o| o.as_float().ok().or_else(|| o.as_i64().ok().map(|v| v as f32)))
+            .collect();
+        if c.len() >= 3 {
+            appearance.color = [
+                (c[0] * 255.0).round() as u8,
+                (c[1] * 255.0).round() as u8,
+                (c[2] * 255.0).round() as u8,
+            ];
+        }
+    }
+    Some(appearance)
+}

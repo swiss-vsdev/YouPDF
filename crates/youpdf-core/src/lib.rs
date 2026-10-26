@@ -69,7 +69,7 @@ pub use edit::{
 };
 pub use extract::{ExtractedTable, KeyValue};
 pub use forms::{FieldProperties, FormDataFormat, FormField, FormFieldKind, NewFormField};
-pub use links::{LinkAction, PageLink};
+pub use links::{LinkAction, LinkAppearance, PageLink};
 pub use measure::{MeasureKind, Measurement};
 pub use metadata::DocumentMetadata;
 pub use ocr::{
@@ -81,13 +81,14 @@ pub use office::hex_color;
 pub use pdfa::Conformance;
 pub use protect::{EncryptionOptions, EncryptionStrength, Permissions};
 pub use redact::{
-    fit_block, fit_block_from, line_strips, RedactionFill, RedactionMark, RedactionOverlay,
-    RedactionRegion, RedactionReport, TranslationOptions, TranslationReport, zip_lines,
+    fit_block, fit_block_from, line_strips, CodeSetEntry, DEFAULT_CODE_SETS, RedactionFill,
+    RedactionMark, RedactionOverlay, RedactionRegion, RedactionReport, TranslationOptions,
+    TranslationReport, find_code_matches, mark_code_matches, zip_lines,
 };
 pub use render::{PageBitmap, PdfiumRenderer, RenderOptions, Renderer};
 pub use search::{
-    SearchIndex, SearchOptions, SearchResult, find_query, fold_case, is_whole_word, match_rects,
-    query_matches, replace_occurrences,
+    DocumentStats, SearchIndex, SearchOptions, SearchResult, find_query, fold_case, is_whole_word,
+    match_rects, query_matches, replace_occurrences,
 };
 pub use signature::{SignaturePlacement, SignatureRequest, SignatureStatus};
 pub use structure::{

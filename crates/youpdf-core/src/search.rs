@@ -157,6 +157,33 @@ impl SearchIndex {
         self.text.trim().is_empty()
     }
 
+    /// Nombre de mots, selon la même règle que `str::split_whitespace`.
+    ///
+    /// Un « mot » est un séquence de caractères non-blancs délimitée par des
+    /// espaces ou des sauts de ligne. Les form-feeds (marqueurs de page) sont
+    /// aussi des séparateurs.
+    pub fn word_count(&self) -> usize {
+        self.text.split_whitespace().count()
+    }
+
+    /// Nombre de caractères CJK (idéogrammes), hors ponctuation.
+    ///
+    /// ponytail: couvre les blocs principaux ; ajouter Hiragana/Katakana/Hangul
+    /// si la détection multilingue doit être exhaustive.
+    pub fn cjk_count(&self) -> usize {
+        self.text.chars().filter(|c| is_cjk(*c)).count()
+    }
+
+    /// Nombre d'espaces (blancs) dans le texte indexé.
+    pub fn space_count(&self) -> usize {
+        self.text.chars().filter(|c| c.is_whitespace()).count()
+    }
+
+    /// Statistiques agrégées pour l'affichage dans l'UI.
+    pub fn stats(&self) -> DocumentStats {
+        DocumentStats::from_index(self)
+    }
+
     /// Recherche insensible à la casse toutes les occurrences de `query`.
     ///
     /// `max_results` limite le nombre de résultats retournés (0 = illimité).
@@ -392,6 +419,47 @@ pub fn replace_occurrences(
 /// encore des sous-chaînes que la page, elle, refuse.
 pub fn find_query(hay: &str, needle: &str, options: SearchOptions) -> Option<(usize, usize)> {
     query_matches(hay, needle, options).first().copied()
+}
+
+
+/// Vrai si `c` est un caractère CJK unifié.
+///
+/// ponytail: blocs principaux uniquement ; Hiragana/Katakana/Hangul ne sont
+/// pas comptés. Ajouter les plages si la détection doit être exhaustive.
+fn is_cjk(c: char) -> bool {
+    let cp = c as u32;
+    (0x4E00..=0x9FFF).contains(&cp)
+        || (0x3400..=0x4DBF).contains(&cp)
+        || (0x20000..=0x2A6DF).contains(&cp)
+        || (0x2A700..=0x2EBEF).contains(&cp)
+}
+
+/// Agrégat des statistiques de texte pour l'affichage dans l'UI.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DocumentStats {
+    /// Nombre de pages dans le document.
+    pub pages: usize,
+    /// Mots au sens `split_whitespace`.
+    pub words: usize,
+    /// Caractères CJK (idéogrammes).
+    pub cjk: usize,
+    /// Blancs (`char::is_whitespace`).
+    pub spaces: usize,
+    /// Tous les caractères (UTF-8) indexés.
+    pub total_chars: usize,
+}
+
+impl DocumentStats {
+    /// Construit les stats depuis un index existant.
+    pub fn from_index(index: &SearchIndex) -> Self {
+        Self {
+            pages: index.page_count(),
+            words: index.word_count(),
+            cjk: index.cjk_count(),
+            spaces: index.space_count(),
+            total_chars: index.char_count(),
+        }
+    }
 }
 
 

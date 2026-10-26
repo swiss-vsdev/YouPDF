@@ -1,53 +1,68 @@
 use youpdf_core::Document;
 use youpdf_shared::Result;
 
-/// Test interleave pages with even_first=true
+/// Ordre initial des pages, du premier au dernier.
+fn order(doc: &Document) -> Vec<lopdf::ObjectId> {
+    doc.page_ids().into_values().collect()
+}
+
+/// Reconstruit un document depuis ses octets (l'arbre des pages est figé).
+fn reload(doc: &Document) -> Result<Document> {
+    Document::from_bytes(&doc.to_bytes()?)
+}
+
 /// 6 pages → [0,2,4,1,3,5]
 #[test]
 fn interleave_even_first() -> Result<()> {
-    // Create a 6-page PDF
     let doc = youpdf_core::create::blank_document(6, 595.0, 842.0)?;
-    let bytes = doc.to_bytes()?;
-    let mut doc = Document::from_bytes(&bytes)?;
+    let ids = order(&doc);
+    let mut doc = reload(&doc)?;
 
     youpdf_core::organize::exchange::interleave_pages(&mut doc, true)?;
 
-    // Vérifier le nombre de pages
-    assert_eq!(doc.page_count(), 6);
-
+    assert_eq!(order(&doc), vec![ids[0], ids[2], ids[4], ids[1], ids[3], ids[5]]);
+    // L'ordre doit survivre à une sauvegarde : l'arbre est réellement réécrit.
+    assert_eq!(order(&reload(&doc)?), vec![ids[0], ids[2], ids[4], ids[1], ids[3], ids[5]]);
     Ok(())
 }
 
-/// Test interleave pages with even_first=false
 /// 6 pages → [1,3,5,0,2,4]
 #[test]
 fn interleave_odd_first() -> Result<()> {
-    // Create a 6-page PDF
     let doc = youpdf_core::create::blank_document(6, 595.0, 842.0)?;
-    let bytes = doc.to_bytes()?;
-    let mut doc = Document::from_bytes(&bytes)?;
+    let ids = order(&doc);
+    let mut doc = reload(&doc)?;
 
     youpdf_core::organize::exchange::interleave_pages(&mut doc, false)?;
 
-    // Vérifier le nombre de pages
-    assert_eq!(doc.page_count(), 6);
-
+    assert_eq!(order(&doc), vec![ids[1], ids[3], ids[5], ids[0], ids[2], ids[4]]);
     Ok(())
 }
 
-/// Test exchange_ranges swapping two disjoint ranges
+/// Échange les plages 0..3 et 10..13 d'un document de 13 pages.
 #[test]
 fn exchange_disjoint_ranges() -> Result<()> {
-    // Create a 13-page PDF
     let doc = youpdf_core::create::blank_document(13, 595.0, 842.0)?;
-    let bytes = doc.to_bytes()?;
-    let mut doc = Document::from_bytes(&bytes)?;
+    let ids = order(&doc);
+    let mut doc = reload(&doc)?;
 
-    // Swap pages 0-2 with 10-12
     youpdf_core::organize::exchange::exchange_ranges(&mut doc, 0..3, 10..13)?;
 
-    // Vérifier le nombre de pages
-    assert_eq!(doc.page_count(), 13);
+    let expected = [10, 11, 12, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2]
+        .iter()
+        .map(|&i| ids[i])
+        .collect::<Vec<_>>();
+    assert_eq!(order(&doc), expected);
+    assert_eq!(order(&reload(&doc)?), expected);
+    Ok(())
+}
 
+/// Des plages qui se chevauchent sont refusées, pas appliquées à moitié.
+#[test]
+fn exchange_overlapping_ranges_rejected() -> Result<()> {
+    let doc = youpdf_core::create::blank_document(6, 595.0, 842.0)?;
+    let mut doc = reload(&doc)?;
+
+    assert!(youpdf_core::organize::exchange::exchange_ranges(&mut doc, 2..5, 4..6).is_err());
     Ok(())
 }

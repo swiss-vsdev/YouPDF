@@ -130,6 +130,9 @@ impl Permissions {
     }
 }
 
+pub mod permissions;
+pub use permissions::{PermissionRow, permissions_from_flags, permissions_from_struct, read_permissions};
+
 /// Options de chiffrement.
 #[derive(Debug, Clone)]
 pub struct EncryptionOptions {

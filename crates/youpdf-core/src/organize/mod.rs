@@ -16,6 +16,8 @@ use crate::document::Document;
 mod merge;
 mod split;
 mod tree;
+pub mod exchange;
+pub mod resize;
 
 
 impl Document {

@@ -1218,6 +1218,15 @@ pub struct YouPdfApp {
     bates_open: bool,
     bates: Bates,
     bates_from: Option<u32>,
+    /// Fenêtre « Outils de pages » : redimensionner, interlacer, échanger.
+    page_tools_open: bool,
+    page_new_width: f32,
+    page_new_height: f32,
+    page_interleave_even_first: bool,
+    page_exchange_a: usize,
+    page_exchange_a_count: usize,
+    page_exchange_b: usize,
+    page_exchange_b_count: usize,
     /// Fenêtre « Comparer » : fichier choisi et rapport affiché.
     compare_open: bool,
     compare_path: Option<PathBuf>,
@@ -1476,6 +1485,7 @@ pub struct YouPdfApp {
     edit_text: Option<EditTextDraft>,
     /// Nettoyer les métadonnées en même temps que le caviardage.
     redact_sanitize: bool,
+    redact_code_sets: std::collections::HashSet<usize>,
     /// Champ de formulaire sélectionné et saisie en cours.
     form_edit: Option<(usize, String)>,
     /// Brouillon des propriétés du champ sélectionné.
@@ -1656,6 +1666,14 @@ impl YouPdfApp {
             background: Background::default(),
             background_from: None,
             bates_open: false,
+            page_tools_open: false,
+            page_new_width: 612.0,
+            page_new_height: 792.0,
+            page_interleave_even_first: true,
+            page_exchange_a: 1,
+            page_exchange_a_count: 1,
+            page_exchange_b: 1,
+            page_exchange_b_count: 1,
             bates: Bates::default(),
             bates_from: None,
             compare_open: false,
@@ -1794,6 +1812,7 @@ impl YouPdfApp {
             redact_modal: false,
             edit_text: None,
             redact_sanitize: true,
+            redact_code_sets: std::collections::HashSet::new(),
             form_edit: None,
             form_props: None,
             form_data_format: FormDataFormat::Fdf,
@@ -2173,6 +2192,7 @@ impl eframe::App for YouPdfApp {
         self.tile_split_window(ctx);
         self.background_window(ctx);
         self.bates_window(ctx);
+        self.page_tools_window(ctx);
         self.compare_window(ctx);
         self.ocr_window(ctx);
         self.readaloud_window(ctx);

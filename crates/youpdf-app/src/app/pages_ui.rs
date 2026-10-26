@@ -717,4 +717,139 @@ impl YouPdfApp {
             self.bates_open = false;
         }
     }
+
+    /// Fenêtre « Outils de pages » : redimensionner, interlacer, échanger.
+    ///
+    /// Repose sur `youpdf_core::organize` (resize_page, interleave_pages,
+    /// exchange_ranges).
+    pub(super) fn page_tools_window(&mut self, ctx: &egui::Context) {
+        if !self.page_tools_open {
+            return;
+        }
+        let mut keep_open = true;
+        self.show_modal(ctx, "modal-page-tools", "Page Tools", 420.0, &mut keep_open, |app, ui| {
+            let tab = app.tabs.get(app.active);
+            let page = tab.map(|t| t.page).unwrap_or(1);
+            let total = tab.map(|t| t.doc.page_count()).unwrap_or(0);
+            if total == 0 {
+                ui.label(muted(t("Open a document first."), LABEL));
+                return;
+            }
+            // Redimensionner la page courante.
+            ui.label(section(t("Resize")));
+            ui.horizontal(|ui| {
+                ui.label(muted(t("Width"), LABEL));
+                ui.add(
+                    egui::DragValue::new(&mut app.page_new_width)
+                        .range(10.0..=2000.0)
+                        .speed(1.0)
+                        .suffix(" pt"),
+                );
+                ui.label(muted(t("Height"), LABEL));
+                ui.add(
+                    egui::DragValue::new(&mut app.page_new_height)
+                        .range(10.0..=2000.0)
+                        .speed(1.0)
+                        .suffix(" pt"),
+                );
+            });
+            if ui.button(format!("{} p. {}", t("Resize"), page)).clicked() {
+                let (w, h) = (app.page_new_width, app.page_new_height);
+                let result = app
+                    .tabs
+                    .get_mut(app.active)
+                    .map(|tab| youpdf_core::organize::resize::resize_page(&mut tab.doc, page, w, h));
+                match result {
+                    Some(Ok(())) => {
+                        app.mark_document_changed();
+                        app.toast(ctx, format!("Page {page} resized to {w}×{h} pt"));
+                    }
+                    Some(Err(err)) => app.toast(ctx, format!("Resize failed: {err}")),
+                    None => {}
+                }
+            }
+            ui.add_space(SPACE_L);
+
+            // Interlacer tout le document.
+            ui.label(section(t("Interleave")));
+            let even_first = app.page_interleave_even_first;
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(even_first, "Even pages first")
+                    .clicked()
+                {
+                    app.page_interleave_even_first = true;
+                }
+                if ui
+                    .selectable_label(!even_first, "Odd pages first")
+                    .clicked()
+                {
+                    app.page_interleave_even_first = false;
+                }
+            });
+            if ui.button(t("Interleave")).clicked() {
+                let even_first = app.page_interleave_even_first;
+                let result = app
+                    .tabs
+                    .get_mut(app.active)
+                    .map(|tab| youpdf_core::organize::exchange::interleave_pages(&mut tab.doc, even_first));
+                match result {
+                    Some(Ok(())) => {
+                        app.mark_document_changed();
+                        app.toast(ctx, "Pages interleaved");
+                    }
+                    Some(Err(err)) => app.toast(ctx, format!("Interleave failed: {err}")),
+                    None => {}
+                }
+            }
+            ui.add_space(SPACE_L);
+
+            // Échanger deux plages de pages.
+            ui.label(section(t("Exchange Ranges")));
+            ui.horizontal(|ui| {
+                ui.label(muted("A:", LABEL));
+                ui.add(egui::DragValue::new(&mut app.page_exchange_a).range(1..=total).speed(1));
+                ui.label(muted("count", LABEL));
+                ui.add(
+                    egui::DragValue::new(&mut app.page_exchange_a_count)
+                        .range(1..=total)
+                        .speed(1),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label(muted("B:", LABEL));
+                ui.add(egui::DragValue::new(&mut app.page_exchange_b).range(1..=total).speed(1));
+                ui.label(muted("count", LABEL));
+                ui.add(
+                    egui::DragValue::new(&mut app.page_exchange_b_count)
+                        .range(1..=total)
+                        .speed(1),
+                );
+            });
+            if ui.button(t("Exchange")).clicked() {
+                let a = app.page_exchange_a;
+                let ac = app.page_exchange_a_count;
+                let b = app.page_exchange_b;
+                let bc = app.page_exchange_b_count;
+                let result = app.tabs.get_mut(app.active).map(|tab| {
+                    youpdf_core::organize::exchange::exchange_ranges(
+                        &mut tab.doc,
+                        a..(a + ac),
+                        b..(b + bc),
+                    )
+                });
+                match result {
+                    Some(Ok(())) => {
+                        app.mark_document_changed();
+                        app.toast(ctx, format!("Ranges A ({a}..{}) and B ({b}..{}) exchanged", a + ac, b + bc));
+                    }
+                    Some(Err(err)) => app.toast(ctx, format!("Exchange failed: {err}")),
+                    None => {}
+                }
+            }
+        });
+        if !keep_open {
+            self.page_tools_open = false;
+        }
+    }
 }
