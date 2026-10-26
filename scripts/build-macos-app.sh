@@ -46,4 +46,18 @@ if [ -f "$ROOT/pdfium/libpdfium.dylib" ]; then
 	xattr -d com.apple.quarantine "$APP/Contents/MacOS/libpdfium.dylib" 2>/dev/null || true
 fi
 
+# Tesseract optionnel : placé dans Contents/MacOS/bin/ (recherché avant PATH).
+if command -v tesseract >/dev/null 2>&1; then
+	mkdir -p "$APP/Contents/MacOS/bin"
+	cp "$(which tesseract)" "$APP/Contents/MacOS/bin/"
+fi
+
+# Empaquetage : .app zippé.
+ARCH="${1:-$(uname -m)}"
+APP_NAME="YouPDF-macos-$ARCH-$VERSION.app"
+ZIP_PATH="$ROOT/target/release/$APP_NAME.zip"
+rm -f "$ZIP_PATH"
+cd "$ROOT/target"
+zip -rq "$ZIP_PATH" YouPDF.app
 echo "Bundle : $APP"
+echo "Zip   : $ZIP_PATH"

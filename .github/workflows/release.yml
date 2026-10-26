@@ -1,0 +1,142 @@
+name: Release build
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            arch: arm64
+          - name: macos-x64
+            os: macos-13
+            target: x86_64-apple-darwin
+            arch: x86_64
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - name: windows-x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux deps
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev \
+            libfontconfig1-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxcb-cursor-dev libegl1-dev \
+            libglib2.0-dev patchelf
+
+      - name: Install macOS deps
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew install tesseract tesseract-lang 2>/dev/null || true
+
+      - name: Download pdfium (Linux/macOS)
+        if: matrix.os != 'windows-2022'
+        run: bash scripts/install-pdfium.sh
+
+      - name: Download pdfium (Windows)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: .\scripts\install-pdfium.ps1
+
+      - name: Build release binary
+        run: cargo build --release --bin youpdf
+
+      - name: Package macOS
+        if: startsWith(matrix.os, 'macos')
+        run: bash scripts/build-macos-app.sh ${{ matrix.arch }}
+
+      - name: Package Linux
+        if: matrix.os == 'ubuntu-22.04'
+        run: bash scripts/build-linux-appimage.sh
+
+      - name: Package Windows
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $ROOT = $env:GITHUB_WORKSPACE
+          $OUT = Join-Path $ROOT "target/release/YouPDF-win64"
+          New-Item -ItemType Directory -Force -Path $OUT | Out-Null
+          Copy-Item "$ROOT/target/release/youpdf.exe" "$OUT/"
+          if (Test-Path "$ROOT/pdfium/pdfium.dll") {
+              Copy-Item "$ROOT/pdfium/pdfium.dll" "$OUT/"
+          }
+          if (Get-Command tesseract -ErrorAction SilentlyContinue) {
+              Copy-Item (Get-Command tesseract).Source "$OUT/bin/" -Force
+          }
+          Compress-Archive -Path "$OUT" -DestinationPath "$ROOT/target/release/YouPDF-win64.zip" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            target/release/YouPDF-*.zip
+            target/release/YouPDF-linux-*.tar.gz
+
+  release:
+    name: Create GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            artifacts/**/*.zip
+            artifacts/**/*.tar.gz
+          body: |
+            YouPDF 0.1.0 — full cross-platform build.
+
+            ## Downloads
+
+            | Platform | File |
+            |----------|------|
+            | macOS Apple Silicon | `YouPDF-macos-arm64-0.1.0.zip` |
+            | macOS Intel | `YouPDF-macos-x64-0.1.0.zip` |
+            | Linux x86_64 | `YouPDF-linux-x64-0.1.0.tar.gz` |
+            | Windows x86_64 | `YouPDF-win64-0.1.0.zip` |
+
+            ## Installation
+
+            **macOS**: unzip the `.zip`, then right-click → Open the `.app` (first run only).
+            **Linux**: extract the `.tar.gz`, run `./youpdf`.
+            **Windows**: unzip the `.zip`, run `youpdf.exe`.
+
+            ## Known limitations
+
+            - macOS apps are ad-hoc signed; users must right-click → Open once.
+            - OCR requires Tesseract separately (not bundled in 0.1.0).
+            - No auto-update; manual updates only.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

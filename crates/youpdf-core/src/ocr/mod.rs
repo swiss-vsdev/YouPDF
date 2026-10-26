@@ -264,6 +264,23 @@ pub(crate) fn invalid_language(language: &str) -> youpdf_shared::Error {
 // ────────────────────────────────────────────────────────────────────────
 
 pub(crate) fn which(name: &str) -> std::result::Result<PathBuf, ()> {
+    // 1. Bundle directory: look for `<exe>/bin/<name>` so a portable
+    //    download (e.g. YouPDF.AppImage) finds tesseract without
+    //    requiring a system install.
+    if let Some(exe_dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        let bundle = exe_dir.join("bin").join(name);
+        if is_executable(&bundle) {
+            return Ok(bundle);
+        }
+        #[cfg(windows)]
+        {
+            let bundle_exe = exe_dir.join("bin").join(format!("{name}.exe"));
+            if is_executable(&bundle_exe) {
+                return Ok(bundle_exe);
+            }
+        }
+    }
+    // 2. System PATH.
     let path_var = std::env::var_os("PATH").ok_or(())?;
     for dir in std::env::split_paths(&path_var) {
         let candidate = dir.join(name);
