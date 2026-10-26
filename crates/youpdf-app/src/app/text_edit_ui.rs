@@ -204,7 +204,22 @@ impl YouPdfApp {
             let tab = self.tabs.get(self.active)?;
 
             if self.search_index.as_ref().map(|(idx, _)| *idx) != Some(self.active) {
-                match SearchIndex::build(&tab.doc) {
+                // L'index se construit sur le texte que le moteur LIT, pas
+                // sur celui que le décodeur de flux devine : les polices
+                // CID (sous-ensembles LaTeX, Type0) écrivent des codes que
+                // lopdf ne résout pas et lisent une chaîne vide — la
+                // recherche ne trouvait rien sur des pages pourtant
+                // lisibles à l'écran. Sans moteur, on garde l'ancien chemin.
+                let doc = &tab.doc;
+                let renderer = self.renderer.as_ref();
+                let built = SearchIndex::build_with(doc, |n| {
+                    renderer
+                        .engine_page_text(doc, n)
+                        .filter(|text| !text.trim().is_empty())
+                        .or_else(|| doc.page_text(n).ok())
+                        .unwrap_or_default()
+                });
+                match built {
                     Ok(index) => self.search_index = Some((self.active, index)),
                     Err(err) => {
                         if announce {
@@ -277,17 +292,18 @@ impl YouPdfApp {
                 // réparti proportionnellement sur la ligne entière.
                 let to_display =
                     |r: [f32; 4]| youpdf_core::geom::rect_to_display(&tab.doc, page, r);
-                let rects: Vec<[f32; 4]> = if fragment.chars.is_empty() {
-                    match_rects(&fragment.text, rect, &needle, options)
-                } else {
-                    match_rects_with_chars(
-                        &fragment.text,
-                        &fragment.chars,
-                        &needle,
-                        options,
-                        to_display,
-                    )
-                };
+                // La meilleure précision disponible : boîtes de caractères si le
+                // moteur les fournit et qu'elles s'accordent avec le texte,
+                // sinon l'approximation proportionnelle. Un mauvais
+                // surlignage vaut mieux qu'aucun.
+                let rects: Vec<[f32; 4]> = match_rects_best(
+                    &fragment.text,
+                    rect,
+                    &fragment.chars,
+                    &needle,
+                    options,
+                    to_display,
+                );
                 self.search_rects.extend(rects);
             }
         }

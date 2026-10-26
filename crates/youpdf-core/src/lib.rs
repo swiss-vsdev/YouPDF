@@ -88,7 +88,7 @@ pub use redact::{
 pub use render::{PageBitmap, PdfiumRenderer, RenderOptions, Renderer};
 pub use search::{
     DocumentStats, SearchIndex, SearchOptions, SearchResult, find_query, fold_case, is_whole_word,
-    match_rects, query_matches, replace_occurrences,
+    match_rects, match_rects_best, match_rects_with_chars, query_matches, replace_occurrences,
 };
 pub use signature::{SignaturePlacement, SignatureRequest, SignatureStatus};
 pub use structure::{

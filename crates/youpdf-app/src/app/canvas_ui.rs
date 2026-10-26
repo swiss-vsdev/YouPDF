@@ -332,24 +332,53 @@ impl YouPdfApp {
                                 }
                             }
                         } else if action == ToolAction::None {
-                            // Mode lecture : le curseur suit ce qui est sous le
-                            // pointeur. Une main sur un lien, un curseur de
-                            // texte partout ailleurs sur la page — c'est le
-                            // comportement d'un lecteur, pas d'un outil de
-                            // dessin.
+                            // Mode lecture : la main sur un lien, le curseur
+                            // de texte sur du texte, rien ailleurs. Une page
+                            // scannerisée sans couche texte garde donc la
+                            // flèche — il n'y a rien à sélectionner dessus.
                             if let Some(pos) = ctx.pointer_hover_pos() {
                                 if rect.contains(pos) {
                                     let point = [
                                         (pos.x - page_rect.min.x) / scale,
                                         (page_rect.max.y - pos.y) / scale,
                                     ];
+                                    // Le lien prime sur le texte : il se
+                                    // pose souvent sur un mot, et le lecteur
+                                    // attend la main là où le clic ouvrira
+                                    // l'URL — comme au clic, où le lien est
+                                    // testé avant tout le reste.
                                     let links = tab.doc.page_links(page as usize);
-                                    let on_link = link_at(&links, point).is_some();
-                                    ui.ctx().set_cursor_icon(if on_link {
-                                        CursorIcon::PointingHand
+                                    if link_at(&links, point).is_some() {
+                                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
                                     } else {
-                                        CursorIcon::Text
-                                    });
+                                        // Les blocs sont en repère affiché,
+                                        // comme `point` : une simple
+                                        // inclusion suffit. Le survol les
+                                        // extrait une page à la fois ; le
+                                        // glissé de sélection le faisait
+                                        // déjà, le cache ne grossit que d'une
+                                        // page survolée.
+                                        // ponytail: le cache de fragments
+                                        // n'est pas borné — vider les pages
+                                        // lointaines si un document à mille
+                                        // pages s'alourdit au survol.
+                                        if !tab.fragments.contains_key(&page) {
+                                            reader::extract_page_fragments(renderer, tab, page);
+                                        }
+                                        let on_text =
+                                            tab.fragments.get(&page).is_some_and(|frags| {
+                                                frags.iter().any(|frag| {
+                                                    let [x1, y1, x2, y2] = frag.rect;
+                                                    point[0] >= x1.min(x2)
+                                                        && point[0] <= x1.max(x2)
+                                                        && point[1] >= y1.min(y2)
+                                                        && point[1] <= y1.max(y2)
+                                                })
+                                            });
+                                        if on_text {
+                                            ui.ctx().set_cursor_icon(CursorIcon::Text);
+                                        }
+                                    }
                                 }
                             }
                         }
