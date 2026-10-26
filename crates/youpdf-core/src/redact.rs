@@ -50,8 +50,11 @@ use crate::edit::PatchFont;
 use crate::render::{RenderOptions, Renderer};
 
 pub(crate) mod burn;
+pub mod codesets;
 pub(crate) mod geometry;
 pub(crate) mod surgery;
+
+pub use codesets::{CodeSetEntry, DEFAULT_CODE_SETS, find_code_matches, mark_code_matches};
 
 /// Une région à caviarder sur une page.
 #[derive(Debug, Clone, PartialEq)]

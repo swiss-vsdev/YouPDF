@@ -152,6 +152,10 @@ pub fn icon_file_plus(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::FILE_PLUS);
 }
 
+pub fn icon_gear(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::GEAR);
+}
+
 pub fn icon_undo(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::ARROW_COUNTER_CLOCKWISE);
 }

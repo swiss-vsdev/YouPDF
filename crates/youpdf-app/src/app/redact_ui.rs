@@ -2,6 +2,7 @@
 
 
 use super::*;
+use youpdf_core::{DEFAULT_CODE_SETS, mark_code_matches};
 
 impl YouPdfApp {
 
@@ -86,6 +87,46 @@ impl YouPdfApp {
                         });
                     }
 
+                    ui.add_space(12.0);
+                    ui.collapsing("Code Sets", |ui| {
+                        ui.label(
+                            RichText::new("Detect sensitive data patterns and auto-mark them.")
+                                .size(CAPTION)
+                                .color(pal().muted),
+                        );
+                        ui.add_space(SPACE_XS);
+                        for (idx, entry) in DEFAULT_CODE_SETS.iter().enumerate() {
+                            let mut checked = app.redact_code_sets.contains(&idx);
+                            if ui.checkbox(&mut checked, entry.name).clicked() {
+                                if checked {
+                                    app.redact_code_sets.insert(idx);
+                                } else {
+                                    app.redact_code_sets.remove(&idx);
+                                }
+                            }
+                        }
+                        ui.add_space(SPACE_XS);
+                        if ui.button("Detect & Mark").clicked() {
+                            let selected: Vec<usize> = app.redact_code_sets.iter().copied().collect();
+                            let page = app.tabs.get(app.active).map(|t| t.page).unwrap_or(1);
+                            let outcome = app.tabs.get(app.active).and_then(|tab| {
+                                let sets: Vec<_> = if selected.is_empty() {
+                                    DEFAULT_CODE_SETS.to_vec()
+                                } else {
+                                    selected
+                                        .iter()
+                                        .map(|&i| DEFAULT_CODE_SETS[i].clone())
+                                        .collect()
+                                };
+                                mark_code_matches(&tab.doc, page, &sets).ok()
+                            });
+                            if let Some(marks) = outcome {
+                                let count = marks.len();
+                                app.redact_marks.extend(marks);
+                                app.toast(ctx, format!("{count} code-set match(es) marked"));
+                            }
+                        }
+                    });
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         if ui.button(t("Cancel")).clicked() {

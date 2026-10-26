@@ -5176,6 +5176,7 @@ dependencies = [
  "pkcs8",
  "quick-xml 0.41.0",
  "rcgen",
+ "regex",
  "rsa",
  "serde",
  "sha2",

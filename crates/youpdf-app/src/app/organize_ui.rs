@@ -93,6 +93,10 @@ impl YouPdfApp {
                         self.duplicate_pages(ui.ctx(), &selected, total);
                     }
                     ui.separator();
+                    if organize_button(ui, icon_gear, "Page Tools…") {
+                        self.page_tools_open = true;
+                    }
+                    ui.separator();
                     if ui.button(format!("{} Close", ph::X)).clicked() {
                         close = true;
                     }

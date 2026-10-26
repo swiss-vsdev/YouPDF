@@ -266,6 +266,51 @@ impl YouPdfApp {
                             if matches!(target, InspectorTarget::TextSelection { .. }) {
                                 markup = markup_row(ui);
                             }
+                            // Apparence des liens : visibilité, épaisseur, couleur,
+                            // pointillé. Le panneau s'ouvre seulement pour un lien.
+                            if let Some(annot) = &annot {
+                                if annot.kind == AnnotationKind::Link {
+                                    let rect = annot.rect;
+                                    let page = annot.page;
+                                    let mut appearance = self
+                                        .tabs
+                                        .get(self.active)
+                                        .and_then(|tab| youpdf_core::links::get_link_appearance(&tab.doc, page, rect))
+                                        .unwrap_or_default();
+                                    ui.add_space(SPACE_S);
+                                    ui.label(
+                                        RichText::new("Link appearance")
+                                            .size(CAPTION)
+                                            .color(pal().muted),
+                                    );
+                                    ui.checkbox(&mut appearance.visible, "Visible");
+                                    ui.horizontal(|ui| {
+                                        ui.label(muted("Width", LABEL));
+                                        ui.add(
+                                            egui::DragValue::new(&mut appearance.width)
+                                                .range(0.0..=10.0)
+                                                .speed(0.1),
+                                        );
+                                    });
+                                    let mut color = Color32::from_rgb(appearance.color[0], appearance.color[1], appearance.color[2]);
+                                    ui.color_edit_button_srgba(&mut color);
+                                    appearance.color = [color.r(), color.g(), color.b()];
+                                    if ui.button("Apply").clicked() {
+                                        if let Some(tab) = self.tabs.get_mut(self.active) {
+                                            if youpdf_core::links::set_link_appearance(
+                                                &mut tab.doc,
+                                                page,
+                                                rect,
+                                                &appearance,
+                                            )
+                                            .is_ok()
+                                        {
+                                            self.mark_document_changed();
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         });
                     let rect = body.response.rect;
                     measured = Some(rect.size());

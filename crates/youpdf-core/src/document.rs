@@ -402,7 +402,7 @@ impl Document {
     }
 
     /// Résout un numéro de page (1-indexé) en identifiant d'objet lopdf.
-    pub(crate) fn page_id(&self, page_number: u32) -> Result<lopdf::ObjectId> {
+    pub fn page_id(&self, page_number: u32) -> Result<lopdf::ObjectId> {
         self.page_cache()
             .pages
             .get(&page_number)
@@ -654,12 +654,21 @@ impl Document {
     /// Accès contrôlé au document `lopdf` sous-jacent.
     ///
     /// invalide le cache de sérialisation : toute modification passe par ici.
-    pub(crate) fn inner_mut(&mut self) -> &mut lopdf::Document {
+    pub fn inner_mut(&mut self) -> &mut lopdf::Document {
         self.invalidate();
         &mut self.inner
     }
 
-    pub(crate) fn inner(&self) -> &lopdf::Document {
+    /// Accès en lecture au document `lopdf` sous-jacent.
+    pub fn inner(&self) -> &lopdf::Document {
+        &self.inner
+    }
+
+    /// Accès public (lecture) au document `lopdf` sous-jacent.
+    ///
+    /// Les tests d'intégration et les outils externes en ont besoin pour
+    /// poser des annotations brutes sans passer par l'API de haut niveau.
+    pub fn lopdf(&self) -> &lopdf::Document {
         &self.inner
     }
 }

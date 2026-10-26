@@ -326,6 +326,9 @@ impl YouPdfApp {
                 .and_then(|p| std::fs::metadata(p).ok())
                 .map(|m| format!("{:.1} KB", m.len() as f64 / 1024.0))
                 .unwrap_or_else(|| "—".to_owned());
+            let stats = youpdf_core::search::DocumentStats::from_index(
+                &youpdf_core::SearchIndex::build(&tab.doc).expect("build index"),
+            );
             let mut open = true;
             let title = tab.title.clone();
 
@@ -345,6 +348,10 @@ impl YouPdfApp {
                 row("Subject", meta.subject.as_deref().unwrap_or("—"));
                 row("Keywords", meta.keywords.as_deref().unwrap_or("—"));
                 row("Producer", meta.producer.as_deref().unwrap_or("—"));
+                row("Word count", &stats.words.to_string());
+                row("CJK", &stats.cjk.to_string());
+                row("Spaces", &stats.spaces.to_string());
+                row("Total chars", &stats.total_chars.to_string());
             });
 
             if !open {

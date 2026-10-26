@@ -339,6 +339,16 @@ impl YouPdfApp {
                             TextEdit::multiline(&mut props.action_js)
                                 .hint_text("app.alert(\"Hello\");"),
                         );
+                        ui.add_space(SPACE_S);
+                        if ui.button(t("Reset form")).clicked() {
+                            props.action_js = "this.resetForm();".to_owned();
+                        }
+                        if ui.button(t("Submit form")).clicked() {
+                            props.action_js = "this.submitForm();".to_owned();
+                        }
+                        if ui.button(t("Show field")).clicked() {
+                            props.action_js = r#"this.showField("field_name");"#.to_owned();
+                        }
                     }
                     4 => {
                         egui::ComboBox::from_id_salt("form-format")

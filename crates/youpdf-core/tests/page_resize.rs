@@ -58,3 +58,22 @@ fn resize_a4_to_legal() -> Result<()> {
 
     Ok(())
 }
+
+/// L'échelle doit venir de la boîte réelle de la page, pas d'une constante A4.
+#[test]
+fn resize_scales_from_actual_box() -> Result<()> {
+    // Page carrée 612 × 612 : une constante A4 produirait une échelle fausse.
+    let bytes = legal_pdf()?;
+    let mut doc = Document::from_bytes(&bytes)?;
+    resize::resize_page(&mut doc, 1, 1224.0, 1224.0)?;
+
+    let page_id = doc.page_id(1)?;
+    let content = doc.inner().get_page_content(page_id).expect("contenu de page");
+    let head = String::from_utf8_lossy(&content);
+    assert!(
+        head.starts_with("q 2 0 0 2 0 0 cm"),
+        "la matrice doit mettre la page carrée à l'échelle ×2, obtenu : {head}"
+    );
+
+    Ok(())
+}
