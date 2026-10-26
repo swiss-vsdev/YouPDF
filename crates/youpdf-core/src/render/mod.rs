@@ -177,6 +177,19 @@ pub trait Renderer {
     fn page_fragments(&self, doc: &Document, page_number: u32) -> Result<Vec<TextFragment>> {
         doc.extract_text_fragments(page_number)
     }
+
+    /// Texte brut d'une page (1-indexée) lu par le moteur, pour l'index
+    /// de recherche.
+    ///
+    /// `None` si le moteur ne sait pas lire le texte : l'appelant retombe
+    /// alors sur le décodeur du document. pdfium décode les polices CID
+    /// dont le flux ne donne que des codes — sur ces documents, le
+    /// décodeur lit une chaîne vide et la recherche ne trouvait rien,
+    /// même avec le texte affiché à l'écran.
+    fn engine_page_text(&self, doc: &Document, page_number: u32) -> Option<String> {
+        let _ = (doc, page_number);
+        None
+    }
 }
 
 /// Rendu factice, utilisé si pdfium n'est pas disponible.

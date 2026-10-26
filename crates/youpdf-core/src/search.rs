@@ -115,18 +115,35 @@ impl SearchIndex {
     /// Le coût est proportionnel au nombre de pages. Pour un document
     /// volumineux (500+ pages), compter quelques centaines de ms.
     pub fn build(doc: &Document) -> Result<Self> {
+        Self::build_with(doc, |n| match doc.page_text(n) {
+            Ok(page_text) => page_text,
+            Err(e) => {
+                tracing::debug!(page = n, error = %e, "page ignorée dans l'index");
+                String::new()
+            }
+        })
+    }
+
+    /// Construit l'index avec une source de texte par page fournie par
+    /// l'appelant.
+    ///
+    /// Le décodeur de flux de `lopdf` lit des chaînes vides sur les PDF
+    /// dont les polices écrivent le texte en indices CID (sous-ensembles
+    /// LaTeX, Type0 sans `/Encoding`) : la recherche ne trouvait alors
+    /// rien, même si pdfium affiche le texte à l'écran. L'appelant qui
+    /// dispose d'un moteur (l'application) passe sa lecture de la page ;
+    /// les positions restent cohérentes avec le texte ainsi fourni.
+    pub fn build_with(
+        doc: &Document,
+        mut page_text: impl FnMut(u32) -> String,
+    ) -> Result<Self> {
         let mut text = String::new();
         let mut page_offsets = Vec::new();
         let page_count = doc.page_count();
 
         for n in 1..=page_count as u32 {
             page_offsets.push(text.len());
-            match doc.page_text(n) {
-                Ok(page_text) => text.push_str(&page_text),
-                Err(e) => {
-                    tracing::debug!(page = n, error = %e, "page ignorée dans l'index");
-                }
-            }
+            text.push_str(&page_text(n));
             // Séparateur de page : le form-feed est peu probable dans du
             // texte réel et sert de marqueur net.
             text.push('\u{000C}');
@@ -387,13 +404,47 @@ pub fn match_rects(
     out
 }
 
+/// Sous-rectangles d'un fragment, avec la meilleure précision disponible.
+///
+/// Préfère [`match_rects_with_chars`] quand le moteur fournit des boîtes
+/// de caractères alignées avec le texte ; sinon retombe sur
+/// [`match_rects`], l'approximation proportionnelle. C'est l'appelant de
+/// `match_rects_with_chars` qui signale l'impossibilité en renvoyant un
+/// vecteur vide : un mauvais surlignage vaut mieux qu'aucun, mais un
+/// surlignage au mauvais endroit vaut mieux encore qu'aucun.
+///
+/// `to_display` convertit une boîte du repère page vers le repère affiché
+/// (rotation, échelle et décalage de la page).
+pub fn match_rects_best<F>(
+    text: &str,
+    rect: [f32; 4],
+    chars: &[crate::edit::TextChar],
+    needle: &str,
+    options: SearchOptions,
+    to_display: F,
+) -> Vec<[f32; 4]>
+where
+    F: Fn([f32; 4]) -> [f32; 4],
+{
+    if chars.is_empty() {
+        return match_rects(text, rect, needle, options);
+    }
+    let char_rects = match_rects_with_chars(text, chars, needle, options, to_display);
+    if char_rects.is_empty() {
+        match_rects(text, rect, needle, options)
+    } else {
+        char_rects
+    }
+}
+
 /// Même chose, mais sur les boîtes de caractères du moteur.
 ///
 /// Quand pdfium fournit une boîte par caractère (`TextChar.rect`), la
 /// correspondance est encadrée par les boîtes réelles des caractères
 /// concernés : plus d'approximation de largeur, le surlignage colle au mot.
-/// Sans boîtes (décodeur interne), on retombe sur [`match_rects`] en
-/// passant par le même appelant.
+/// Sans boîtes, ou si les boîtes ne s'accordent pas avec le texte, la
+/// fonction renvoie un vecteur vide : c'est [`match_rects_best`] qui
+/// retombe alors sur l'approximation proportionnelle.
 ///
 /// `to_display` convertit une boîte du repère page vers le repère affiché
 /// (rotation, échelle et décalage de la page). Les boîtes de caractères
@@ -408,33 +459,41 @@ pub fn match_rects_with_chars<F>(
 where
     F: Fn([f32; 4]) -> [f32; 4],
 {
+    // `query_matches` renvoie des indices d'octets dans `text`. Les
+    // boîtes de caractères sont en repère page, mais la liste `chars` ne
+    // contient pas les sauts de ligne (le moteur les filtre) : compter
+    // les octets de chaque boîte décalait le compteur dès la première
+    // ligne, et le surlignage disparaissait. On relie donc chaque octet
+    // de `text` à sa boîte explicitement, par correspondance de caractère.
+    let boxes = match char_boxes_for_text(text, chars) {
+        Some(b) => b,
+        // Les deux listes ne sont pas alignées (caractère manquant ou
+        // réordonné) : utiliser les boîtes risquerait un mauvais
+        // surlignage. L'appelant retombe alors sur l'approximation
+        // proportionnelle de `match_rects` pour ce fragment.
+        None => return Vec::new(),
+    };
+
     let mut out = Vec::new();
     for (start, end) in query_matches(text, needle, options) {
-        // Les positions de `query_matches` sont des indices d'octets dans
-        // `text` ; les boîtes de caractères sont indexées parmi les
-        // caractères de `text`. On les relie en comptant les octets de
-        // chaque caractère, comme `char_box` le fait déjà pour la
-        // sélection de texte.
-        let mut byte = 0usize;
         let mut union: Option<[f32; 4]> = None;
-        for ch in chars.iter() {
-            if byte >= end {
+        for (byte, rect) in &boxes {
+            if *byte < start {
+                continue;
+            }
+            if *byte >= end {
                 break;
             }
-            let ch_len = ch.ch.len_utf8();
-            if byte + ch_len > start && byte < end {
-                let rect = to_display(ch.rect);
-                union = Some(match union {
-                    Some(r) => [
-                        r[0].min(rect[0]),
-                        r[1].min(rect[1]),
-                        r[2].max(rect[2]),
-                        r[3].max(rect[3]),
-                    ],
-                    None => rect,
-                });
-            }
-            byte += ch_len;
+            let rect = to_display(*rect);
+            union = Some(match union {
+                Some(r) => [
+                    r[0].min(rect[0]),
+                    r[1].min(rect[1]),
+                    r[2].max(rect[2]),
+                    r[3].max(rect[3]),
+                ],
+                None => rect,
+            });
         }
         // L'union couvre du bord gauche du premier glyphe au bord droit
         // du dernier : le mot n'est jamais tronqué.
@@ -443,6 +502,36 @@ where
         }
     }
     out
+}
+
+/// Relie chaque caractère de `text` à sa boîte dans `chars`, en octet.
+///
+/// Le moteur livre une boîte par caractère sauf pour les sauts de ligne,
+/// que `text` contient toujours : on les passe sans consommer de boîte.
+/// Retourne `None` si les deux listes ne s'accordent pas — un caractère
+/// manquant ou réordonné rendrait le surlignage imprévisible, vaut mieux
+/// renoncer et laisser l'appelant utiliser l'approximation.
+fn char_boxes_for_text(
+    text: &str,
+    chars: &[crate::edit::TextChar],
+) -> Option<Vec<(usize, [f32; 4])>> {
+    let mut mapped = Vec::with_capacity(text.chars().count());
+    let mut ci = 0usize;
+    for (byte, ch) in text.char_indices() {
+        if ch == '\n' || ch == '\r' {
+            continue;
+        }
+        let item = chars.get(ci)?;
+        if item.ch != ch {
+            return None;
+        }
+        mapped.push((byte, item.rect));
+        ci += 1;
+    }
+    if ci != chars.len() {
+        return None;
+    }
+    Some(mapped)
 }
 
 /// Remplace toutes les occurrences de `needle` dans `text`.
@@ -523,7 +612,7 @@ impl DocumentStats {
 
 #[cfg(test)]
 mod match_tests {
-    use super::{find_query, match_rects, match_rects_with_chars, query_matches, replace_occurrences, SearchOptions};
+    use super::{find_query, match_rects, match_rects_best, match_rects_with_chars, query_matches, replace_occurrences, SearchOptions};
 
     #[test]
     fn find_query_matches_with_and_without_case() {
@@ -651,6 +740,11 @@ mod match_tests {
     /// Quand le moteur fournit une boîte par caractère, le surlignage est
     /// encadré par les glyphes réels au lieu d'être réparti proportionnel-
     /// ment sur la ligne. C'est la différence qui corrige le décalage.
+    ///
+    /// Le texte d'un fragment contient les sauts de ligne, la liste de
+    /// boîtes non : un compteur d'octets qui avance par boîte décalait
+    /// dès la première ligne et le surlignage disparaissait après la
+    /// première lettre de la requête. C'est le cas testé ici.
     #[test]
     fn match_rects_with_chars_colle_aux_glyphes() {
         use crate::edit::TextChar;
@@ -697,5 +791,45 @@ mod match_tests {
         // l'appelant qui retombe alors sur `match_rects`, en comparant les
         // boîtes du fragment.
         assert!(match_rects_with_chars("cat", &[], "cat", insensitive, identity).is_empty());
+
+        // Le cas qui a révélé le bug : le texte contient un saut de ligne
+        // au milieu, la liste de boîtes ne le contient pas (comme le
+        // moteur le filtre). L'ancien compteur d'octets avançait par
+        // boîte et se décalait d'une position dès la ligne suivante :
+        // la correspondance de la deuxième ligne ne trouvait plus sa
+        // boîte et le surlignage disparaissait. Ici, les deux
+        // occurrences sont trouvées et encadrées.
+        let text = "cat\ncat".to_owned();
+        let chars: Vec<TextChar> = text
+            .chars()
+            .filter(|c| *c != '\n')
+            .enumerate()
+            .map(|(i, ch)| TextChar {
+                ch,
+                rect: [i as f32 * 10.0, 10.0, (i + 1) as f32 * 10.0, 20.0],
+            })
+            .collect();
+        assert_eq!(chars.len(), 6, "six boîtes, pas de saut de ligne");
+        let all = match_rects_with_chars(&text, &chars, "cat", insensitive, identity);
+        assert_eq!(
+            all.len(),
+            2,
+            "deux occurrences, y compris celle d'après le saut de ligne"
+        );
+        assert_eq!(all[0], [0.0, 10.0, 30.0, 20.0]);
+        // Le saut de ligne ne consomme pas de boîte : le « c » de la
+        // deuxième ligne est le 4e élément de `chars`, donc sa boîte
+        // commence à 30, pas à 40.
+        assert_eq!(all[1], [30.0, 10.0, 60.0, 20.0]);
+
+        // Même résultat par `match_rects_best`, qui retombe sur
+        // `match_rects` quand les boîtes sont vides ou désaccordées.
+        let best = match_rects_best(&text, [0.0, 10.0, 60.0, 20.0], &chars, "cat", insensitive, identity);
+        assert_eq!(best.len(), 2);
+        // Boîtes désaccordées (caractère absent) : retombe sur l'approximation.
+        let mut bad = chars.clone();
+        bad[0].ch = 'x';
+        let fallback = match_rects_best(&text, [0.0, 10.0, 60.0, 20.0], &bad, "cat", insensitive, identity);
+        assert_eq!(fallback.len(), 2, "l'approximation trouve bien les deux");
     }
 }

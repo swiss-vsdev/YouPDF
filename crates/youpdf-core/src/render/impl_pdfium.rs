@@ -308,6 +308,21 @@ impl Renderer for PdfiumRenderer {
             _ => doc.extract_text_fragments(page_number),
         }
     }
+
+    fn engine_page_text(&self, doc: &Document, page_number: u32) -> Option<String> {
+        // Les segments de pdfium donnent le texte décodé (tables ToUnicode
+        // des polices CID). Un document vide ou illisible renvoie une
+        // chaîne vide, ce qui est déjà la bonne réponse pour l'index.
+        self.fragments_from_pdfium(doc, page_number)
+            .ok()
+            .map(|frags| {
+                let mut out = String::new();
+                for frag in frags {
+                    out.push_str(&frag.text);
+                }
+                out
+            })
+    }
 }
 
 impl Drop for PdfiumRenderer {
