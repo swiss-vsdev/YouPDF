@@ -17,7 +17,7 @@ use std::sync::Arc;
 use egui::{RichText, ScrollArea, TextEdit};
 use youpdf_ai::{
     build_provider, AiTask, AppSettings, ChatContext, ChatOptions, Message, ModelInfo, ProviderConfig,
-    ProviderKind, SecretStore,
+    ProviderKind, SecretStore, ToneStyle,
 };
 
 /// Demande envoyée au fil de travail.
@@ -34,12 +34,27 @@ enum AiRequest {
         model: String,
         messages: Vec<Message>,
     },
+    /// Traduire chaque page d'un document, une requête par page.
+    ///
+    /// Le fil de travail appelle le modèle **une fois par page** (pas une
+    /// seule fois pour le document entier) : c'est la règle de la
+    /// traduction préservant la mise en page. Les réponses sont renvoyées
+    /// dans l'ordre des pages, une chaîne par page.
+    TranslateAll {
+        config: ProviderConfig,
+        model: String,
+        target_language: String,
+        page_texts: Vec<String>,
+    },
 }
 
 /// Réponse renvoyée par le fil de travail.
 enum AiReply {
     Models(Vec<ModelInfo>),
     Chat(String),
+    /// Traduction d'un document entier : une chaîne par page, dans l'ordre.
+    /// Les pages sans texte ont une chaîne vide.
+    Translated(Vec<String>),
     Error(String),
 }
 
@@ -100,6 +115,42 @@ fn spawn_worker(
                     Ok(_) => continue,
                     Err(e) => AiReply::Error(e.to_string()),
                 },
+                AiRequest::TranslateAll {
+                    config,
+                    model,
+                    target_language,
+                    page_texts,
+                } => match build_provider(&config) {
+                    Ok(provider) if alive() => runtime.block_on(async {
+                        let mut out: Vec<String> = Vec::with_capacity(page_texts.len());
+                        for page_text in &page_texts {
+                            if !alive() {
+                                break;
+                            }
+                            if page_text.trim().is_empty() {
+                                out.push(String::new());
+                                continue;
+                            }
+                            let system = "Tu es un traducteur professionnel. Traduis le                                 texte fourni vers la langue demandée. Préserve les sauts de                                 ligne : chaque ligne d'entrée doit produire une ligne de                                 sortie. Ne commente pas, ne rajoute pas de notes : produis                                 uniquement la traduction.";
+                            let messages = vec![
+                                Message::system(system),
+                                Message::user(format!(
+                                    "Traduis ce texte vers {target_language} :\n\n---\n{page_text}\n---"
+                                )),
+                            ];
+                            match provider
+                                .chat(&model, &messages, &ChatOptions::default())
+                                .await
+                            {
+                                Ok(response) => out.push(response.content),
+                                Err(e) => out.push(format!("[translation error: {e}]")),
+                            }
+                        }
+                        AiReply::Translated(out)
+                    }),
+                    Ok(_) => continue,
+                    Err(e) => AiReply::Error(e.to_string()),
+                },
             };
 
             if replies.send(reply).is_err() {
@@ -113,6 +164,111 @@ fn spawn_worker(
 struct Turn {
     role: &'static str,
     text: String,
+}
+
+/// Défaut détecté sur une page (panneau « Check pages »).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PageDefect {
+    /// Aucune texte extractible.
+    Blank,
+    /// Page absente de la table des pages.
+    Invalid,
+    /// Rotation différente de celle de la majorité des pages.
+    NeedsRotation {
+        /// Degrés à appliquer pour rejoindre la rotation majoritaire.
+        degrees: i32,
+    },
+    /// Numéro de page attendu différent du numéro trouvé.
+    ///
+    /// NonConsecutive detector requires PageLabels (Wave 1 Agent A1); stub
+    /// returns empty until A1 lands.
+    #[allow(dead_code)]
+    NonConsecutive { expected: u32, found: u32 },
+    /// La page porte des annotations.
+    ContainsComments,
+    /// Format différent du format majoritaire.
+    MismatchedDimensions {
+        /// Format majoritaire, en points.
+        expected: (f32, f32),
+        /// Format de la page, en points.
+        found: (f32, f32),
+    },
+    /// Page scannée : pas de texte, image plein cadre.
+    Scanned,
+}
+
+/// Défauts d'une page. `page` est 1-indexé.
+///
+/// Les valeurs majoritaires (format, rotation) sont celles de la page 1 :
+/// ponytail: un vrai vote de la majorité demande de parcourir toutes les
+/// tailles avant de conclure, à faire si les documents mélangés deviennent
+/// courants.
+pub fn detect_page_defects(doc: &youpdf_core::Document, page: u32) -> Vec<PageDefect> {
+    let mut defects = Vec::new();
+    let total = doc.page_count() as u32;
+    if page == 0 || page > total {
+        defects.push(PageDefect::Invalid);
+        return defects;
+    }
+
+    let text = doc.page_text(page).unwrap_or_default();
+    if text.trim().is_empty() {
+        if doc.looks_scanned(page) {
+            defects.push(PageDefect::Scanned);
+        } else {
+            defects.push(PageDefect::Blank);
+        }
+    }
+
+    // Boîte non tournée (`page_view`) et non `page_size` : une page simplement
+    // pivotée doit sortir sous NeedsRotation, pas aussi sous MismatchedDimensions.
+    let reference = doc.page_view(1);
+    let view = doc.page_view(page);
+    if (view.width - reference.width).abs() > 10.0 || (view.height - reference.height).abs() > 10.0 {
+        defects.push(PageDefect::MismatchedDimensions {
+            expected: (reference.width, reference.height),
+            found: (view.width, view.height),
+        });
+    }
+    if view.rotation != reference.rotation {
+        defects.push(PageDefect::NeedsRotation {
+            degrees: (reference.rotation - view.rotation).rem_euclid(360),
+        });
+    }
+
+    // Une page annotée porte des commentaires : `read_annotations` les lit
+    // toutes, on ne garde que celles de cette page.
+    // ponytail: O(annotations) par page ; un compteur par page se justifie si
+    // la liste complète ralentit le panneau sur les documents très annotés.
+    if doc
+        .read_annotations()
+        .iter()
+        .any(|annot| annot.page as u32 == page)
+    {
+        defects.push(PageDefect::ContainsComments);
+    }
+
+    // NonConsecutive detector requires PageLabels (Wave 1 Agent A1); stub
+    // returns empty until A1 lands.
+    defects
+}
+
+/// Description d'un défaut, pour la liste du panneau.
+fn defect_label(defect: &PageDefect) -> String {
+    match defect {
+        PageDefect::Blank => "Blank page".to_string(),
+        PageDefect::Invalid => "Invalid page".to_string(),
+        PageDefect::NeedsRotation { degrees } => format!("Needs rotation ({degrees:+}°)"),
+        PageDefect::NonConsecutive { expected, found } => {
+            format!("Page numbering: expected {expected}, found {found}")
+        }
+        PageDefect::ContainsComments => "Contains comments".to_string(),
+        PageDefect::MismatchedDimensions { expected, found } => format!(
+            "Mismatched size ({:.0}×{:.0}, expected {:.0}×{:.0})",
+            found.0, found.1, expected.0, expected.1
+        ),
+        PageDefect::Scanned => "Scanned page (image, no text)".to_string(),
+    }
 }
 
 /// Panneau IA.
@@ -131,8 +287,29 @@ pub struct AiPanel {
     input: String,
     /// Tâche sélectionnée.
     task: AiTask,
+    /// Ton choisi quand la tâche est `Tone`.
+    tone: ToneStyle,
     /// Langue cible de la traduction.
     target_language: String,
+    /// Options de la traduction bilingale (fenêtre « Translate PDF »).
+    translate_options: youpdf_core::TranslationOptions,
+    /// Résultat de la dernière traduction : une chaîne par page.
+    translate_result: Option<Vec<String>>,
+    /// Pages visées par la dernière traduction (1-indexées).
+    translate_pages: Vec<u32>,
+    /// Fenêtre « Translate PDF » (traduction bilingale en place).
+    translate_open: bool,
+    /// Le bouton « Apply to document » a été pressé : l'application doit
+    /// écrire la traduction dans le document actif.
+    ///
+    /// C'est un drapeau, pas un canal : le panneau IA le pose, et l'application
+    /// le lit et le réinitialise à la prochaine trame. Sans `Option`, le
+    /// `take()` n'existe pas sur un `bool`.
+    pub(crate) translate_apply: Option<bool>,
+    /// Défauts relevés par « Check pages » (`None` = jamais lancé).
+    defects: Option<Vec<(u32, PageDefect)>>,
+    /// Page vers laquelle l'application doit défiler (« Aller à la page »).
+    pub goto_page: Option<usize>,
     /// Dernier message d'état.
     status: Option<String>,
     /// Une demande est en vol.
@@ -168,7 +345,15 @@ impl AiPanel {
             turns: Vec::new(),
             input: String::new(),
             task: AiTask::Chat,
+            tone: ToneStyle::Professional,
             target_language: "English".to_string(),
+            translate_options: youpdf_core::TranslationOptions::default(),
+            translate_result: None,
+            translate_pages: Vec::new(),
+            translate_open: false,
+            translate_apply: None,
+            defects: None,
+            goto_page: None,
             status: None,
             busy: false,
             requests: None,
@@ -248,6 +433,13 @@ impl AiPanel {
                     self.status = Some("Done.".to_string());
                     self.turns.push(Turn { role: "AI", text });
                 }
+                AiReply::Translated(pages) => {
+                    self.translate_result = Some(pages);
+                    self.status = Some(
+                        "Translation ready — apply it to the document from the toolbar."
+                            .to_string(),
+                    );
+                }
                 AiReply::Error(message) => self.status = Some(message),
             }
         }
@@ -325,10 +517,109 @@ impl AiPanel {
         self.status = Some("Waiting for the model…".to_string());
     }
 
-    /// Peint la fenêtre. `doc_text` est le texte déjà extrait du document actif.
+    /// Traduit chaque page d'un document, une requête IA par page.
+    ///
+    /// Le texte de chaque page est traduit indépendamment, puis réinjecté
+    /// dans le document par [`Document::translate_page`] : le texte original
+    /// est effacé par la primitive de caviardage, et la traduction est posée
+    /// à un corps réduit jusqu'à ce qu'elle tienne dans la boîte.
+    ///
+    /// `doc` est le document actif (le fil de travail ne touche pas le
+    /// document : il ne fait que le traduire, et c'est l'interface qui
+    /// écrit le résultat).
+    fn translate_pdf(&mut self, doc: &youpdf_core::Document) {
+        if self.busy {
+            self.status = Some("A request is already running.".to_string());
+            return;
+        }
+        let Some(config) = self.active_config() else {
+            self.status = Some("Select a provider first.".to_string());
+            return;
+        };
+        let model = self
+            .settings
+            .active_model
+            .clone()
+            .or_else(|| config.default_model.clone());
+        let Some(model) = model else {
+            self.status = Some("Choose a model first.".to_string());
+            return;
+        };
+        let target = self.translate_options.target_language.clone();
+        let total = doc.page_count();
+        if total == 0 {
+            self.status = Some("No pages to translate.".to_string());
+            return;
+        }
+        let page_texts: Vec<String> = (1..=total as u32)
+            .map(|page| doc.page_text(page).unwrap_or_default())
+            .collect();
+        let pages: Vec<u32> = (1..=total as u32).collect();
+        self.send(AiRequest::TranslateAll {
+            config,
+            model,
+            target_language: target,
+            page_texts,
+        });
+        self.translate_pages = pages;
+        self.translate_result = None;
+        self.status = Some("Translating page by page…".to_string());
+    }
+
+    /// Applique la traduction reçue au document actif.
+    ///
+    /// `doc` est mutable : l'interface le remplace par sa copie modifiée
+    /// après l'opération. `renderer` est celui de l'application (pdfium, ou
+    /// un factice si pdfium n'est pas disponible).
+    ///
+    /// La méthode est `pub` : c'est l'application (qui possède le document
+    /// mutable) qui l'appelle, depuis son panneau IA.
+    pub fn apply_translation(
+        &mut self,
+        doc: &mut youpdf_core::Document,
+        renderer: &dyn youpdf_core::Renderer,
+    ) -> Result<(), youpdf_shared::Error> {
+        let Some(lines_per_page) = &self.translate_result else {
+            return Ok(());
+        };
+        // ponytail: la traduction arrive sous forme de chaîne par page ; on
+        // la découpe en lignes par sauts de ligne, sans tenter de
+        // rétablir les correspondances avec les lignes d'origine (zip_lines
+        // le ferait par position, pas par contenu).
+        let mut report = youpdf_core::TranslationReport::default();
+        for (page, raw) in self.translate_pages.iter().zip(lines_per_page.iter()) {
+            let text = doc.page_text(*page).unwrap_or_default();
+            if text.trim().is_empty() {
+                report.pages_skipped += 1;
+                continue;
+            }
+            let lines: Vec<String> = raw
+                .split(['\n', '\u{c}'])
+                .map(|l| l.trim_end().to_string())
+                .filter(|l| !l.trim().is_empty())
+                .collect();
+            doc.translate_page(*page, &self.translate_options, &lines, renderer)?;
+            report.pages_translated += 1;
+            report.lines_placed += lines.len();
+        }
+        if report.pages_translated == 0 {
+            return Err(youpdf_shared::Error::Pdf("no page translated".into()));
+        }
+        tracing::info!(
+            translated = report.pages_translated,
+            skipped = report.pages_skipped,
+            lines = report.lines_placed,
+            "traduction bilingale appliquée"
+        );
+        Ok(())
+    }
+
+    /// Peint la fenêtre. `doc_text` est le texte déjà extrait du document actif,
+    /// `doc` le document lui-même (pour « Check pages »).
     pub fn show(
         &mut self,
         ctx: &egui::Context,
+        doc: Option<&youpdf_core::Document>,
         doc_text: &str,
         doc_name: Option<&str>,
         doc_pages: Option<usize>,
@@ -345,7 +636,7 @@ impl AiPanel {
             .min_width(420.0)
             .frame(modal_frame(ctx))
             .show(ctx, |ui| {
-                self.body(ui, doc_text, doc_name, doc_pages);
+                self.body(ui, doc, doc_text, doc_name, doc_pages);
             });
         self.open = open;
     }
@@ -354,6 +645,7 @@ impl AiPanel {
     fn body(
         &mut self,
         ui: &mut egui::Ui,
+        doc: Option<&youpdf_core::Document>,
         doc_text: &str,
         doc_name: Option<&str>,
         doc_pages: Option<usize>,
@@ -573,6 +865,11 @@ impl AiPanel {
                 AiTask::Explain,
                 AiTask::LegalReview,
                 AiTask::FinancialReview,
+                AiTask::Polish,
+                AiTask::Shorten,
+                AiTask::Expand,
+                AiTask::Proofread,
+                AiTask::Tone { style: self.tone },
             ] {
                 if ui
                     .selectable_label(self.task == task, task_label(task))
@@ -587,6 +884,73 @@ impl AiPanel {
                 ui.label(section(t("Translate to")));
                 ui.add(TextEdit::singleline(&mut self.target_language).desired_width(160.0));
             });
+            if ui.button(t("Whole PDF (Preserve Layout)")).clicked() {
+                self.translate_open = true;
+            }
+        }
+        if matches!(self.task, AiTask::Tone { .. }) {
+            ui.horizontal(|ui| {
+                ui.label(section(t("Tone")));
+                egui::ComboBox::from_id_salt("ai-tone")
+                    .selected_text(self.tone.as_str())
+                    .show_ui(ui, |ui| {
+                        for style in [
+                            ToneStyle::Professional,
+                            ToneStyle::Casual,
+                            ToneStyle::Confident,
+                            ToneStyle::Friendly,
+                        ] {
+                            if ui
+                                .selectable_value(&mut self.tone, style, style.as_str())
+                                .changed()
+                            {
+                                self.task = AiTask::Tone { style };
+                            }
+                        }
+                    });
+            });
+        }
+
+        // --- Check pages --------------------------------------------------
+        ui.horizontal(|ui| {
+            if ui.button(t("Check pages")).clicked() {
+                self.defects = doc.map(|document| {
+                    (1..=document.page_count() as u32)
+                        .flat_map(|page| {
+                            detect_page_defects(document, page)
+                                .into_iter()
+                                .map(move |defect| (page, defect))
+                        })
+                        .collect()
+                });
+            }
+            if let Some(defects) = &self.defects {
+                ui.label(muted(format!("{} defect(s)", defects.len()), LABEL));
+            }
+        });
+        let mut goto = None;
+        if let Some(defects) = &self.defects {
+            if defects.is_empty() {
+                ui.label(muted(t("No defects found."), LABEL));
+            } else {
+                ScrollArea::vertical()
+                    .max_height(140.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for (page, defect) in defects {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{page}"));
+                                ui.label(muted(defect_label(defect), LABEL));
+                                if ui.button(t("Go to page")).clicked() {
+                                    goto = Some(*page as usize);
+                                }
+                            });
+                        }
+                    });
+            }
+        }
+        if goto.is_some() {
+            self.goto_page = goto;
         }
 
         // --- Journal ------------------------------------------------------
@@ -652,6 +1016,88 @@ impl AiPanel {
             self.submit(doc_text, doc_name, doc_pages);
         }
     }
+
+    /// Fenêtre « Translate PDF » : cible, bilingue, préservation du layout.
+    ///
+    /// L'opération est en deux temps : d'abord on demande la traduction au
+    /// fournisseur (une requête par page), puis on l'applique au document
+    /// par le bouton « Apply to document ». C'est la règle de la
+    /// traduction en place : le fil de travail ne touche pas le document,
+    /// il ne le traduit que, et c'est l'interface qui écrit le résultat.
+    pub fn translate_window(&mut self, ctx: &egui::Context, doc: Option<&youpdf_core::Document>) {
+        let mut open = self.translate_open;
+        let mut do_translate = false;
+        let mut do_apply = false;
+        egui::Window::new(t("Translate PDF (preserve layout)"))
+            .id(egui::Id::new("translate-pdf"))
+            .open(&mut open)
+            .default_size([420.0, 280.0])
+            .min_width(360.0)
+            .frame(modal_frame(ctx))
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(
+                        "Translate every page in place. The original text is white-out and \
+                         the translation is placed in the same box, with the font shrunk \
+                         until it fits. Approximate result: multi-column layouts and \
+                         tables are not preserved.",
+                    )
+                    .size(BODY)
+                    .color(pal().muted),
+                );
+                ui.add_space(SPACE_S);
+                ui.label(muted("Approximate result — layout is not reflowed.", LABEL));
+                ui.add_space(SPACE_M);
+
+                ui.horizontal(|ui| {
+                    ui.label(section(t("Translate to")));
+                    ui.add(TextEdit::singleline(&mut self.translate_options.target_language).desired_width(180.0));
+                });
+                ui.add_space(SPACE_S);
+                ui.checkbox(&mut self.translate_options.bilingual, t("Bilingual (original + translation)"));
+                ui.checkbox(&mut self.translate_options.preserve_layout, t("Preserve layout (shrink to fit)"));
+                ui.add_space(SPACE_M);
+
+                let Some(document) = doc else {
+                    ui.label(muted("Open a document first.", LABEL));
+                    return;
+                };
+                let total = document.page_count();
+                ui.label(muted(format!("{} page(s) to translate", total), LABEL));
+                ui.add_space(SPACE_S);
+
+                if self.busy {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(muted(t("Working…"), LABEL));
+                    });
+                } else if let Some(pages) = &self.translate_result {
+                    let done = pages.iter().filter(|p| !p.trim().is_empty()).count();
+                    ui.label(muted(format!("{done}/{total} page(s) translated"), LABEL));
+                    ui.add_space(SPACE_S);
+                    if ui.button(t("Apply to document")).clicked() {
+                        do_apply = true;
+                    }
+                } else {
+                    if ui.button(t("Translate")).clicked() {
+                        do_translate = true;
+                    }
+                }
+                if let Some(status) = &self.status {
+                    ui.add_space(SPACE_S);
+                    ui.label(muted(status, LABEL));
+                }
+            });
+        self.translate_open = open;
+        if do_translate {
+            if let Some(document) = doc {
+                self.translate_pdf(document);
+            }
+        }
+        if do_apply {
+            self.translate_apply = Some(true);
+        }
+    }
 }
 
 impl Default for AiPanel {
@@ -681,5 +1127,49 @@ fn task_label(task: AiTask) -> &'static str {
         AiTask::Explain => "Explain",
         AiTask::LegalReview => "Legal review",
         AiTask::FinancialReview => "Financial review",
+        AiTask::Polish => "Polish",
+        AiTask::Shorten => "Shorten",
+        AiTask::Expand => "Expand",
+        AiTask::Proofread => "Proofread",
+        AiTask::Tone { .. } => "Change tone",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{detect_page_defects, PageDefect};
+    use youpdf_core::blank_document;
+
+    /// Page sans texte = Blank, page hors table = Invalid, format différent de
+    /// la référence = MismatchedDimensions.
+    #[test]
+    fn detecte_blank_et_dimensions() {
+        let mut doc = blank_document(1, 595.0, 842.0).unwrap();
+        assert_eq!(detect_page_defects(&doc, 1), [PageDefect::Blank]);
+        assert_eq!(detect_page_defects(&doc, 2), [PageDefect::Invalid]);
+
+        doc.insert_blank_page_after(1, 842.0, 595.0)
+            .expect("page insérée");
+        assert_eq!(
+            detect_page_defects(&doc, 2),
+            [
+                PageDefect::Blank,
+                PageDefect::MismatchedDimensions {
+                    expected: (595.0, 842.0),
+                    found: (842.0, 595.0),
+                },
+            ]
+        );
+    }
+
+    /// Rotation différente de la référence = NeedsRotation.
+    #[test]
+    fn detecte_rotation_different() {
+        let mut doc = blank_document(2, 595.0, 842.0).unwrap();
+        doc.rotate_pages(&[2], 180).expect("rotation");
+        assert_eq!(
+            detect_page_defects(&doc, 2),
+            [PageDefect::Blank, PageDefect::NeedsRotation { degrees: 180 }]
+        );
     }
 }

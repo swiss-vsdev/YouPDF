@@ -335,6 +335,38 @@ impl YouPdfApp {
             }
         }
 
+        /// Nouveau document à partir d'une capture d'écran ou du presse-papiers.
+        ///
+        /// ponytail: macOS seulement (`screencapture` + `osascript`). Ajouter les
+        /// branches `SnippingTool.exe /clip` / `flameshot gui -r` si le support
+        /// multiplateforme devient nécessaire.
+        pub(super) fn import_capture(&mut self, ctx: &egui::Context, from_clipboard: bool) {
+            let bytes = if from_clipboard {
+                youpdf_core::capture::clipboard_as_png()
+            } else {
+                // Le sélecteur interactif bloque la boucle UI : acceptable pour
+                // une capture, et il évite de toucher à l'état avant le résultat.
+                youpdf_core::capture::capture_region_interactive()
+                    .map(|path| std::fs::read(&path).ok())
+                    .ok()
+                    .flatten()
+                    .map_or_else(
+                        || Err(youpdf_shared::Error::InvalidInput("capture annulée".into())),
+                        Ok,
+                    )
+            };
+            match bytes.and_then(|bytes| {
+                document_from_image_bytes(&[("capture".to_owned(), bytes)], 300.0)
+            }) {
+                Ok(doc) => {
+                    self.push_document(doc, None);
+                    self.create_open = false;
+                    self.toast(ctx, "One page created from capture".to_owned());
+                }
+                Err(err) => self.toast(ctx, format!("Capture failed: {err}")),
+            }
+        }
+
         /// Insère un autre PDF à la fin du document courant.
         pub(super) fn combine_active(&mut self, ctx: &egui::Context) {
             if self.tabs.is_empty() {

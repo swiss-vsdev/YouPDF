@@ -23,6 +23,7 @@
 
 pub mod annotate;
 pub mod annotation;
+pub mod capture;
 pub mod compare;
 pub mod compress;
 pub mod convert;
@@ -59,6 +60,7 @@ pub use compare::{ComparisonReport, Difference, DifferenceKind};
 pub use convert::{ImageFormat, TextFormat};
 pub use create::{blank_document, document_from_image_bytes, document_from_images};
 pub use crop::CropMargins;
+pub use capture::TtsEngine;
 pub use compress::{CompressionExtras, CompressionReport};
 pub use document::{Document, PageBoxes, PageView};
 pub use edit::{
@@ -79,7 +81,8 @@ pub use office::hex_color;
 pub use pdfa::Conformance;
 pub use protect::{EncryptionOptions, EncryptionStrength, Permissions};
 pub use redact::{
-    RedactionFill, RedactionMark, RedactionOverlay, RedactionRegion, RedactionReport,
+    fit_block, fit_block_from, line_strips, RedactionFill, RedactionMark, RedactionOverlay,
+    RedactionRegion, RedactionReport, TranslationOptions, TranslationReport, zip_lines,
 };
 pub use render::{PageBitmap, PdfiumRenderer, RenderOptions, Renderer};
 pub use search::{
