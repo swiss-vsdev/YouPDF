@@ -387,6 +387,64 @@ pub fn match_rects(
     out
 }
 
+/// Même chose, mais sur les boîtes de caractères du moteur.
+///
+/// Quand pdfium fournit une boîte par caractère (`TextChar.rect`), la
+/// correspondance est encadrée par les boîtes réelles des caractères
+/// concernés : plus d'approximation de largeur, le surlignage colle au mot.
+/// Sans boîtes (décodeur interne), on retombe sur [`match_rects`] en
+/// passant par le même appelant.
+///
+/// `to_display` convertit une boîte du repère page vers le repère affiché
+/// (rotation, échelle et décalage de la page). Les boîtes de caractères
+/// sont en repère page ; le dessin est en repère affiché.
+pub fn match_rects_with_chars<F>(
+    text: &str,
+    chars: &[crate::edit::TextChar],
+    needle: &str,
+    options: SearchOptions,
+    to_display: F,
+) -> Vec<[f32; 4]>
+where
+    F: Fn([f32; 4]) -> [f32; 4],
+{
+    let mut out = Vec::new();
+    for (start, end) in query_matches(text, needle, options) {
+        // Les positions de `query_matches` sont des indices d'octets dans
+        // `text` ; les boîtes de caractères sont indexées parmi les
+        // caractères de `text`. On les relie en comptant les octets de
+        // chaque caractère, comme `char_box` le fait déjà pour la
+        // sélection de texte.
+        let mut byte = 0usize;
+        let mut union: Option<[f32; 4]> = None;
+        for ch in chars.iter() {
+            if byte >= end {
+                break;
+            }
+            let ch_len = ch.ch.len_utf8();
+            if byte + ch_len > start && byte < end {
+                let rect = to_display(ch.rect);
+                union = Some(match union {
+                    Some(r) => [
+                        r[0].min(rect[0]),
+                        r[1].min(rect[1]),
+                        r[2].max(rect[2]),
+                        r[3].max(rect[3]),
+                    ],
+                    None => rect,
+                });
+            }
+            byte += ch_len;
+        }
+        // L'union couvre du bord gauche du premier glyphe au bord droit
+        // du dernier : le mot n'est jamais tronqué.
+        if let Some(rect) = union {
+            out.push(rect);
+        }
+    }
+    out
+}
+
 /// Remplace toutes les occurrences de `needle` dans `text`.
 ///
 /// `needle` est le texte brut de la requête ; `options` applique les mêmes
@@ -465,7 +523,7 @@ impl DocumentStats {
 
 #[cfg(test)]
 mod match_tests {
-    use super::{find_query, match_rects, query_matches, replace_occurrences, SearchOptions};
+    use super::{find_query, match_rects, match_rects_with_chars, query_matches, replace_occurrences, SearchOptions};
 
     #[test]
     fn find_query_matches_with_and_without_case() {
@@ -588,5 +646,56 @@ mod match_tests {
         assert_eq!(match_rects("cat Cat", rect, "cat", sensitive).len(), 1);
         // Requête vide : aucun rectangle.
         assert!(match_rects("cat", rect, " ", insensitive).is_empty());
+    }
+
+    /// Quand le moteur fournit une boîte par caractère, le surlignage est
+    /// encadré par les glyphes réels au lieu d'être réparti proportionnel-
+    /// ment sur la ligne. C'est la différence qui corrige le décalage.
+    #[test]
+    fn match_rects_with_chars_colle_aux_glyphes() {
+        use crate::edit::TextChar;
+        // 11 caractères, 10 pt de large chacun, de 0 à 110.
+        let text = "cat cat cat".to_owned();
+        let chars: Vec<TextChar> = text
+            .chars()
+            .enumerate()
+            .map(|(i, ch)| TextChar {
+                ch,
+                rect: [i as f32 * 10.0, 10.0, (i + 1) as f32 * 10.0, 20.0],
+            })
+            .collect();
+        let insensitive = SearchOptions::default();
+        let identity = |r: [f32; 4]| r;
+
+        let all = match_rects_with_chars(&text, &chars, "cat", insensitive, identity);
+        assert_eq!(all.len(), 3, "trois occurrences de « cat »");
+        // Chaque rectangle commence au bord gauche du premier caractère
+        // et s'étire jusqu'au bord droit du dernier : le glyphe final
+        // n'est pas tronqué.
+        for (got, want) in all.iter().zip([[0.0, 10.0, 30.0, 20.0], [40.0, 10.0, 70.0, 20.0], [80.0, 10.0, 110.0, 20.0]]) {
+            assert_eq!(got, &want, "rectangle {got:?} ≠ {want:?}");
+        }
+
+        // Un mot entier : « cat » dans « catalog » est refusé, donc aucun
+        // rectangle, même avec des boîtes de caractères.
+        let catalog = "catalog".to_owned();
+        let cchars: Vec<TextChar> = catalog
+            .chars()
+            .enumerate()
+            .map(|(i, ch)| TextChar {
+                ch,
+                rect: [i as f32 * 10.0, 10.0, (i + 1) as f32 * 10.0, 20.0],
+            })
+            .collect();
+        let whole = SearchOptions {
+            case_sensitive: false,
+            whole_word: true,
+        };
+        assert!(match_rects_with_chars(&catalog, &cchars, "cat", whole, identity).is_empty());
+
+        // Sans boîtes (décodeur interne), la fonction ne renvoie rien : c'est
+        // l'appelant qui retombe alors sur `match_rects`, en comparant les
+        // boîtes du fragment.
+        assert!(match_rects_with_chars("cat", &[], "cat", insensitive, identity).is_empty());
     }
 }

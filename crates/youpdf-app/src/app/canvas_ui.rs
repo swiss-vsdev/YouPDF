@@ -331,6 +331,27 @@ impl YouPdfApp {
                                     ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
                                 }
                             }
+                        } else if action == ToolAction::None {
+                            // Mode lecture : le curseur suit ce qui est sous le
+                            // pointeur. Une main sur un lien, un curseur de
+                            // texte partout ailleurs sur la page — c'est le
+                            // comportement d'un lecteur, pas d'un outil de
+                            // dessin.
+                            if let Some(pos) = ctx.pointer_hover_pos() {
+                                if rect.contains(pos) {
+                                    let point = [
+                                        (pos.x - page_rect.min.x) / scale,
+                                        (page_rect.max.y - pos.y) / scale,
+                                    ];
+                                    let links = tab.doc.page_links(page as usize);
+                                    let on_link = link_at(&links, point).is_some();
+                                    ui.ctx().set_cursor_icon(if on_link {
+                                        CursorIcon::PointingHand
+                                    } else {
+                                        CursorIcon::Text
+                                    });
+                                }
+                            }
                         }
 
                         if jump == Some(page as usize) {

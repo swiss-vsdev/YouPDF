@@ -423,8 +423,19 @@ if action != ToolAction::None {
             }
         }
         ToolAction::None => {
-            // Le mode lecture n'a pas d'outil : le clic est
-            // traité avec la sélection de texte, plus bas.
+            // Mode lecture : aucun outil armé, le clic est un clic de
+            // lecteur. Il ouvre un lien, remplit un champ de formula-
+            // ire, ou sélectionne une annotation — tout cela passe par
+            // `pending_hit`, comme l'outil Sélection. La sélection de
+            // texte (glissé, double-clic) est traitée séparément, plus
+            // bas, et n'est pas empêchée par ce clic.
+            // `pending_link` déjà posé : la sélection de texte a reconnu
+            // un lien sur ce clic, le reprendre ici l'ouvrirait deux fois.
+            if resp.clicked() && frame.pending_link.is_none() {
+                if let Some(p) = resp.interact_pointer_pos() {
+                    frame.pending_hit = Some((page as usize, to_pdf(p)));
+                }
+            }
         }
     }
 }
