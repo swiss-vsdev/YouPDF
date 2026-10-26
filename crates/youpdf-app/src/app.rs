@@ -110,7 +110,7 @@ use youpdf_core::{LANGUAGES, combine_languages, language_name};
 
 use youpdf_core::annotate::{BorderDash, STAMP_TEMPLATES};
 use youpdf_core::annotation::transform::{annots_to_display, annots_to_page, link_at};
-use youpdf_core::search::{find_query, match_rects, replace_occurrences};
+use youpdf_core::search::{find_query, match_rects, match_rects_with_chars, replace_occurrences};
 use youpdf_core::util::{format_size, page_size_label};
 use youpdf_core::forms::snap_form_rect;
 use youpdf_core::annotation::comments::{
@@ -2169,7 +2169,11 @@ impl eframe::App for YouPdfApp {
         CentralPanel::default()
             .frame(Frame::none().fill(self.canvas_background()))
             .show(ctx, |ui| {
-                if self.home_open || self.tabs.is_empty() {
+                // Aucun document ouvert → l'accueil, jamais une page
+                // vierge. C'est la garantie du mode lecture : sans ce
+                // garde, un démarrage sur « blank document » laissait un
+                // PDF vide à la place de l'écran d'accueil.
+                if self.tabs.is_empty() || self.home_open {
                     self.empty_state(ui);
                 } else if self.organize_open {
                     self.organize_view(ui);

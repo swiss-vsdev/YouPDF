@@ -446,7 +446,24 @@ impl YouPdfApp {
                     };
                     for fragment in fragments {
                         let rect = youpdf_core::geom::rect_to_display(&tab.doc, page, fragment.rect);
-                        for rect in match_rects(&fragment.text, rect, &needle, options) {
+                        // Quand le moteur fournit une boîte par caractère,
+                        // le surlignage est encadré par les glyphes réels :
+                        // il colle au mot au lieu de le diviser proportion-
+                        // nellement sur la ligne.
+                        let to_display =
+                            |r: [f32; 4]| youpdf_core::geom::rect_to_display(&tab.doc, page, r);
+                        let rects: Vec<[f32; 4]> = if fragment.chars.is_empty() {
+                            match_rects(&fragment.text, rect, &needle, options)
+                        } else {
+                            match_rects_with_chars(
+                                &fragment.text,
+                                &fragment.chars,
+                                &needle,
+                                options,
+                                to_display,
+                            )
+                        };
+                        for rect in rects {
                             // Ne pas empiler deux fois la même marque : le bouton
                             // corbeille et le bouton surlignage peuvent se suivre.
                             // La déduplication porte sur la page et le rectangle :

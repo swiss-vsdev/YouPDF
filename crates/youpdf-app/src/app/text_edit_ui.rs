@@ -272,8 +272,23 @@ impl YouPdfApp {
                 // Les fragments sortent du moteur en repère page ; les surlignages
                 // se dessinent en repère affiché.
                 let rect = youpdf_core::geom::rect_to_display(&tab.doc, page, fragment.rect);
-                self.search_rects
-                    .extend(match_rects(&fragment.text, rect, &needle, options));
+                // Quand le moteur fournit une boîte par caractère, le
+                // surlignage colle aux glyphes réels au lieu d'être
+                // réparti proportionnellement sur la ligne entière.
+                let to_display =
+                    |r: [f32; 4]| youpdf_core::geom::rect_to_display(&tab.doc, page, r);
+                let rects: Vec<[f32; 4]> = if fragment.chars.is_empty() {
+                    match_rects(&fragment.text, rect, &needle, options)
+                } else {
+                    match_rects_with_chars(
+                        &fragment.text,
+                        &fragment.chars,
+                        &needle,
+                        options,
+                        to_display,
+                    )
+                };
+                self.search_rects.extend(rects);
             }
         }
 

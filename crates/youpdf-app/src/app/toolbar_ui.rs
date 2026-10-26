@@ -55,6 +55,12 @@ impl YouPdfApp {
                         });
                     let rect = inner.response.rect;
                     let resp = ui.interact(rect, Id::new("tools-chip"), Sense::click());
+                    // La pastille « Outils » est un bouton : le curseur de
+                    // survol est une main, pas le curseur de texte par
+                    // défaut d'egui.
+                    if resp.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    }
                     if resp.clicked() {
                         self.tools_open = !self.tools_open;
                     }
