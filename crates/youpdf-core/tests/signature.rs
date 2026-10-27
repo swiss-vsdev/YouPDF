@@ -72,6 +72,7 @@ fn options() -> SignOptions {
         reason: "Tests".into(),
         location: "Paris".into(),
         contact: "test@example.com".into(),
+        ..Default::default()
     }
 }
 
@@ -122,5 +123,30 @@ fn second_signature_is_rejected_cleanly() {
     assert_eq!(signatures.len(), 2, "{signatures:?}");
     assert!(signatures.iter().any(|signature| signature.valid));
     assert!(signatures.iter().any(|signature| !signature.valid));
+}
+
+/// Une signature avec une image PNG doit valider comme une signature texte.
+#[test]
+fn signed_with_image_validates() {
+    let png = signature_png();
+    let mut opts = options();
+    opts.signature_image = Some(png);
+    let document = Document::from_bytes(&tiny_pdf()).expect("document");
+    let signed = document.sign(identity(), &opts).expect("signature avec image");
+    let signatures = validate_signatures(&signed);
+    assert_eq!(signatures.len(), 1, "{signatures:?}");
+    assert!(signatures[0].valid, "{signatures:?}");
+    assert!(signatures[0].covers_whole_document);
+}
+
+/// Génère un petit PNG (1×1 pixel blanc) pour les tests.
+fn signature_png() -> Vec<u8> {
+    use std::io::Cursor;
+    use image::{ImageBuffer, Rgba, ImageFormat};
+    let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+        ImageBuffer::from_fn(2, 2, |_, _| Rgba([255u8, 255, 255, 255]));
+    let mut out = Cursor::new(Vec::new());
+    img.write_to(&mut out, ImageFormat::Png).expect("PNG");
+    out.into_inner()
 }
 

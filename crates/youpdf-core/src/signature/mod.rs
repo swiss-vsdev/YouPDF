@@ -170,6 +170,9 @@ pub struct SignOptions {
     pub location: String,
     /// Coordonnées de contact.
     pub contact: String,
+    /// Image PNG de la signature (facultative). Si fournie, elle est
+    /// intégrée dans l'apparence visible du champ de signature.
+    pub signature_image: Option<Vec<u8>>,
 }
 
 /// Résultat de la vérification d'une signature présente dans un PDF.
