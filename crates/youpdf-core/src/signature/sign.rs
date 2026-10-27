@@ -138,6 +138,36 @@ impl Document {
         font_res.set("Helv", reference(font_id));
         let mut resources = lopdf::Dictionary::new();
         resources.set("Font", lopdf::Object::Dictionary(font_res));
+
+        // Si une image de signature est fournie, on lui réserve un ID
+        // d'objet et on la décode pour connaître ses dimensions.
+        let image_xobject = if let Some(png_bytes) = &options.signature_image {
+            match decode_png_to_rgb(png_bytes) {
+                Ok((rgb, img_w, img_h)) => {
+                    let img_id = next_id;
+                    next_id += 1;
+                    let img_dict = lopdf::Dictionary::from_iter(vec![
+                        ("Type", lopdf::Object::Name(b"XObject".to_vec())),
+                        ("Subtype", lopdf::Object::Name(b"Image".to_vec())),
+                        ("Width", lopdf::Object::Integer(img_w as i64)),
+                        ("Height", lopdf::Object::Integer(img_h as i64)),
+                        ("ColorSpace", lopdf::Object::Name(b"DeviceRGB".to_vec())),
+                        ("BitsPerComponent", lopdf::Object::Integer(8)),
+                    ]);
+                    let img_stream = lopdf::Stream::new(img_dict, rgb);
+                    let mut xobjects = lopdf::Dictionary::new();
+                    xobjects.set("SigIm", reference(img_id));
+                    resources.set("XObject", lopdf::Object::Dictionary(xobjects));
+                    Some((img_id, img_stream, img_w as f64, img_h as f64))
+                }
+                Err(err) => {
+                    return Err(Error::InvalidInput(format!("image de signature : {err}")));
+                }
+            }
+        } else {
+            None
+        };
+
         let mut ap_dict = lopdf::Dictionary::new();
         ap_dict.set("Type", lopdf::Object::Name(b"XObject".to_vec()));
         ap_dict.set("Subtype", lopdf::Object::Name(b"Form".to_vec()));
@@ -151,14 +181,6 @@ impl Document {
             ]),
         );
         ap_dict.set("Resources", lopdf::Object::Dictionary(resources));
-        let ap_content = signature_appearance_content(
-            width as f64,
-            height as f64,
-            &options.name,
-            &options.reason,
-            &pdf_date_short(),
-        );
-        let appearance = lopdf::Stream::new(ap_dict, ap_content);
 
         let mut widget = lopdf::Dictionary::new();
         widget.set("Type", lopdf::Object::Name(b"Annot".to_vec()));
@@ -228,10 +250,29 @@ impl Document {
         push(sig_id, &sig_body, &mut update);
         let widget_body = object_bytes(&lopdf::Object::Dictionary(widget))?;
         push(widget_id, &widget_body, &mut update);
+
+        // Contenu de l'apparence : image ou texte.
+        let ap_content = if let Some((_, _, img_w, img_h)) = &image_xobject {
+            signature_appearance_image(width as f64, height as f64, *img_w, *img_h)
+        } else {
+            signature_appearance_content(
+                width as f64,
+                height as f64,
+                &options.name,
+                &options.reason,
+                &pdf_date_short(),
+            )
+        };
+        let appearance = lopdf::Stream::new(ap_dict, ap_content);
         let appearance_body = object_bytes(&lopdf::Object::Stream(appearance))?;
         push(appearance_id, &appearance_body, &mut update);
+
         let font_body = object_bytes(&lopdf::Object::Dictionary(font_dict))?;
         push(font_id, &font_body, &mut update);
+        if let Some((img_id, img_stream, _, _)) = image_xobject {
+            let img_body = object_bytes(&lopdf::Object::Stream(img_stream))?;
+            push(img_id, &img_body, &mut update);
+        }
         let acroform_body = object_bytes(&lopdf::Object::Dictionary(acroform))?;
         push(acroform_id, &acroform_body, &mut update);
         let page_body = object_bytes(&lopdf::Object::Dictionary(page_dict))?;
@@ -305,6 +346,38 @@ impl Document {
 }
 
 /// Construit le `ContentInfo` PKCS#7/SignedData détaché.
+/// Construit le flux d'apparence d'un champ de signature contenant une image PNG.
+///
+/// L'image est étirée pour remplir le rectangle, avec un fond neutre
+/// pour les zones non couvertes.
+fn signature_appearance_image(
+    width: f64,
+    height: f64,
+    img_w: f64,
+    img_h: f64,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    // Fond blanc sous l'image.
+    out.extend_from_slice(format!("q 1 1 1 rg 0 0 {width:.2} {height:.2} re f Q\n").as_bytes());
+    // Étirement de l'image pour remplir le rectangle.
+    out.extend_from_slice(
+        format!("q {width:.2} 0 0 {height:.2} 0 0 cm /SigIm Do Q\n").as_bytes(),
+    );
+    let _ = (img_w, img_h);
+    out
+}
+
+/// Décode un PNG en pixels RGB (sans alpha).
+fn decode_png_to_rgb(png_bytes: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
+    use image::GenericImageView;
+
+    let image = image::load_from_memory(png_bytes)
+        .map_err(|e| Error::InvalidInput(format!("PNG : {e}")))?;
+    let (width, height) = image.dimensions();
+    let rgb = image.to_rgb8().into_raw();
+    Ok((rgb, width, height))
+}
+
 fn build_cms(identity: &SigningIdentity, digest: &[u8]) -> Result<Vec<u8>> {
     use cms::builder::{SignedDataBuilder, SignerInfoBuilder};
     use cms::cert::{CertificateChoices, IssuerAndSerialNumber};

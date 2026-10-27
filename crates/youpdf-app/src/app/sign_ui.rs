@@ -56,6 +56,8 @@ pub(super) struct SignUi {
     error: Option<String>,
     /// Sous-vue : 0 = signature, 1 = certificat.
     tab: u8,
+    /// Index de la signature stockée utilisée comme image, si une a été choisie.
+    signature_preview: Option<usize>,
 }
 
 impl Default for SignUi {
@@ -73,6 +75,7 @@ impl Default for SignUi {
             signatures: Vec::new(),
             error: None,
             tab: 0,
+            signature_preview: None,
         }
     }
 }
@@ -167,6 +170,45 @@ impl YouPdfApp {
                 );
             }
         });
+
+        ui.add_space(SPACE_M);
+        ui.label(muted(t("Signature image (optional)"), LABEL));
+        ui.horizontal(|ui| {
+            if !self.marks.stored.is_empty() {
+                ui.label(t("Stored"));
+                for (i, sig) in self.marks.stored.iter().enumerate() {
+                    let selected = self.sign.options.signature_image.is_some()
+                        && self.sign.signature_preview == Some(i);
+                    if ui.selectable_label(selected, &sig.name).clicked() {
+                        self.sign.options.signature_image = Some(sig.png.clone());
+                        self.sign.signature_preview = Some(i);
+                    }
+                }
+            } else {
+                ui.label(
+                    RichText::new(t("No stored signatures — use the Create Signature tool first"))
+                        .size(CAPTION)
+                        .color(pal().muted),
+                );
+            }
+            if ui.button(t("Choose file…")).clicked() {
+                self.choose_signature_image_file(ctx);
+            }
+            if self.sign.options.signature_image.is_some() {
+                if ui.button(t("Clear")).clicked() {
+                    self.sign.options.signature_image = None;
+                    self.sign.signature_preview = None;
+                }
+            }
+        });
+        if let Some(png) = &self.sign.options.signature_image {
+            ui.add_space(SPACE_S);
+            ui.label(
+                RichText::new(format!("Image loaded ({} bytes)", png.len()))
+                    .size(CAPTION)
+                    .color(pal().icon_bright),
+            );
+        }
 
         ui.add_space(10.0);
         let ready = self.sign.certificate.is_some() && pages > 0;
@@ -283,6 +325,27 @@ impl YouPdfApp {
         if ui.button(t("Create self-signed…")).clicked() {
             self.create_self_signed();
         }
+    }
+
+    /// Importe un fichier image (PNG/JPEG) comme image de signature.
+    fn choose_signature_image_file(&mut self, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Image", &["png", "jpg", "jpeg"])
+            .pick_file()
+        else {
+            return;
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                self.sign.error = Some(format!("Cannot read {}: {err}", path.display()));
+                return;
+            }
+        };
+        self.sign.options.signature_image = Some(bytes);
+        self.sign.signature_preview = None;
+        self.sign.error = None;
+        self.toast(ctx, "Signature image loaded".to_string());
     }
 
     /// Importe l'identité d'un fichier `.p12` / `.pfx` choisi par l'utilisateur.
