@@ -160,7 +160,15 @@ impl Document {
         if full_name.is_empty() {
             return;
         }
-        let mut kind = FormFieldKind::from_ft(&ft);
+        let mut kind = if let Ok(Object::Name(name)) = dict.get(b"YouPDFKind") {
+            match name.as_slice() {
+                b"Date" => FormFieldKind::Date,
+                b"Barcode" => FormFieldKind::Barcode,
+                _ => FormFieldKind::from_ft(&ft),
+            }
+        } else {
+            FormFieldKind::from_ft(&ft)
+        };
         if matches!(kind, FormFieldKind::Checkbox) {
             // Bit 16 : bouton radio ; bit 17 : bouton poussoir.
             if flags & 0x8000 != 0 {

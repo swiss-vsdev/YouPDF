@@ -123,17 +123,10 @@ impl YouPdfApp {
                     }
                     match mode {
                         0 => {}
-                        1 => match idx {
+                        1 => {
                             // Texte, Image et Lien agissent sur le canevas :
                             // rien à faire au moment du clic.
-                            1..=3 => {}
-                            4 => self.toast(
-                                ctx,
-                                "Layout: reflowing a block\u{2019}s text is not available; \
-                                 use Text to change its wording",
-                            ),
-                            _ => {}
-                        },
+                        }
                         3 => match idx {
                             1 => {}
                             2 => {
@@ -165,17 +158,9 @@ impl YouPdfApp {
                             }
                             _ => {}
                         },
-                        2 => match idx {
-                            // Select et les champs créables travaillent au clic.
-                            0..=5 | 9 => {}
-                            _ => self.toast(
-                                ctx,
-                                format!(
-                                    "{} is not available yet",
-                                    mode_tools(mode).get(idx).map(|t| t.0).unwrap_or("Tool")
-                                ),
-                            ),
-                        },
+                        2 => {
+                            // Tous les champs de formulaire sont créables au clic.
+                        }
                         _ => {}
                     }
                 }
@@ -204,7 +189,7 @@ impl YouPdfApp {
                                         if resp.clicked() {
                                             self.mode = Some(idx);
                                             self.tools_open = false;
-                                            self.annot_tool = None;
+                                            self.annot_tool = Some(0);
                                             self.preset_open = false;
                                             self.text_sel = None;
                                         }
@@ -251,7 +236,7 @@ impl YouPdfApp {
                     match entry {
                         ToolsEntry::Mode(idx) => {
                             self.mode = Some(idx);
-                            self.annot_tool = None;
+                            self.annot_tool = Some(0);
                             self.preset_open = false;
                             self.text_sel = None;
                         }
@@ -273,10 +258,6 @@ impl YouPdfApp {
                         ToolsEntry::Sign => self.sign_open = true,
                         ToolsEntry::CreateSignature => self.marks.signature_open = true,
                         ToolsEntry::CustomStamp => self.marks.stamp_open = true,
-                        ToolsEntry::Sticker => self.marks.stamp_open = true,
-                        ToolsEntry::ConnectedLines => {
-                            self.marks.stamp_open = true;
-                        }
                     }
                 }
             }

@@ -6,6 +6,9 @@ use super::*;
 impl YouPdfApp {
 
         pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
+            if self.mode == Some(2) && ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+                self.delete_selected_form_fields(ctx);
+            }
             if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Comma)) {
                 self.prefs_open = true;
                 return;
@@ -106,7 +109,7 @@ impl YouPdfApp {
                 match index {
                     0..=3 => {
                         self.mode = Some(index);
-                        self.annot_tool = None;
+                        self.annot_tool = Some(0);
                         self.preset_open = false;
                         self.text_sel = None;
                     }

@@ -329,6 +329,7 @@ impl YouPdfApp {
             let stats = youpdf_core::search::DocumentStats::from_index(
                 &youpdf_core::SearchIndex::build(&tab.doc).expect("build index"),
             );
+            let perms = youpdf_core::read_permissions(&tab.doc);
             let mut open = true;
             let title = tab.title.clone();
 
@@ -352,6 +353,17 @@ impl YouPdfApp {
                 row("CJK", &stats.cjk.to_string());
                 row("Spaces", &stats.spaces.to_string());
                 row("Total chars", &stats.total_chars.to_string());
+                if let Some(perms) = &perms {
+                    ui.add_space(SPACE_S);
+                    ui.label(section("Permissions"));
+                    for perm in perms {
+                        let value = if perm.allowed { "Allowed" } else { "Denied" };
+                        ui.horizontal(|ui| {
+                            ui.label(section(perm.label));
+                            ui.label(RichText::new(value).color(pal().icon_bright));
+                        });
+                    }
+                }
             });
 
             if !open {

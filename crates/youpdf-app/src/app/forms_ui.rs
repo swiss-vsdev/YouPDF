@@ -1,5 +1,7 @@
 //! Panneau Formulaires et remplissage interactif des champs.
 
+use chrono::Datelike;
+
 use super::*;
 use youpdf_shared::{BODY, CAPTION, t, RADIUS_M, SPACE_M, SPACE_S, SPACE_XS};
 
@@ -120,6 +122,10 @@ impl YouPdfApp {
             ui.checkbox(&mut self.form_highlight, t("Highlight fields"));
         });
         ui.add_space(SPACE_XS);
+        if ui.button(t("Delete field")).clicked() {
+            self.delete_selected_form_fields(ctx);
+        }
+        ui.add_space(SPACE_XS);
         // Outils d'alignement du mode Préparer un formulaire.
         if self.mode == Some(2) {
             let selected = self.form_selection.len();
@@ -230,6 +236,7 @@ impl YouPdfApp {
                 .map(|row| row.4.clone())
                 .unwrap_or_default();
             self.form_edit = Some((idx, current));
+            self.form_edit_fresh = true;
             self.form_props = self
                 .tabs
                 .get(self.active)
@@ -374,3 +381,217 @@ mod tests {
 }
 
 // Suite du panel forms_ui (extraite de `app.rs`).
+
+impl YouPdfApp {
+    /// Sélecteur de date pour un champ de formulaire.
+    pub(super) fn date_picker_window(&mut self, ctx: &egui::Context) {
+        if !self.form_date_open {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        self.show_modal(
+            ctx,
+            "modal-date-picker",
+            "Choose a date",
+            320.0,
+            &mut open,
+            |app, ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("<").clicked() {
+                        if app.form_date_month == 1 {
+                            app.form_date_month = 12;
+                            app.form_date_year -= 1;
+                        } else {
+                            app.form_date_month -= 1;
+                        }
+                    }
+                    ui.label(format!("{} {}", month_name(app.form_date_month), app.form_date_year));
+                    if ui.button(">").clicked() {
+                        if app.form_date_month == 12 {
+                            app.form_date_month = 1;
+                            app.form_date_year += 1;
+                        } else {
+                            app.form_date_month += 1;
+                        }
+                    }
+                });
+                ui.add_space(SPACE_S);
+                let first = chrono::NaiveDate::from_ymd_opt(app.form_date_year, app.form_date_month, 1);
+                let offset = first.map(|d| d.weekday().num_days_from_monday()).unwrap_or(0) as usize;
+                let days = (1..=31)
+                    .filter_map(|d| chrono::NaiveDate::from_ymd_opt(app.form_date_year, app.form_date_month, d))
+                    .count();
+                ui.columns(7, |cols| {
+                    for i in 0..7 {
+                        cols[i].label(["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"][i]);
+                    }
+                });
+                let mut day = 1usize;
+                for row in 0..6 {
+                    ui.horizontal(|ui| {
+                        for col in 0..7 {
+                            let idx = row * 7 + col;
+                            if idx < offset || day > days {
+                                ui.add_space(24.0);
+                            } else {
+                                let label = day.to_string();
+                                if ui.button(&label).clicked() {
+                                    app.form_date_value = format!(
+                                        "{:04}-{:02}-{:02}",
+                                        app.form_date_year, app.form_date_month, day
+                                    );
+                                }
+                                day += 1;
+                            }
+                        }
+                    });
+                    if day > days {
+                        break;
+                    }
+                }
+                ui.add_space(SPACE_S);
+                ui.horizontal(|ui| {
+                    ui.label("Value:");
+                    ui.text_edit_singleline(&mut app.form_date_value);
+                });
+                ui.add_space(SPACE_S);
+                if ui.button("Apply").clicked() {
+                    apply = true;
+                }
+            },
+        );
+        if !open {
+            self.form_date_open = false;
+            self.form_date_target = None;
+        }
+        if apply {
+            if let Some(idx) = self.form_date_target.take() {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(field) = tab.forms.get(idx).cloned() {
+                        let _ = tab.doc.fill_form_field(&field, &self.form_date_value);
+                        tab.forms = tab.doc.read_form_fields();
+                        self.mark_document_changed();
+                    }
+                }
+                self.toast(ctx, "Date set".to_string());
+            }
+            self.form_date_open = false;
+        }
+    }
+
+    /// Fenêtre d'options pour liste déroulante.
+    pub(super) fn form_options_window(&mut self, ctx: &egui::Context) {
+        if !self.form_options_open {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        self.show_modal(
+            ctx,
+            "modal-form-options",
+            "List options",
+            360.0,
+            &mut open,
+            |app, ui| {
+                ui.label("One option per line:");
+                ui.add_sized(
+                    vec2(320.0, 120.0),
+                    egui::TextEdit::multiline(&mut app.form_options_text),
+                );
+                ui.add_space(SPACE_S);
+                if ui.button("Apply").clicked() {
+                    apply = true;
+                }
+            },
+        );
+        if !open {
+            self.form_options_open = false;
+            self.form_options_target = None;
+        }
+        if apply {
+            if let Some(idx) = self.form_options_target.take() {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(field) = tab.forms.get(idx).cloned() {
+                        let mut props = tab.doc.read_field_properties(&field);
+                        props.options = self
+                            .form_options_text
+                            .lines()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        if props.default_value.is_empty() {
+                            props.default_value = props.options.first().cloned().unwrap_or_default();
+                        }
+                        let _ = tab.doc.update_form_field(&field, &props);
+                        tab.forms = tab.doc.read_form_fields();
+                        self.mark_document_changed();
+                    }
+                }
+                self.toast(ctx, "Options updated".to_string());
+            }
+            self.form_options_open = false;
+        }
+    }
+
+    /// Fenêtre de valeur de code-barres.
+    pub(super) fn form_barcode_window(&mut self, ctx: &egui::Context) {
+        if !self.form_barcode_open {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        self.show_modal(
+            ctx,
+            "modal-barcode",
+            "Barcode value",
+            320.0,
+            &mut open,
+            |app, ui| {
+                ui.label("Value to encode:");
+                ui.add_sized(
+                    vec2(280.0, 24.0),
+                    egui::TextEdit::singleline(&mut app.form_barcode_value),
+                );
+                ui.add_space(SPACE_S);
+                if ui.button("Apply").clicked() {
+                    apply = true;
+                }
+            },
+        );
+        if !open {
+            self.form_barcode_open = false;
+            self.form_barcode_target = None;
+        }
+        if apply {
+            if let Some(idx) = self.form_barcode_target.take() {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(field) = tab.forms.get(idx).cloned() {
+                        let _ = tab.doc.fill_form_field(&field, &self.form_barcode_value);
+                        tab.forms = tab.doc.read_form_fields();
+                        self.mark_document_changed();
+                    }
+                }
+                self.toast(ctx, "Barcode set".to_string());
+            }
+            self.form_barcode_open = false;
+        }
+    }
+}
+
+fn month_name(m: u32) -> &'static str {
+    match m {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        _ => "December",
+    }
+}

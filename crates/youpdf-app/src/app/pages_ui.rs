@@ -852,4 +852,96 @@ impl YouPdfApp {
             self.page_tools_open = false;
         }
     }
+
+    /// Fenêtre « Libellés de page » : édite /PageLabels (préfixe, style,
+    /// numéro de départ, page de début).
+    pub(super) fn page_labels_window(&mut self, ctx: &egui::Context) {
+        if !self.page_labels_open {
+            return;
+        }
+        let mut keep_open = true;
+        self.show_modal(ctx, "modal-page-labels", "Page Labels", 420.0, &mut keep_open, |app, ui| {
+            let total = app.tabs.get(app.active).map(|t| t.doc.page_count()).unwrap_or(0);
+            if total == 0 {
+                ui.label(muted("Open a document first.", LABEL));
+                return;
+            }
+            ui.label(section("New label range"));
+            ui.horizontal(|ui| {
+                ui.label(muted("Start page", LABEL));
+                ui.add(egui::DragValue::new(&mut app.page_label_from_page).range(1..=total).speed(1));
+            });
+            ui.horizontal(|ui| {
+                ui.label(muted("Prefix", LABEL));
+                ui.text_edit_singleline(&mut app.page_label_prefix);
+            });
+            ui.horizontal(|ui| {
+                ui.label(muted("Style", LABEL));
+                let styles = ["Arabic", "Roman (lower)", "Roman (upper)", "Letters (lower)", "Letters (upper)"];
+                egui::ComboBox::from_id_salt("page-label-style")
+                    .selected_text(styles[app.page_label_style.min(styles.len() - 1)])
+                    .show_ui(ui, |ui| {
+                        for (i, name) in styles.iter().enumerate() {
+                            ui.selectable_value(&mut app.page_label_style, i, *name);
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label(muted("Start number", LABEL));
+                ui.add(egui::DragValue::new(&mut app.page_label_start).range(1..=9999).speed(1));
+            });
+            ui.add_space(SPACE_M);
+            ui.horizontal(|ui| {
+                if ui.button("Apply").clicked() {
+                    use youpdf_core::organize::labels::{LabelStyle, PageLabel, get_page_labels, set_page_labels};
+                    let style = match app.page_label_style {
+                        1 => LabelStyle::RomanLower,
+                        2 => LabelStyle::RomanUpper,
+                        3 => LabelStyle::LetterLower,
+                        4 => LabelStyle::LetterUpper,
+                        _ => LabelStyle::Arabic,
+                    };
+                    let prefix = if app.page_label_prefix.trim().is_empty() {
+                        None
+                    } else {
+                        Some(app.page_label_prefix.clone())
+                    };
+                    let label = PageLabel::new(prefix, style, app.page_label_start);
+                    let mut labels = get_page_labels(
+                        &app.tabs.get(app.active).unwrap().doc,
+                    )
+                    .unwrap_or_default();
+                    labels.insert(app.page_label_from_page.saturating_sub(1), label);
+                    if let Some(tab) = app.tabs.get_mut(app.active) {
+                        let _ = set_page_labels(&mut tab.doc, &labels);
+                        app.mark_document_changed();
+                        app.toast(ctx, "Page labels updated");
+                    }
+                }
+                if ui.button("Clear all").clicked() {
+                    if let Some(tab) = app.tabs.get_mut(app.active) {
+                        let _ = youpdf_core::organize::labels::set_page_labels(&mut tab.doc, &std::collections::BTreeMap::new());
+                        app.mark_document_changed();
+                        app.toast(ctx, "Page labels cleared");
+                    }
+                }
+            });
+
+            // Affiche les libellés existants.
+            if let Some(tab) = app.tabs.get(app.active) {
+                if let Ok(labels) = youpdf_core::organize::labels::get_page_labels(&tab.doc) {
+                    if !labels.is_empty() {
+                        ui.add_space(SPACE_M);
+                        ui.label(section("Existing ranges"));
+                        for (idx, lbl) in &labels {
+                            ui.label(RichText::new(format!("page {} : {}…", idx + 1, lbl.format(0))).size(LABEL).color(pal().icon_bright));
+                        }
+                    }
+                }
+            }
+        });
+        if !keep_open {
+            self.page_labels_open = false;
+        }
+    }
 }

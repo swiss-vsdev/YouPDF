@@ -26,8 +26,10 @@ impl YouPdfApp {
         if form_cancel {
             self.form_edit = None;
             self.form_editing = None;
+            self.form_edit_fresh = false;
         } else if form_commit {
             self.commit_form_edit();
+            self.form_edit_fresh = false;
         }
         self.text_sel = sel;
         self.inspector_target = inspector_target;
@@ -153,9 +155,10 @@ impl YouPdfApp {
                 // panneau n'a pas été ouvert.
                 self.ensure_structure();
                 if let Some(form_idx) = self.form_hit_test(page, point) {
-                    // En mode Préparer, le clic sélectionne le champ (Maj :
-                    // ajoute ou retire de la sélection).
-                    if self.mode == Some(2) {
+                    // En mode Préparer, Maj+clic sélectionne le champ ;
+                    // un clic simple remplit le bloc (texte, date, case…).
+                    let shift = ctx.input(|i| i.modifiers.shift);
+                    if self.mode == Some(2) && shift {
                         self.toggle_form_selection(form_idx);
                     } else {
                     let field = self.tabs[self.active].forms[form_idx].clone();
@@ -164,6 +167,7 @@ impl YouPdfApp {
                             self.form_editing = Some(form_idx);
                             self.form_edit =
                                 Some((form_idx, field.value.clone().unwrap_or_default()));
+                            self.form_edit_fresh = true;
                         }
                         FormFieldKind::Checkbox => {
                             let checked = field
@@ -213,10 +217,33 @@ impl YouPdfApp {
                             }
                             self.form_editing = None;
                         }
-                        _ => {
+                        FormFieldKind::Signature => {
+                        self.form_signature_target = Some(form_idx);
+                        self.marks.signature_open = true;
+                        self.form_editing = None;
+                    }
+                    FormFieldKind::Date => {
+                        self.form_date_target = Some(form_idx);
+                        self.form_date_value = field.value.clone().unwrap_or_else(|| {
+                            chrono::Local::now().format("%Y-%m-%d").to_string()
+                        });
+                        let now = chrono::Local::now();
+                        self.form_date_year = chrono::Datelike::year(&now);
+                        self.form_date_month = chrono::Datelike::month(&now);
+                        self.form_date_open = true;
+                        self.form_editing = None;
+                    }
+                    FormFieldKind::Barcode => {
+                        self.form_barcode_target = Some(form_idx);
+                        self.form_barcode_value = field.value.clone().unwrap_or_default();
+                        self.form_barcode_open = true;
+                        self.form_editing = None;
+                    }
+                    _ => {
                             self.form_editing = Some(form_idx);
                             self.form_edit =
                                 Some((form_idx, field.value.clone().unwrap_or_default()));
+                            self.form_edit_fresh = true;
                         }
                     }
                     }

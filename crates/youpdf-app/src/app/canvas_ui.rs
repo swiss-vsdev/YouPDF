@@ -577,6 +577,31 @@ impl YouPdfApp {
                                 }
                             }
 
+                            // Étiquette du type de champ, toujours visible.
+                            for field in &tab.forms {
+                                if field.page != Some(page as usize) || field.rect == [0.0; 4] {
+                                    continue;
+                                }
+                                let [x1, y1, x2, y2] = field.rect;
+                                let rect = Rect::from_min_max(
+                                    pos2(
+                                        page_rect.min.x + x1.min(x2) * scale,
+                                        page_rect.max.y - y1.max(y2) * scale,
+                                    ),
+                                    pos2(
+                                        page_rect.min.x + x1.max(x2) * scale,
+                                        page_rect.max.y - y1.min(y2) * scale,
+                                    ),
+                                );
+                                ui.painter().text(
+                                    pos2(rect.min.x + 4.0, rect.min.y + 2.0),
+                                    Align2::LEFT_TOP,
+                                    form_kind_label(&field.kind),
+                                    FontId::proportional(CAPTION),
+                                    pal().muted,
+                                );
+                            }
+
                             // Éditeur en place du champ de formulaire touché.
                             if let Some((idx, buffer)) = frame.form_draft.as_mut() {
                                 if let Some(field) = tab.forms.get(*idx) {
@@ -603,11 +628,10 @@ impl YouPdfApp {
                                             Stroke::new(1.5_f32, pal().accent),
                                         );
                                         let single_line = !field.multiline;
-                                        if matches!(
-                                            field.kind,
-                                            FormFieldKind::Choice | FormFieldKind::MultiChoice
-                                        ) {
-                                            egui::ComboBox::from_id_salt(("form-choice", *idx))
+                                        if field.kind == FormFieldKind::Choice {
+                                            let below = rect.translate(vec2(0.0, rect.height()));
+                                            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(below), |ui| {
+                                                egui::ComboBox::from_id_salt(("form-choice", *idx))
                                                 .width(rect.width())
                                                 .selected_text(if buffer.is_empty() {
                                                     "Select…".to_string()
@@ -625,6 +649,20 @@ impl YouPdfApp {
                                                         }
                                                     }
                                                 });
+                                            });
+                                        } else if field.kind == FormFieldKind::MultiChoice {
+                                            let below = rect.translate(vec2(0.0, rect.height()));
+                                            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(below), |ui| {
+                                                for option in &field.options {
+                                                if ui
+                                                    .selectable_label(buffer == option, option)
+                                                    .clicked()
+                                                {
+                                                    *buffer = option.clone();
+                                                    frame.form_commit = true;
+                                                }
+                                            }
+                                            });
                                             ui.painter().rect_stroke(
                                                 rect,
                                                 Rounding::same(RADIUS_XS),
@@ -640,8 +678,9 @@ impl YouPdfApp {
                                                 rect.shrink(3.0),
                                                 edit.frame(false).desired_width(f32::INFINITY),
                                             );
-                                            if ui.memory(|m| m.focused().is_none()) {
+                                            if self.form_edit_fresh {
                                                 resp.request_focus();
+                                                self.form_edit_fresh = false;
                                             }
                                             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                                                 frame.form_cancel = true;

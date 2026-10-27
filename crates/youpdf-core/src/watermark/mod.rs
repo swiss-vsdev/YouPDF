@@ -34,6 +34,7 @@ mod ops;
 
 pub(crate) use ops::{
     background_color_ops, background_image_ops, background_image_stream, bates_ops,
+    pdf_watermark_ops,
     header_footer_ops, marked_dict, marked_dict_with, to_roman, watermark_ops,
 };
 
@@ -54,6 +55,9 @@ const BATES_MARKER: &str = "YouPdfBates";
 
 /// Nom de ressource du XObject image d'arrière-plan.
 const BG_XOBJECT_NAME: &str = "YouPdfBG0";
+
+/// Nom de ressource du XObject image d'un filigrane PDF.
+const WM_PDF_XOBJECT_NAME: &str = "YouPdfWM0";
 
 /// Pages auxquelles un filigrane ou un en-tête s'applique.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

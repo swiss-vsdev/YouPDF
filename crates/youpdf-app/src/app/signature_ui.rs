@@ -62,7 +62,14 @@ impl YouPdfApp {
             self.marks.signature_open = false;
         }
         if let Some(png) = created {
-            self.store_signature(png);
+            if self.form_signature_target.is_some() {
+                let target = self.form_signature_target.take();
+                if let Some(idx) = target {
+                    self.fill_signature_form_field(idx, &png, ctx);
+                }
+            } else {
+                self.store_signature(png);
+            }
         }
     }
     /// Onglet « Dessiner » : un canevas et un bouton de validation.
@@ -256,7 +263,14 @@ impl YouPdfApp {
         }
         if let Some(index) = use_index {
             let png = self.marks.stored[index].png.clone();
-            self.place_signature_png(&png);
+            if self.form_signature_target.is_some() {
+                let target = self.form_signature_target.take();
+                if let Some(idx) = target {
+                    self.fill_signature_form_field(idx, &png, ui.ctx());
+                }
+            } else {
+                self.place_signature_png(&png);
+            }
         }
     }
     /// Décode l'image importée d'une signature.
@@ -283,6 +297,51 @@ impl YouPdfApp {
         self.place_signature_png(&self.marks.stored[0].png.clone());
     }
     /// Pose une signature au point demandé, ou au centre de la page.
+    /// Remplit un champ de signature de formulaire avec l'image donnée.
+    fn fill_signature_form_field(&mut self, idx: usize, png: &[u8], ctx: &egui::Context) {
+        let field = self
+            .tabs
+            .get(self.active)
+            .and_then(|tab| tab.forms.get(idx).cloned());
+        let Some(field) = field else {
+            return;
+        };
+        let page = field.page.unwrap_or(1);
+        let rect = field.rect;
+        let rgb = match image::load_from_memory(png) {
+            Ok(image) => image.to_rgb8(),
+            Err(err) => {
+                self.marks.error = Some(format!("Signature unreadable: {err}"));
+                return;
+            }
+        };
+        let (width, height) = rgb.dimensions();
+        let rw = (rect[2] - rect[0]).max(1.0);
+        let rh = (rect[3] - rect[1]).max(1.0);
+        let scale = (rw / width as f32).min(rh / height as f32);
+        let wpt = width as f32 * scale;
+        let hpt = height as f32 * scale;
+        let x = rect[0] + (rw - wpt) / 2.0;
+        let y = rect[1] + (rh - hpt) / 2.0;
+        let target_rect = [x, y, x + wpt, y + hpt];
+        let filled = if let Some(tab) = self.tabs.get_mut(self.active) {
+            let inserted = tab
+                .doc
+                .insert_image_bitmap(page, target_rect, rgb.as_raw(), width, height);
+            let _ = tab.doc.fill_form_field(&field, "Signed");
+            tab.forms = tab.doc.read_form_fields();
+            inserted.is_ok()
+        } else {
+            false
+        };
+        if filled {
+            self.mark_document_changed();
+            self.marks.signature_open = false;
+            self.marks.error = None;
+            self.toast(ctx, "Signature field filled".to_string());
+        }
+    }
+
     fn place_signature_png(&mut self, png: &[u8]) {
         let (page, at) = match self.marks.signature_at.take() {
             Some((page, at)) => (page, Some(at)),

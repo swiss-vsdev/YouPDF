@@ -3,6 +3,8 @@
 // ────────────────────────────────────────────────────────────────────────
 
 use super::*;
+use crate::render::{RenderOptions, Renderer};
+
 impl Document {
     /// Ajoute un filigrane texte aux pages de `wm.pages`.
     ///
@@ -175,6 +177,102 @@ impl Document {
     /// de flux retirés.
     pub fn clear_bates(&mut self) -> Result<usize> {
         self.wm_clear_marked(BATES_MARKER)
+    }
+
+    /// Ajoute un filigrane depuis un PDF source : chaque page décorée
+    /// reçoit le flux de la page source, échelle et positionnée selon
+    /// `wm`. C'est le filigrane « PDF-file » : l'autre PDF devient un
+    /// filigrane, imprimé derrière ou devant le texte.
+    ///
+    /// `source` est un [`Document`] ouvert en mémoire, `from_page` est le
+    /// numéro (1-indexé) de la page source à utiliser comme filigrane.
+    /// Renvoie le nombre de pages décorées.
+    ///
+    /// ponytail: le flux source est rasterisé par le renderer fourni ;
+    /// sans renderer, l'opération échoue (comme le caviardage).
+    pub fn add_pdf_watermark(
+        &mut self,
+        wm: &Watermark,
+        source: &Document,
+        from_page: u32,
+        renderer: &dyn Renderer,
+    ) -> Result<usize> {
+        let src_total = source.page_count() as u32;
+        if src_total == 0 || from_page < 1 || from_page > src_total {
+            return Err(Error::InvalidInput("source page out of range".into()));
+        }
+        if !renderer.renders_real_content() {
+            return Err(Error::NotSupported(
+                "PDF watermark needs pdfium (renderer unavailable)".into(),
+            ));
+        }
+
+        let total = self.page_count() as u32;
+        let pages = wm.pages.pages(total);
+        let (sw, sh) = source.page_size(from_page);
+        if sw <= 0.0 || sh <= 0.0 {
+            return Err(Error::InvalidInput("source page has no size".into()));
+        }
+
+        let mut decorated = 0usize;
+        for page in &pages {
+            let page_id = self
+                .page_id(*page)
+                .map_err(|e| Error::Pdf(format!("page {page} : {e}")))?;
+            let (width, height) = self.page_size(*page);
+            let ops = pdf_watermark_ops(wm, width, height, sw, sh);
+            let stream_id = self
+                .inner_mut()
+                .add_object(Stream::new(marked_dict(), ops));
+            let image_id = self.rasterize_source_page(source, from_page, renderer)?;
+            self.wm_link_xobject(page_id, WM_PDF_XOBJECT_NAME, image_id)?;
+            if wm.behind {
+                self.wm_prepend_content(page_id, stream_id)?;
+            } else {
+                self.wm_append_content(page_id, stream_id)?;
+            }
+            decorated += 1;
+        }
+        tracing::debug!(pages = decorated, "filigrane PDF ajouté");
+        Ok(decorated)
+    }
+
+    /// Rasterise une page d'un document source en XObject image.
+    fn rasterize_source_page(
+        &mut self,
+        source: &Document,
+        page: u32,
+        renderer: &dyn Renderer,
+    ) -> Result<ObjectId> {
+        let opts = RenderOptions {
+            scale: 1.0,
+            rotation: 0,
+            ..Default::default()
+        };
+        let rgba = renderer
+            .render_page(source, page, &opts)
+            .map_err(|e| Error::Pdf(format!("render source page {page} : {e}")))?;
+        let (w, h) = (rgba.width, rgba.height);
+        let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+        for chunk in rgba.pixels.chunks_exact(4) {
+            rgb.push(chunk[0]);
+            rgb.push(chunk[1]);
+            rgb.push(chunk[2]);
+        }
+        let data = flate_compress(&rgb)?;
+        let stream = Stream::new(
+            dictionary! {
+                "Type" => Object::Name(b"XObject".to_vec()),
+                "Subtype" => Object::Name(b"Image".to_vec()),
+                "Width" => Object::Integer(w as i64),
+                "Height" => Object::Integer(h as i64),
+                "ColorSpace" => Object::Name(b"DeviceRGB".to_vec()),
+                "BitsPerComponent" => Object::Integer(8),
+                "Filter" => Object::Name(b"FlateDecode".to_vec()),
+            },
+            data,
+        );
+        Ok(self.inner_mut().add_object(stream))
     }
 
     /// Retire les flux de contenu marqués par `marker`, sur toutes les pages.

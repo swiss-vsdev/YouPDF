@@ -67,6 +67,7 @@ impl YouPdfApp {
                 outline: Vec::new(),
                 forms: Vec::new(),
                 attachments: Vec::new(),
+                form_move: None,
                 fragments: HashMap::new(),
                 structure_loaded: false,
                 pinned: false,
@@ -108,6 +109,14 @@ impl YouPdfApp {
             self.redact_phase = RedactPhase::Marking;
             self.callout_pending = None;
             self.form_edit = None;
+            self.form_edit_fresh = false;
+            self.form_signature_target = None;
+            self.form_date_target = None;
+            self.form_date_open = false;
+            self.form_options_target = None;
+            self.form_options_open = false;
+            self.form_barcode_target = None;
+            self.form_barcode_open = false;
             self.selected_annot = 0;
             self.has_annot_selection = false;
             self.text_sel = None;

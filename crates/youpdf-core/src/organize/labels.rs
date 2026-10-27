@@ -275,10 +275,8 @@ pub fn get_page_label(doc: &Document, page_number: u32) -> Option<String> {
     // Find the most recent label that applies to this page.
     let mut applicable: Option<(u32, &PageLabel)> = None;
     for (&idx, label) in &labels {
-        if idx <= page_index {
-            if applicable.is_none() || idx > applicable.unwrap().0 {
-                applicable = Some((idx, label));
-            }
+        if idx <= page_index && (applicable.is_none() || idx > applicable.unwrap().0) {
+            applicable = Some((idx, label));
         }
     }
 
