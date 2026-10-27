@@ -21,7 +21,7 @@ impl YouPdfApp {
                 opacity: 1.0,
                 line_width: self.annot_width,
                 font_size: 12.0,
-                fill: None,
+                fill: self.annot_fill,
                 dash: BorderDash::Solid,
                 cloudy: false,
             };

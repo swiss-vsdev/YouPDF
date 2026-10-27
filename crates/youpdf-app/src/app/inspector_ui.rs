@@ -85,6 +85,30 @@ impl YouPdfApp {
                                     );
                                 });
                             }
+                            // Fill color for shapes (rectangle, ellipse, polygon)
+                            if tool == 5 {
+                                ui.add_space(SPACE_M);
+                                ui.horizontal(|ui| {
+                                    ui.label(muted(t("Fill"), LABEL));
+                                    let has_fill = self.annot_fill.is_some();
+                                    let resp = ui.checkbox(&mut self.annot_fill.is_some(), "Fill");
+                                    if resp.changed() {
+                                        if has_fill {
+                                            self.annot_fill = None;
+                                        } else {
+                                            self.annot_fill = Some(self.annot_color);
+                                        }
+                                    }
+                                });
+                                if let Some(fill) = self.annot_fill.as_mut() {
+                                    ui.add_space(SPACE_S);
+                                    ui.horizontal(|ui| {
+                                        let mut color = Color32::from_rgb(fill[0], fill[1], fill[2]);
+                                        ui.color_edit_button_srgba(&mut color);
+                                        *fill = [color.r(), color.g(), color.b()];
+                                    });
+                                }
+                            }
                             if tool == 10 {
                                 ui.add_space(SPACE_S);
                                 ui.horizontal(|ui| {
