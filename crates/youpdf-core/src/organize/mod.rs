@@ -17,6 +17,7 @@ mod merge;
 mod split;
 mod tree;
 pub mod exchange;
+pub mod labels;
 pub mod resize;
 
 

@@ -79,7 +79,7 @@ pub use ocr::{
 pub use office::OfficeFormat;
 pub use office::hex_color;
 pub use pdfa::Conformance;
-pub use protect::{EncryptionOptions, EncryptionStrength, Permissions};
+pub use protect::{EncryptionOptions, EncryptionStrength, Permissions, read_permissions};
 pub use redact::{
     fit_block, fit_block_from, line_strips, CodeSetEntry, DEFAULT_CODE_SETS, RedactionFill,
     RedactionMark, RedactionOverlay, RedactionRegion, RedactionReport, TranslationOptions,

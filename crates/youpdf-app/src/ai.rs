@@ -19,6 +19,7 @@ use youpdf_ai::{
     build_provider, AiTask, AppSettings, ChatContext, ChatOptions, Message, ModelInfo, ProviderConfig,
     ProviderKind, SecretStore, ToneStyle,
 };
+use youpdf_core::organize::labels::get_page_labels;
 
 /// Demande envoyée au fil de travail.
 ///
@@ -248,8 +249,34 @@ pub fn detect_page_defects(doc: &youpdf_core::Document, page: u32) -> Vec<PageDe
         defects.push(PageDefect::ContainsComments);
     }
 
-    // NonConsecutive detector requires PageLabels (Wave 1 Agent A1); stub
-    // returns empty until A1 lands.
+    // NonConsecutive detector: page labels let us verify that the
+    // declared numbering actually increments by 1 from page to page.
+    if page > 1 {
+        let labels = get_page_labels(doc).unwrap_or_default();
+        if !labels.is_empty() {
+            let cur_idx = page - 1;
+            let prev_idx = page - 2;
+            let cur_def = labels
+                .iter()
+                .filter(|(i, _)| **i <= cur_idx)
+                .max_by_key(|(i, _)| **i);
+            let prev_def = labels
+                .iter()
+                .filter(|(i, _)| **i <= prev_idx)
+                .max_by_key(|(i, _)| **i);
+            if let (Some((ci, cl)), Some((pi, pl))) = (cur_def, prev_def) {
+                let expected = pl.start + (prev_idx - *pi);
+                let found = cl.start + (cur_idx - *ci);
+                if found != expected + 1 {
+                    defects.push(PageDefect::NonConsecutive {
+                        expected: expected + 1,
+                        found,
+                    });
+                }
+            }
+        }
+    }
+
     defects
 }
 
