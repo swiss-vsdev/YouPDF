@@ -8,7 +8,7 @@
 - **Goal**: Full visual and feature parity. If a tool does not exist in UPDF, it must be removed from YouPDF.
 - **Out of Scope**: Cloud/account/subscription infrastructure, telemetry, auto-updater.
 - **Rules**: Follow the "Ponytail" principle (lazy/minimal). No unrequested abstractions.
-- **State**: Waves 1-4 landed (commit `1e550459`); Wave 5 in progress (PDF-file watermarks, page labels editor, permissions matrix, forms cleanup).
+- **State**: Waves 1-5 landed (commit `1e550459`); Wave 5 complete: PDF-file watermarks, page labels editor, permissions matrix, forms cleanup, Office import via `soffice`.
 
 ---
 
@@ -137,7 +137,7 @@
 2. [x] **Agent D2 (Whole-PDF Bilingual Translation):** `ai.rs` + `office.rs`. Text-run extraction, batched translation, absolute-box placement with automatic font-size shrinking (no reflow), and optional bilingual side-by-side stack.
 
 ### Wave 5 — Strategic Product Decisions (No Code Agents)
-1. [ ] **Office Import:** Shell to `soffice --convert-to pdf` when LibreOffice is present; else show install prompt.
+1. [x] **Office Import:** Shell to `soffice --convert-to pdf` when LibreOffice is present; else show install prompt.
 2. [ ] **Validating PDF/A:** Scope as PDF/A-2b with an embedded sRGB ICC profile and `/OutputIntent` (skip full validation engine).
 3. [ ] **Element Align/Arrange Panel:** Blocked on multi-select; single-object arrange is already done.
 4. [ ] **PDF Portfolio:** Treat as `/Collections` wrapper over existing `/EmbeddedFiles` attachments.
@@ -174,7 +174,7 @@
 | Forms | Calculation-order list editor | Medium |
 | Forms | Multiple-copy form UI | Medium |
 | Decor | AI-generated watermarks (AI-driven text/style suggestions) | Medium |
-| Security/Export | Office import (.docx/.xlsx/.pptx) via `soffice` | Medium |
+| Security/Export | Office import (.docx/.xlsx/.pptx) via `soffice` | ✅ Done (`import_office` + UI) |
 | Security/Export | PDF/A validation engine (currently markers only) | High |
 | Security/Export | Separate flattening for watermarks and cropped pages | Medium |
 | Annotate | — | ✅ All landed |

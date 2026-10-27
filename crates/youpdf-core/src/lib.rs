@@ -76,8 +76,7 @@ pub use ocr::{
     LANGUAGES, OcrEngine, OcrLanguage, OcrMode, OcrResult, TesseractEngine, combine_languages,
     language_name, validate_language,
 };
-pub use office::OfficeFormat;
-pub use office::hex_color;
+pub use office::{hex_color, import_office, OfficeFormat};
 pub use pdfa::Conformance;
 pub use protect::{EncryptionOptions, EncryptionStrength, Permissions, read_permissions};
 pub use redact::{

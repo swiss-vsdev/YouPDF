@@ -304,6 +304,8 @@ enum MenuAction {
     RemoveProtection,
     /// Nouveau document d'une page vierge.
     NewBlank,
+    /// Nouveau document à partir d'un fichier Office (.docx/.xlsx/.pptx).
+    FromOffice,
     /// Nouveau document à partir d'images.
     FromImages,
     /// Insère un autre PDF dans le document courant.
