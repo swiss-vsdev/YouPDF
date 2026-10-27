@@ -286,6 +286,47 @@ fn trame_bornee_sur_page_demesuree() {
     );
 }
 
+/// La variation aléatoire de rotation produit des matrices de rotation différentes.
+#[test]
+fn rotation_randomness_produit_matrices_differentes() {
+    let mut doc = Document::from_bytes(&pages_blanches(1)).expect("ouverture");
+    let wm = Watermark {
+        text: "TEST".to_owned(),
+        tiled: true,
+        rotation_deg: 0.0,
+        rotation_randomness: 30.0, // ±30°
+        tile_gap: 200.0,
+        ..Default::default()
+    };
+    doc.add_text_watermark(&wm).expect("filigrane");
+
+    let out = doc.to_bytes().expect("sérialisation");
+    let content = text_of(&out, 1);
+
+    // Doit contenir au moins 2 matrices de rotation distinctes (cos/sin différents)
+    // Doit contenir au moins 2 matrices de rotation distinctes (cos/sin différents)
+    let cos_sin_pairs: Vec<(&str, &str)> = content
+        .lines()
+        .filter(|l| l.contains("Tm"))
+        .filter_map(|l| {
+            // Format: cos sin -sin cos x y Tm
+            let parts: Vec<&str> = l.split_whitespace().collect();
+            if parts.len() >= 4 {
+                Some((parts[0], parts[1]))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Au moins 2 paires cos/sin distinctes
+    let mut unique = std::collections::HashSet::new();
+    for pair in &cos_sin_pairs {
+        unique.insert(*pair);
+    }
+    assert!(unique.len() >= 2, "devrait avoir des rotations variées : {unique:?}");
+}
+
 /// Les macros d'en-tête sont remplacées par la page et le total.
 #[test]
 fn macros_entete_remplacees() {

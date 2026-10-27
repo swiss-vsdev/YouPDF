@@ -75,6 +75,14 @@ impl YouPdfApp {
                         egui::DragValue::new(&mut app.watermark.tile_gap).range(0.0..=400.0),
                     );
                 });
+                ui.horizontal(|ui| {
+                    ui.label(section(t("Rotation randomness")));
+                    ui.add(
+                        egui::DragValue::new(&mut app.watermark.rotation_randomness)
+                            .range(0.0..=45.0)
+                            .suffix("°"),
+                    );
+                });
             }
             ui.checkbox(&mut app.watermark.behind, t("Behind page content"));
             ui.horizontal(|ui| {
@@ -107,10 +115,31 @@ impl YouPdfApp {
                     ui.add(egui::DragValue::new(from).range(1..=total));
                 }
             });
+
+            // Watermark presets
+            if !app.watermark_presets.is_empty() {
+                ui.add_space(SPACE_M);
+                ui.label(section(t("Saved presets")));
+                ui.horizontal(|ui| {
+                    for (i, preset) in app.watermark_presets.iter().enumerate() {
+                        if ui.selectable_label(false, &preset.text).clicked() {
+                            app.watermark = preset.clone();
+                        }
+                    }
+                    if ui.small_button("Clear all").clicked() {
+                        app.watermark_presets.clear();
+                    }
+                });
+            }
+
             ui.add_space(SPACE_L);
             ui.horizontal(|ui| {
                 if ui.button(t("Apply")).clicked() {
                     apply = true;
+                }
+                if ui.button(t("Save as preset")).clicked() {
+                    app.watermark_presets.push(app.watermark.clone());
+                    app.toast(ctx, "Preset saved".to_string());
                 }
                 if ui.button(t("Remove from the document")).clicked() {
                     clear = true;
