@@ -92,7 +92,8 @@ Most parity gaps from the plan remain **unchecked** (not implemented). The waves
 |------|--------|
 | **ADD: Sticker tool** | ✅ **Added** `ToolsEntry::Sticker` + `ToolAction::Sticker` |
 | **ADD: Connected Lines tool** | ✅ **Added** `ToolsEntry::ConnectedLines` + `ToolAction::ConnectedLines` |
-| **ADD: Cloud tool** | ✅ **Added**  to  + UI in  |
+| **ADD: Cloud tool** | ✅ **Added** `Cloud` to `DraftKind` + UI in `annots_ui.rs` |
+| **ADD: Shape Fill tool** | ✅ **Added** `annot_fill` in `app.rs` + inspector UI + `annot_style()` uses fill |
 
 ---
 

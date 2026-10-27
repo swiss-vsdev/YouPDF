@@ -1369,6 +1369,8 @@ pub struct YouPdfApp {
     annot_color: [u8; 3],
     annot_opacity: f32,
     annot_width: f32,
+    /// Couleur de remplissage des formes ; `None` = pas de remplissage.
+    annot_fill: Option<[u8; 3]>,
     /// Popup de préréglages d'outil.
     preset_open: bool,
     /// Brouillon de texte (note, texte libre, signature, lien).
@@ -1761,6 +1763,7 @@ impl YouPdfApp {
             annot_color: [255, 235, 59],
             annot_opacity: 0.45,
             annot_width: 2.0,
+            annot_fill: None,
             preset_open: false,
             text_draft: None,
             selected_annot: 0,
