@@ -249,8 +249,7 @@ impl YouPdfApp {
             let starred = home::is_star(&self.stars, path);
 
             // Vignette de la première page, ou glyphe de repli.
-            let thumb_h = CARD_W * 1.414; // A4 aspect ratio for thumbnails
-            let thumb_rect = Rect::from_min_size(rect.min, vec2(CARD_W, thumb_h));
+            let thumb_rect = Rect::from_min_size(rect.min, vec2(CARD_W, 130.0));
             let texture = if exists {
                 self.home_thumbnail(ctx, path)
             } else {

@@ -28,7 +28,7 @@ Most parity gaps from the plan remain **unchecked** (not implemented). The waves
 |------|--------|
 | Grid/List toggle button (`ActionGrid`/`ActionList`) | ✅ Partially — toggle exists in `home_ui.rs` lines 89-101 |
 | Category tabs: Recents, Starred, Tools | ✅ Implemented |
-| Thumbnail generation: match UPDF's crop/display aspect | ✅ A4 aspect ratio (1.414) applied in `home_ui.rs` |
+| Thumbnail generation: match UPDF's crop/display aspect | ☐ |
 
 ### 2.2 Document Chrome (`chrome_ui.rs`)
 | Item | Status |
