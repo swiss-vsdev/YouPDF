@@ -199,6 +199,11 @@ impl YouPdfApp {
                             if bell.clicked() {
                                 self.activity_open = !self.activity_open;
                             }
+                            ui.add_space(4.0);
+                            let overflow = icon_button(ui, 24.0, 24.0, false, icon_ellipsis);
+                            if overflow.clicked() {
+                                self.tools_open = !self.tools_open;
+                            }
                         });
 
                         if let Some(idx) = select {

@@ -92,6 +92,9 @@ impl YouPdfApp {
                     if ui.small_button("Duplicate").clicked() {
                         self.duplicate_pages(ui.ctx(), &selected, total);
                     }
+                    if ui.small_button("Merge").clicked() {
+                        self.merge_pages(ui.ctx(), &selected, 2);
+                    }
                     ui.separator();
                     if organize_button(ui, icon_gear, "Page Tools…") {
                         self.page_tools_open = true;
@@ -142,7 +145,7 @@ impl YouPdfApp {
                                 if picked {
                                     pal().thumb_tint
                                 } else {
-                                    Color32::from_rgb(0x28, 0x28, 0x28)
+                                    pal().widget_bg
                                 },
                             );
 

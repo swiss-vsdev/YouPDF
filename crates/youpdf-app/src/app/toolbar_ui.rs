@@ -273,6 +273,10 @@ impl YouPdfApp {
                         ToolsEntry::Sign => self.sign_open = true,
                         ToolsEntry::CreateSignature => self.marks.signature_open = true,
                         ToolsEntry::CustomStamp => self.marks.stamp_open = true,
+                        ToolsEntry::Sticker => self.marks.stamp_open = true,
+                        ToolsEntry::ConnectedLines => {
+                            self.marks.stamp_open = true;
+                        }
                     }
                 }
             }

@@ -208,7 +208,7 @@ impl Theme {
 const DARK: Palette = Palette {
     canvas_bg: Color32::from_rgb(0x30, 0x30, 0x30),
     chrome_bg: Color32::from_rgb(0x28, 0x28, 0x28),
-    widget_bg: Color32::from_rgb(0x38, 0x38, 0x38),
+    widget_bg: Color32::from_rgb(0x28, 0x28, 0x28),
     hover_bg: Color32::from_rgb(0x48, 0x48, 0x48),
     accent: Color32::from_rgb(0x7A, 0x7E, 0xF6),
     muted: Color32::from_rgb(0xA0, 0xA0, 0xA0),

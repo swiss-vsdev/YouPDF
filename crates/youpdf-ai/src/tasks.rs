@@ -97,6 +97,38 @@ pub enum AiTask {
     },
 }
 
+/// Suggestions de questions basées sur le contexte du document.
+///
+/// Génère des questions suggérées en fonction du type de document ou de son
+/// contenu détecté. Retourne jusqu'à `n` questions sous forme de [`Message`]
+/// user pour être pré-remplies dans l'interface de chat.
+pub fn suggested_questions(_document_name: Option<String>, page_count: Option<usize>, n: usize) -> Vec<Message> {
+    use crate::message::Message;
+    let mut questions = Vec::new();
+
+    // Questions par défaut qui s'appliquent à la plupart des documents
+    let defaults = [
+        "Résume ce document.",
+        "Quels sont les points clés ?",
+        "Explique ce passage.",
+        "Y a-t-il des erreurs ou incohérences ?",
+    ];
+
+    let count = defaults.len().min(n);
+    for i in 0..count {
+        questions.push(Message::user(defaults[i].to_string()));
+    }
+
+    // Si on a des pages, ajouter une question spécifique
+    if let Some(pages) = page_count {
+        if pages > 1 && questions.len() < n {
+            questions.push(Message::user(format!("Compare les pages 1 et {pages}.")));
+        }
+    }
+
+    questions
+}
+
 /// Ton d'écriture pour la tâche [`AiTask::Tone`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToneStyle {

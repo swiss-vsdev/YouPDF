@@ -186,6 +186,11 @@ impl YouPdfApp {
                     [point[0], point[1] - 14.0, point[0] + 180.0, point[1] + 22.0],
                     String::new(),
                 ),
+                DraftKind::Cloud => (
+                    AnnotationKind::FreeText,
+                    [point[0] - 30.0, point[1] - 40.0, point[0] + 60.0, point[1] + 20.0],
+                    String::new(),
+                ),
             };
             let _ = kind;
             self.text_draft = Some(TextDraft {
@@ -198,7 +203,7 @@ impl YouPdfApp {
                 single_line: true,
             });
             self.draft_annot_kind = annot_kind;
-            if draft_kind == DraftKind::Stamp {
+            if draft_kind == DraftKind::Stamp || draft_kind == DraftKind::Cloud {
                 self.confirm_draft();
             }
         }
@@ -209,7 +214,7 @@ impl YouPdfApp {
                 return;
             };
             let kind = self.draft_annot_kind;
-            if draft.buffer.trim().is_empty() && draft.kind != DraftKind::Stamp {
+            if draft.buffer.trim().is_empty() && draft.kind != DraftKind::Stamp && draft.kind != DraftKind::Cloud {
                 return;
             }
             let mut annot = Annotation::new(draft.page, kind, draft.rect);
@@ -220,6 +225,10 @@ impl YouPdfApp {
                     DraftKind::Signature => {
                         annot.style.font_size = 22.0;
                         annot.style.color = [20, 20, 20];
+                    }
+                    DraftKind::Cloud => {
+                        annot.style.font_size = 13.0;
+                        annot.style.color = self.annot_color;
                     }
                     _ => {
                         annot.style.font_size = 13.0;
@@ -352,6 +361,7 @@ impl YouPdfApp {
                 DraftKind::Signature => "Add signature",
                 DraftKind::Link => "Add link",
                 DraftKind::Stamp => "Stamp text",
+                DraftKind::Cloud => "Add cloud",
             };
             let hint = match draft.kind {
                 DraftKind::Link => "https://…",
