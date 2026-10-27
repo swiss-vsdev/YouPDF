@@ -99,6 +99,9 @@ impl YouPdfApp {
                     if organize_button(ui, icon_gear, "Page Tools…") {
                         self.page_tools_open = true;
                     }
+                    if organize_button(ui, icon_gear, "Page Labels…") {
+                        self.page_labels_open = true;
+                    }
                     ui.separator();
                     if ui.button(format!("{} Close", ph::X)).clicked() {
                         close = true;

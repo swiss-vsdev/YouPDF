@@ -118,6 +118,15 @@ impl Document {
         widget.set("Type", Object::Name(b"Annot".to_vec()));
         widget.set("Subtype", Object::Name(b"Widget".to_vec()));
         widget.set("FT", Object::Name(ft.to_vec()));
+        match field.kind {
+            FormFieldKind::Date => {
+                widget.set("YouPDFKind", Object::Name(b"Date".to_vec()));
+            }
+            FormFieldKind::Barcode => {
+                widget.set("YouPDFKind", Object::Name(b"Barcode".to_vec()));
+            }
+            _ => {}
+        }
         widget.set(
             "T",
             Object::string_literal(crate::edit::encode_pdf_literal(&field.name)),
@@ -731,6 +740,87 @@ impl Document {
         let mut ap = Dictionary::new();
         ap.set("N", Object::Reference(stream));
         dict.set("AP", Object::Dictionary(ap));
+        Ok(())
+    }
+}
+
+impl Document {
+    /// Supprime un champ de formulaire (widget et entrée AcroForm).
+    pub fn delete_form_field(&mut self, field: &FormField) -> Result<()> {
+        // Retirer le widget des annotations de sa page.
+        let page_id = self
+            .inner()
+            .get_object(field.widget_id)
+            .ok()
+            .and_then(|o| o.as_dict().ok())
+            .and_then(|d| d.get(b"P").ok())
+            .and_then(|o| o.as_reference().ok())
+            .or_else(|| {
+                field
+                    .page
+                    .and_then(|n| self.page_id(n as u32).ok())
+            });
+        if let Some(page_id) = page_id {
+            let mut annots = self.page_annots(page_id);
+            annots.retain(|o| o.as_reference().ok() != Some(field.widget_id));
+            self.set_page_annots(page_id, &annots)?;
+        }
+
+        // Retirer le champ de /AcroForm /Fields.
+        let catalog_id = self
+            .inner()
+            .trailer
+            .get(b"Root")
+            .ok()
+            .and_then(|o| o.as_reference().ok());
+        if let Some(catalog_id) = catalog_id {
+            let acro_ref = self
+                .inner()
+                .get_object(catalog_id)
+                .ok()
+                .and_then(|o| o.as_dict().ok())
+                .and_then(|d| d.get(b"AcroForm").ok())
+                .cloned();
+            if let Some(acro_ref) = acro_ref {
+                let acro_id = match acro_ref {
+                    Object::Reference(id) => Some(id),
+                    _ => None,
+                };
+                if let Some(acro_id) = acro_id {
+                    let fields_ref = self
+                        .inner()
+                        .get_object(acro_id)
+                        .ok()
+                        .and_then(|o| o.as_dict().ok())
+                        .and_then(|d| d.get(b"Fields").ok())
+                        .cloned();
+                    match fields_ref {
+                        Some(Object::Reference(array_id)) => {
+                            if let Ok(Object::Array(arr)) =
+                                self.inner_mut().get_object_mut(array_id)
+                            {
+                                arr.retain(|o| o.as_reference().ok() != Some(field.object_id));
+                            }
+                        }
+                        Some(Object::Array(_)) => {
+                            if let Ok(acro) = self.inner_mut().get_object_mut(acro_id) {
+                                if let Ok(dict) = acro.as_dict_mut() {
+                                    if let Ok(Object::Array(arr)) = dict.get_mut(b"Fields") {
+                                        arr.retain(|o| o.as_reference().ok() != Some(field.object_id));
+                                    } else if let Ok(arr) = dict.get(b"Fields").and_then(|o| o.as_array()) {
+                                        let mut new = arr.clone();
+                                        new.retain(|o| o.as_reference().ok() != Some(field.object_id));
+                                        dict.set("Fields", Object::Array(new));
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        self.touch();
         Ok(())
     }
 }

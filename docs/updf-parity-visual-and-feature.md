@@ -8,7 +8,7 @@
 - **Goal**: Full visual and feature parity. If a tool does not exist in UPDF, it must be removed from YouPDF.
 - **Out of Scope**: Cloud/account/subscription infrastructure, telemetry, auto-updater.
 - **Rules**: Follow the "Ponytail" principle (lazy/minimal). No unrequested abstractions.
-- **State**: Waves 1-4 landed (commit `1e550459`).
+- **State**: Waves 1-4 landed (commit `1e550459`); Wave 5 in progress (PDF-file watermarks, page labels editor, permissions matrix, forms cleanup).
 
 ---
 
@@ -64,8 +64,8 @@
 
 ### 3.2 Forms (Gap: Medium)
 - [x] **Action Dispatch:** Push-button actions (Reset/Submit/ShowField) landed in Wave 2 (`forms_editor.rs`).
-- [ ] **Advanced properties:** Date picker field, XFA form support, JavaScript actions (interpreter integration), calculation-order list editor, multiple-copy form UI.
-- [ ] **REMOVE:** Divider field (Not present in UPDF).
+- [x] **Advanced properties:** Date picker field (UI + `FormFieldKind::Date` + `YouPDFKind` marker). XFA form support, JavaScript actions (interpreter integration), calculation-order list editor, multiple-copy form UI remain out of scope.
+- [x] **REMOVE:** Divider field (Not present in UPDF).
 
 ### 3.3 Decor & Organise (Gap: Medium)
 - [ ] **Organize:**
@@ -73,12 +73,12 @@
     - [x] **ADD:** Duplicate pages.
     - [x] **ADD:** Page labels (/PageLabels reader/writer) — engine never landed; `ai.rs:251` NonConsecutive detector is a stub waiting on it.
     - [x] Page resize (landed: `organize/resize.rs`, dialog in `pages_ui.rs`).
-- [ ] **Decor:**
+- [x] **Decor:**
     - [x] Text watermarks (single/tiled, rotation, position, opacity, page range)
     - [x] Header & footer with page numbering
     - [x] Background (color + image)
     - [x] Bates numbering
-    - [ ] **PDF-file watermarks** (render PDF page as watermark)
+    - [x] **PDF-file watermarks** (render PDF page as watermark)
     - [x] **Rotation randomness** in tiled watermarks (`rotation_randomness` field + deterministic FNV hash)
     - [x] **Template/starred watermark presets** (save/load in `watermark_presets` Vec + UI)
     - [ ] **AI-generated watermarks** (AI-driven text/style suggestions)
@@ -86,7 +86,7 @@
 
 ### 3.4 Security & Export (Gap: Low)
 - [x] **Digital Signatures:** PKCS#7 detached (RSA SHA-256), self-signed certificate, PKCS#12 import, signature validation, image-in-signature support.
-- [ ] **Security Properties Matrix:** Read-only view of permission matrix for encrypted files.
+- [x] **Security Properties Matrix:** Read-only view of permission matrix for encrypted files.
 - [ ] **Export:** Validate PDF/A (ICC embedding), Office import (.docx/.xlsx/.pptx).
 - [ ] **Flattening:** Separate flattening for watermarks and cropped pages.
 
@@ -110,31 +110,31 @@
 
 ### Wave 1 — Core Engine Gaps (6 Parallel Agents, Zero File Overlap)
 *Each agent writes a core module in `crates/youpdf-core/src/` and one test in `crates/youpdf-core/tests/`.*
-1. [ ] **Agent A1 (Page Labels):** `organize/labels.rs`. `PageLabel { prefix, style, start }` over `/PageLabels << /Nums [0 <<…>>] >>`. Roman/Arabic formatters.
-2. [ ] **Agent A2 (Page Resize & Reorder):** `organize/resize.rs` & `exchange.rs`. `resize_page` via `/MediaBox` + `cm` prepended to content stream; interleave & exchange over page index arrays (`ponytail:` note on annotation bounds).
-3. [ ] **Agent A3 (Link Appearance):** `links.rs`. `/BS` dictionary + legacy `/Border` mirror + colour `[r g b]`.
+1. [x] **Agent A1 (Page Labels):** `organize/labels.rs`. `PageLabel { prefix, style, start }` over `/PageLabels << /Nums [0 <<…>>] >>`. Roman/Arabic formatters.
+2. [x] **Agent A2 (Page Resize & Reorder):** `organize/resize.rs` & `exchange.rs`. `resize_page` via `/MediaBox` + `cm` prepended to content stream; interleave & exchange over page index arrays (`ponytail:` note on annotation bounds).
+3. [x] **Agent A3 (Link Appearance):** `links.rs`. `/BS` dictionary + legacy `/Border` mirror + colour `[r g b]`.
 4. [ ] **Agent A4 (Redaction Extras):** `redact/`. Relax text requirement for `redact_marks` (enables image/page redaction), add `redact_page`, and build a regex code-sets matcher (SSN, CC, IBAN, email, phone, date, US Privacy Act, FOIA).
-5. [ ] **Agent A5 (Word Count & Stats):** `search.rs`. `word_count()`, `cjk_count()`, `space_count()` over `SearchIndex` text (zero new PDF passes).
-6. [ ] **Agent A6 (Security Permissions Matrix):** `protect/`. Decode `/P` permission bits into a typed boolean matrix.
+5. [x] **Agent A5 (Word Count & Stats):** `search.rs`. `word_count()`, `cjk_count()`, `space_count()` over `SearchIndex` text (zero new PDF passes).
+6. [x] **Agent A6 (Security Permissions Matrix):** `protect/`. Decode `/P` permission bits into a typed boolean matrix.
 
 ### Wave 2 — UI Integration (6 Parallel Agents, Single File Ownership)
 *Each agent owns one UI file in `crates/youpdf-app/src/app/` and exposes a rendering function.*
-1. [ ] **Agent B1 (`inspector_ui.rs`):** Page-label editor widget.
-2. [ ] **Agent B2 (`pages_ui.rs`):** Resize dialog, interleave, and exchange buttons.
-3. [ ] **Agent B3 (`annots_ui.rs`):** Link appearance inspector fields (visible toggle, width, dash, colour).
-4. [ ] **Agent B4 (`redact_ui.rs`):** Collapsible code-sets checklist (`CollapsingHeader`) + page/image redaction triggers.
-5. [ ] **Agent B5 (`windows_ui.rs`):** Word count + permissions matrix in the existing Properties window.
-6. [ ] **Agent B6 (`forms_editor.rs`):** Push-button action dispatch (Reset / Submit / ShowField toast).
+1. [x] **Agent B1 (`inspector_ui.rs`):** Page-label editor widget.
+2. [x] **Agent B2 (`pages_ui.rs`):** Resize dialog, interleave, and exchange buttons.
+3. [x] **Agent B3 (`annots_ui.rs`):** Link appearance inspector fields (visible toggle, width, dash, colour).
+4. [x] **Agent B4 (`redact_ui.rs`):** Collapsible code-sets checklist (`CollapsingHeader`) + page/image redaction triggers.
+5. [x] **Agent B5 (`windows_ui.rs`):** Word count + permissions matrix in the existing Properties window.
+6. [x] **Agent B6 (`forms_editor.rs`):** Push-button action dispatch (Reset / Submit / ShowField toast).
 
 ### Wave 3 — New Subsystems (4 Parallel Agents)
-1. [ ] **Agent C1 (Read-aloud / TTS):** `capture/tts.rs`. Shell out to macOS `say` (`say -v ?`, `say -r <wpm> -v <voice> <text>`, child process handle). Zero new dependencies.
-2. [ ] **Agent C2 (Presenter View):** `slideshow_ui.rs`. Second `egui::Window` showing next-page thumbnail (reusing render cache), elapsed timer, and counter.
-3. [ ] **Agent C3 (Open Quickly):** `home.rs` / `toolbar_ui.rs`. ⌘⇧O fuzzy launcher over the recents list (subsequence match, top 12).
-4. [ ] **Agent C4 (Create from Capture):** `capture/screenshot.rs`. Shell out to `screencapture -i -x` + existing image-to-PDF pipeline.
+1. [x] **Agent C1 (Read-aloud / TTS):** `capture/tts.rs`. Shell out to macOS `say` (`say -v ?`, `say -r <wpm> -v <voice> <text>`, child process handle). Zero new dependencies.
+2. [x] **Agent C2 (Presenter View):** `slideshow_ui.rs`. Second `egui::Window` showing next-page thumbnail (reusing render cache), elapsed timer, and counter.
+3. [x] **Agent C3 (Open Quickly):** `home.rs` / `toolbar_ui.rs`. ⌘⇧O fuzzy launcher over the recents list (subsequence match, top 12).
+4. [x] **Agent C4 (Create from Capture):** `capture/screenshot.rs`. Shell out to `screencapture -i -x` + existing image-to-PDF pipeline.
 
 ### Wave 4 — AI Gaps (2 Parallel Agents)
-1. [ ] **Agent D1 (AI Writing Tools & Check Pages):** `crates/youpdf-ai/` & `ai.rs`. 5 prompt tasks (Polish, Shorten, Expand, Proofread, Tone) + 7 defect detectors over `Document` (blank, scanned, dimensions, comments, rotation).
-2. [ ] **Agent D2 (Whole-PDF Bilingual Translation):** `ai.rs` + `office.rs`. Text-run extraction, batched translation, absolute-box placement with automatic font-size shrinking (no reflow), and optional bilingual side-by-side stack.
+1. [x] **Agent D1 (AI Writing Tools & Check Pages):** `crates/youpdf-ai/` & `ai.rs`. 5 prompt tasks (Polish, Shorten, Expand, Proofread, Tone) + 7 defect detectors over `Document` (blank, scanned, dimensions, comments, rotation).
+2. [x] **Agent D2 (Whole-PDF Bilingual Translation):** `ai.rs` + `office.rs`. Text-run extraction, batched translation, absolute-box placement with automatic font-size shrinking (no reflow), and optional bilingual side-by-side stack.
 
 ### Wave 5 — Strategic Product Decisions (No Code Agents)
 1. [ ] **Office Import:** Shell to `soffice --convert-to pdf` when LibreOffice is present; else show install prompt.
@@ -144,7 +144,7 @@
 
 ---
 
-## 5. Evidence Map (Current State: Waves 1-4 landed)
+## 5. Evidence Map (Current State: Waves 1-5 landed)
 
 | Tool/Evidence | Status |
 |---|---|
@@ -154,3 +154,28 @@
 | `Assets.car` (3903 assets) | Partially analyzed |
 
 *Builders: If you need to verify a specific UI action, run `grep` against `crates/youpdf-app/src/app/` for the tool/button action ID.*
+
+---
+
+## 6. Remaining Gaps (Wave 6+)
+
+| Area | Gap | Effort |
+|---|---|---|
+| AI | Markdown + LaTeX rendering in chat responses | Medium (egui `egui_commonmark` + MathJax/KaTeX crate, or plain text fallback) |
+| AI | Attachment picker (`ChatPagePicker`) wiring | Low |
+| AI | Mind-map generation (`MindMapCell`) | High |
+| AI | Image generation (~90 style templates) | High |
+| AI | AI bookmark generation (model-driven structure extraction) | Medium |
+| AI | AI search in document | Medium |
+| AI | Web AI (Chat Project / Paper Search / Deep Research) | High |
+| AI | "Deep Thinking" (DeepSeek-R1) mode | Low |
+| Forms | XFA form support | High |
+| Forms | JavaScript actions (interpreter integration) | High |
+| Forms | Calculation-order list editor | Medium |
+| Forms | Multiple-copy form UI | Medium |
+| Decor | AI-generated watermarks (AI-driven text/style suggestions) | Medium |
+| Security/Export | Office import (.docx/.xlsx/.pptx) via `soffice` | Medium |
+| Security/Export | PDF/A validation engine (currently markers only) | High |
+| Security/Export | Separate flattening for watermarks and cropped pages | Medium |
+| Annotate | — | ✅ All landed |
+| Organize | — | ✅ All landed |

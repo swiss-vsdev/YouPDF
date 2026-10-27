@@ -229,6 +229,15 @@ impl YouPdfApp {
                     tab.forms.push(field);
                 }
                 self.mark_document_changed();
+                match kind {
+                    FormKind::Choice | FormKind::MultiChoice => {
+                        let idx = self.tabs.get(self.active).map(|t| t.forms.len().saturating_sub(1));
+                        self.form_options_target = idx;
+                        self.form_options_text = "Option 1\nOption 2".to_string();
+                        self.form_options_open = true;
+                    }
+                    _ => {}
+                }
                 self.toast(ctx, format!("{} added", kind.label()));
             }
             Some(Err(err)) => self.toast(ctx, format!("Field failed: {err}")),
@@ -241,6 +250,43 @@ impl YouPdfApp {
         match blank_document(1, 595.0, 842.0) {
             Ok(doc) => self.push_document(doc, None),
             Err(err) => self.toast(ctx, format!("Create failed: {err}")),
+        }
+    }
+}
+
+impl YouPdfApp {
+    /// Supprime les champs sélectionnés (ou le champ en cours d'édition).
+    pub(super) fn delete_selected_form_fields(&mut self, ctx: &egui::Context) {
+        let mut to_delete: Vec<youpdf_core::FormField> = Vec::new();
+        if let Some(tab) = self.tabs.get(self.active) {
+            for &idx in &self.form_selection {
+                if let Some(field) = tab.forms.get(idx) {
+                    to_delete.push(field.clone());
+                }
+            }
+            if to_delete.is_empty() {
+                if let Some((idx, _)) = self.form_edit {
+                    if let Some(field) = tab.forms.get(idx) {
+                        to_delete.push(field.clone());
+                    }
+                }
+            }
+        }
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            for field in &to_delete {
+                let _ = tab.doc.delete_form_field(field);
+            }
+            tab.forms = tab.doc.read_form_fields();
+            tab.dirty = true;
+            tab.structural_dirty = true;
+            tab.invalidate_render();
+        }
+        self.form_selection.clear();
+        self.form_edit = None;
+        self.form_editing = None;
+        if !to_delete.is_empty() {
+            self.mark_document_changed();
+            self.toast(ctx, "Field deleted".to_string());
         }
     }
 }

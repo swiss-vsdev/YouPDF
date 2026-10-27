@@ -457,7 +457,7 @@ const COMMENT_TOOLS: &[ModeTool] = &[
     ModeTool("Signature", icon_signature, true, false),
     ModeTool("Eraser", icon_eraser, false, false),
     ModeTool("Callout", icon_cursor, true, false),
-    ModeTool("Cloud", icon_eraser, true, false),
+    ModeTool("Cloud", icon_cloud, true, false),
 ];
 
 const EDIT_TOOLS: &[ModeTool] = &[
@@ -465,7 +465,6 @@ const EDIT_TOOLS: &[ModeTool] = &[
     ModeTool("Text", icon_text, true, false),
     ModeTool("Image", icon_image, true, false),
     ModeTool("Link", icon_link, true, false),
-    ModeTool("Layout", icon_layout, false, false),
 ];
 
 const FORM_TOOLS: &[ModeTool] = &[
@@ -479,9 +478,7 @@ const FORM_TOOLS: &[ModeTool] = &[
     ModeTool("Date", icon_date, false, false),
     ModeTool("Barcode", icon_barcode, false, false),
     ModeTool("Signature", icon_signature, false, false),
-    ModeTool("Image", icon_image, false, false),
-    ModeTool("Divider", icon_divider, false, false),
-    ModeTool("Other", icon_ellipsis, true, false),
+    ModeTool("Edit", icon_pen, false, false),
 ];
 
 const REDACT_TOOLS: &[ModeTool] = &[
@@ -652,10 +649,6 @@ enum ToolsEntry {
     CreateSignature,
     /// Fenêtre de tampon personnalisé.
     CustomStamp,
-    /// Outil tampon prédéfini (sticker).
-    Sticker,
-    /// Outil ligne connectée (polyline ouverte).
-    ConnectedLines,
 }
 
 /// Entrées du menu `Outils` : libellé, raccourci, action.
@@ -685,8 +678,6 @@ const TOOLS_MENU: &[(&str, &str, ToolsEntry)] = &[
     ("Sign…", "", ToolsEntry::Sign),
     ("Create signature…", "", ToolsEntry::CreateSignature),
     ("Custom stamp…", "", ToolsEntry::CustomStamp),
-    ("Sticker", "", ToolsEntry::Sticker),
-    ("Connected lines", "", ToolsEntry::ConnectedLines),
 ];
 
 /// Nature du brouillon de texte en cours de saisie.
@@ -720,7 +711,7 @@ fn draft_kind_for(mode: Option<usize>, tool: Option<usize>) -> DraftKind {
         Some(7) => DraftKind::Link,
         Some(8) => DraftKind::Stamp,
         Some(9) => DraftKind::Signature,
-        Some(10) => DraftKind::Cloud,
+        Some(12) => DraftKind::Cloud,
         _ => DraftKind::FreeText,
     }
 }
@@ -833,10 +824,8 @@ enum ToolAction {
     Measure,
     /// Clic pour poser un callout (3 clics : départ, genou, coin texte).
     Callout,
-    /// Clic pour poser un tampon prédéfini (sticker).
-    Sticker,
-    /// Glissé pour tracer une ligne connectée (polyline ouverte).
-    ConnectedLines,
+    /// Édition des champs de formulaire : déplacer, supprimer.
+    EditForm,
 }
 
 /// Couleurs de préréglage proposées dans la popup.
@@ -946,6 +935,8 @@ struct Tab {
     /// Champs de formulaire du document.
     forms: Vec<FormField>,    /// Pièces jointes du document.
     attachments: Vec<AttachmentInfo>,
+    /// Déplacement interactif d'un champ de formulaire.
+    form_move: Option<(usize, [f32; 2], [f32; 4])>,
     /// Fragments de texte de chaque page, extraits à la demande pour
     /// l'outil Texte du mode Édition.
     fragments: HashMap<u32, Vec<TextFragment>>,
@@ -990,6 +981,7 @@ impl Tab {
             outline: Vec::new(),
             forms: Vec::new(),
             attachments: Vec::new(),
+            form_move: None,
             fragments: HashMap::new(),
             structure_loaded: false,
             pinned: false,
@@ -1154,6 +1146,9 @@ pub struct YouPdfApp {
     watermark: Watermark,
     /// Première page décorée ; `None` = toutes.
     watermark_from: Option<u32>,
+    /// Filigrane depuis un PDF source (chemin + page).
+    watermark_pdf_source: Option<std::path::PathBuf>,
+    watermark_pdf_page: u32,
     /// Filigranes sauvegardés (préréglages).
     watermark_presets: Vec<Watermark>,
     /// Fenêtre « En-tête et pied de page » et son brouillon.
@@ -1235,6 +1230,11 @@ pub struct YouPdfApp {
     bates_from: Option<u32>,
     /// Fenêtre « Outils de pages » : redimensionner, interlacer, échanger.
     page_tools_open: bool,
+    page_labels_open: bool,
+    page_label_prefix: String,
+    page_label_style: usize,
+    page_label_start: u32,
+    page_label_from_page: u32,
     page_new_width: f32,
     page_new_height: f32,
     page_interleave_even_first: bool,
@@ -1511,6 +1511,24 @@ pub struct YouPdfApp {
     form_props_tab: usize,
     /// Champ de formulaire en cours de édition interactive (lecteur).
     form_editing: Option<usize>,
+    /// Champ de signature en cours de remplissage.
+    form_signature_target: Option<usize>,
+    /// Demande le focus clavier au prochain rendu de l'éditeur de champ.
+    form_edit_fresh: bool,
+    /// Cible du sélecteur de date.
+    form_date_target: Option<usize>,
+    form_date_open: bool,
+    form_date_value: String,
+    form_date_year: i32,
+    form_date_month: u32,
+    /// Cible de la fenêtre d'options (liste déroulante).
+    form_options_target: Option<usize>,
+    form_options_open: bool,
+    form_options_text: String,
+    /// Cible de la fenêtre de code-barres.
+    form_barcode_target: Option<usize>,
+    form_barcode_open: bool,
+    form_barcode_value: String,
     /// Dernier champ survolé pour surlignage.
     form_hover: Option<usize>,
     /// Teinte bleue sur tous les champs remplissables.
@@ -1627,7 +1645,19 @@ impl YouPdfApp {
             content_selection: None,
             content_drag: None,
             form_editing: None,
-            form_hover: None,
+            form_edit_fresh: false,
+            form_signature_target: None,
+            form_date_target: None,
+            form_date_open: false,
+            form_date_value: String::new(),
+            form_date_year: 2026,
+            form_date_month: 1,
+            form_options_target: None,
+            form_options_open: false,
+            form_options_text: String::new(),
+            form_barcode_target: None,
+            form_barcode_open: false,
+            form_barcode_value: String::new(),            form_hover: None,
             form_props_tab: 0,
             form_highlight: true,
             form_selection: BTreeSet::new(),
@@ -1642,6 +1672,8 @@ impl YouPdfApp {
             watermark_open: false,
             watermark: Watermark::default(),
             watermark_from: None,
+            watermark_pdf_source: None,
+            watermark_pdf_page: 1,
             watermark_presets: Vec::new(),
             header_footer_open: false,
             header_footer: HeaderFooter::default(),
@@ -1685,6 +1717,11 @@ impl YouPdfApp {
             background_from: None,
             bates_open: false,
             page_tools_open: false,
+            page_labels_open: false,
+            page_label_prefix: String::new(),
+            page_label_style: 0,
+            page_label_start: 1,
+            page_label_from_page: 1,
             page_new_width: 612.0,
             page_new_height: 792.0,
             page_interleave_even_first: true,
@@ -2216,6 +2253,7 @@ impl eframe::App for YouPdfApp {
         self.background_window(ctx);
         self.bates_window(ctx);
         self.page_tools_window(ctx);
+        self.page_labels_window(ctx);
         self.compare_window(ctx);
         self.ocr_window(ctx);
         self.readaloud_window(ctx);
@@ -2223,6 +2261,9 @@ impl eframe::App for YouPdfApp {
         self.sign_window(ctx);
         self.stamp_window(ctx);
         self.signature_window(ctx);
+        self.date_picker_window(ctx);
+        self.form_options_window(ctx);
+        self.form_barcode_window(ctx);
         self.batch_window(ctx);
         self.extract_window(ctx);
         self.measure_window(ctx);
@@ -2421,6 +2462,7 @@ mod tests {
             outline: Vec::new(),
             forms: Vec::new(),
             attachments: Vec::new(),
+            form_move: None,
             fragments: HashMap::new(),
             structure_loaded: false,
             pinned: false,

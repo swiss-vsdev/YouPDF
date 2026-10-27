@@ -248,10 +248,6 @@ pub fn icon_image(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::IMAGE);
 }
 
-pub fn icon_divider(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::MINUS);
-}
-
 pub fn icon_sparkle(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::SPARKLE);
 }
@@ -260,10 +256,10 @@ pub fn icon_check(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::CHECK);
 }
 
-pub fn icon_layout(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::LAYOUT);
-}
-
 pub fn icon_save(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::FLOPPY_DISK);
+}
+
+pub fn icon_cloud(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::CLOUD);
 }

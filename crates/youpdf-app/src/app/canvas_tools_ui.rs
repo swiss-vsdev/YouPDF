@@ -169,45 +169,11 @@ if action != ToolAction::None {
                 ));
             }
         }
-        ToolAction::Click(_) | ToolAction::Sticker => {
+        ToolAction::Click(_) => {
             if resp.clicked() {
                 if let Some(p) = resp.interact_pointer_pos() {
                     frame.pending_click = Some((page as usize, to_pdf(p)));
                 }
-            }
-        }
-        ToolAction::ConnectedLines => {
-            if resp.dragged() {
-                let point = resp.interact_pointer_pos().map(to_pdf);
-                if drag_from.is_none() {
-                    *drag_from = point;
-                }
-                if point.is_some() {
-                    *drag_to = point;
-                }
-            }
-            if resp.drag_stopped() {
-                let from = drag_from.take();
-                let to = drag_to.take();
-                if let (Some(a), Some(b)) = (from, to) {
-                    frame.pending_redact = Some((
-                        page as usize,
-                        [
-                            a[0].min(b[0]),
-                            a[1].min(b[1]),
-                            a[0].max(b[0]),
-                            a[1].max(b[1]),
-                        ],
-                    ));
-                }
-            }
-            if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
-                let rect = Rect::from_two_pos(to_screen(a), to_screen(b));
-                ui.painter().rect_stroke(
-                    rect,
-                    0.0,
-                    Stroke::new(1.5_f32, pal().accent),
-                );
             }
         }
         ToolAction::EditText | ToolAction::InsertImage => {
@@ -410,33 +376,86 @@ if action != ToolAction::None {
                 }
             }
         }
-        ToolAction::Select => {
+        ToolAction::Select | ToolAction::EditForm => {
             // Mode Préparer un formulaire : un glissé
             // encadre plusieurs champs, un clic en vise un.
             if mode == Some(2) {
+                if resp.drag_started() {
+                    if let Some(p) = resp.interact_pointer_pos() {
+                        let point = to_pdf(p);
+                        // Si le glissé commence sur un champ, on le déplace.
+                        if let Some(idx) = (0..tab.forms.len()).rev().find(|&i| {
+                            let f = &tab.forms[i];
+                            f.page == Some(page as usize)
+                                && point[0] >= f.rect[0] - 3.0
+                                && point[0] <= f.rect[2] + 3.0
+                                && point[1] >= f.rect[1] - 3.0
+                                && point[1] <= f.rect[3] + 3.0
+                        }) {
+                            tab.form_move = Some((idx, point, tab.forms[idx].rect));
+                        }
+                    }
+                }
                 if resp.dragged() {
                     let point = resp.interact_pointer_pos().map(to_pdf);
                     if drag_from.is_none() {
                         *drag_from = point;
                     }
-                    if point.is_some() {
+                    if let Some((idx, start, original)) = tab.form_move {
+                        if let Some(p) = point {
+                            let dx = p[0] - start[0];
+                            let dy = p[1] - start[1];
+                            tab.forms[idx].rect = [
+                                original[0] + dx,
+                                original[1] + dy,
+                                original[2] + dx,
+                                original[3] + dy,
+                            ];
+                        }
+                    } else if point.is_some() {
                         *drag_to = point;
                     }
                 }
                 if resp.drag_stopped() {
-                    let from = drag_from.take();
-                    let to = drag_to.take();
-                    if let (Some(a), Some(b)) = (from, to) {
-                        let rect = [
-                            a[0].min(b[0]),
-                            a[1].min(b[1]),
-                            a[0].max(b[0]),
-                            a[1].max(b[1]),
-                        ];
-                        frame.pending_form_select = Some((page as usize, rect));
+                    if let Some((idx, _start, _original)) = tab.form_move.take() {
+                        let field = tab.forms[idx].clone();
+                        let rect = field.rect;
+                        let _ = tab.doc.set_form_field_rect(&field, rect);
+                        tab.forms = tab.doc.read_form_fields();
+                        tab.dirty = true;
+                        tab.structural_dirty = true;
+                        *drag_from = None;
+                        *drag_to = None;
+                    } else {
+                        let from = drag_from.take();
+                        let to = drag_to.take();
+                        if let (Some(a), Some(b)) = (from, to) {
+                            let rect = [
+                                a[0].min(b[0]),
+                                a[1].min(b[1]),
+                                a[0].max(b[0]),
+                                a[1].max(b[1]),
+                            ];
+                            frame.pending_form_select = Some((page as usize, rect));
+                        }
                     }
                 }
-                if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
+                if tab.form_move.is_some() {
+                    if let Some((idx, _, _)) = tab.form_move {
+                        if let Some(f) = tab.forms.get(idx) {
+                            let [x1, y1, x2, y2] = f.rect;
+                            let rect = Rect::from_min_max(
+                                to_screen([x1, y1]),
+                                to_screen([x2, y2]),
+                            );
+                            ui.painter().rect_stroke(
+                                rect,
+                                Rounding::same(RADIUS_XS),
+                                Stroke::new(2.0_f32, pal().accent),
+                            );
+                        }
+                    }
+                } else if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
                     let rect = Rect::from_two_pos(to_screen(a), to_screen(b));
                     ui.painter().rect_filled(
                         rect,
@@ -450,7 +469,7 @@ if action != ToolAction::None {
                     );
                 }
             }
-            if resp.clicked() {
+            if resp.clicked() && action == ToolAction::Select {
                 if let Some(p) = resp.interact_pointer_pos() {
                     frame.pending_hit = Some((page as usize, to_pdf(p)));
                 }

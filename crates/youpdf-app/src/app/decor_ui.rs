@@ -85,6 +85,33 @@ impl YouPdfApp {
                 });
             }
             ui.checkbox(&mut app.watermark.behind, t("Behind page content"));
+            ui.checkbox(&mut app.watermark_pdf_source.is_some(), t("Use a PDF file as watermark"));
+            if app.watermark_pdf_source.is_some() {
+                ui.horizontal(|ui| {
+                    let src = app.watermark_pdf_source.as_ref().unwrap();
+                    ui.label(src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "source.pdf".to_string()));
+                    if ui.small_button("Change…").clicked() {
+                        let picked = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).pick_file();
+                        if let Some(p) = picked {
+                            app.watermark_pdf_source = Some(p);
+                            app.watermark_pdf_page = 1;
+                        }
+                    }
+                    if ui.small_button("Remove").clicked() {
+                        app.watermark_pdf_source = None;
+                    }
+                });
+                if let Some(src) = app.watermark_pdf_source.as_ref() {
+                    if let Ok(src_doc) = youpdf_core::Document::open(src) {
+                        let total = src_doc.page_count();
+                        ui.horizontal(|ui| {
+                            ui.label(section(t("Source page")));
+                            ui.add(egui::DragValue::new(&mut app.watermark_pdf_page).range(1..=total.max(1) as u32).speed(1));
+                        });
+                        let _ = src_doc;
+                    }
+                }
+            }
             ui.horizontal(|ui| {
                 ui.label(section(t("Opacity")));
                 ui.add(
@@ -121,7 +148,7 @@ impl YouPdfApp {
                 ui.add_space(SPACE_M);
                 ui.label(section(t("Saved presets")));
                 ui.horizontal(|ui| {
-                    for (i, preset) in app.watermark_presets.iter().enumerate() {
+                    for (_i, preset) in app.watermark_presets.iter().enumerate() {
                         if ui.selectable_label(false, &preset.text).clicked() {
                             app.watermark = preset.clone();
                         }
@@ -150,10 +177,24 @@ impl YouPdfApp {
         if apply {
             self.watermark.pages = Self::page_range_from(self.watermark_from);
             let wm = self.watermark.clone();
-            let result = self
-                .tabs
-                .get_mut(self.active)
-                .map(|tab| tab.doc.add_text_watermark(&wm));
+            let result = if let Some(src_path) = self.watermark_pdf_source.as_deref() {
+                match youpdf_core::Document::open(src_path) {
+                    Ok(src) => {
+                        let renderer = &*self.renderer;
+                        self.tabs
+                            .get_mut(self.active)
+                            .map(|tab| tab.doc.add_pdf_watermark(&wm, &src, self.watermark_pdf_page, renderer))
+                    }
+                    Err(err) => {
+                        self.toast(ctx, format!("Source open failed: {err}"));
+                        None
+                    }
+                }
+            } else {
+                self.tabs
+                    .get_mut(self.active)
+                    .map(|tab| tab.doc.add_text_watermark(&wm))
+            };
             match result {
                 Some(Ok(pages)) => {
                     self.mark_document_changed();

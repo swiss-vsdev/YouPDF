@@ -110,7 +110,6 @@ pub(crate) fn watermark_ops(wm: &Watermark, width: f32, height: f32) -> Vec<u8> 
             step_x *= factor;
             step_y *= factor;
         }
-        let mut y = size;
         // Rotation aléatoire par tuile : on utilise un hash déterministe
         // basé sur la position pour avoir un résultat reproductible.
         // Simple deterministic hash for rotation randomness (no external deps).
@@ -353,6 +352,33 @@ pub(crate) fn bates_ops(b: &Bates, label: &str, view: PageView) -> Vec<u8> {
     );
     push_literal(&mut out, label);
     out.extend_from_slice(b" Tj\nET\nQ\n");
+    out
+}
+
+/// Flux de contenu d'un filigrane PDF : la page source (échelle `wm`)
+/// est posée sur la boîte visible, éventuellement tournée.
+pub(crate) fn pdf_watermark_ops(wm: &Watermark, width: f32, height: f32, sw: f32, sh: f32) -> Vec<u8> {
+    let scale = (width / sw).min(height / sh);
+    let w = sw * scale;
+    let h = sh * scale;
+    let x = (width - w) / 2.0;
+    let y = (height - h) / 2.0;
+    let radians = wm.rotation_deg.to_radians();
+    let (cos, sin) = (radians.cos(), radians.sin());
+    let mut out = Vec::new();
+    out.extend_from_slice(b"q\n");
+    if wm.opacity < 1.0 {
+        out.extend_from_slice(format!("/{WM_GS_NAME} gs\n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "{:.2} 0 0 {:.2} {:.2} {:.2} cm\n\
+             {cos:.4} {sin:.4} {:.4} {cos:.4} 0 0 cm\n\
+             /{WM_PDF_XOBJECT_NAME} Do\nQ\n",
+            w, h, x, y, -sin
+        )
+        .as_bytes(),
+    );
     out
 }
 

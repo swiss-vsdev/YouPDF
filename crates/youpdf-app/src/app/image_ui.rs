@@ -219,6 +219,7 @@ impl YouPdfApp {
                     Some(7) => ToolAction::FormField(FormKind::Date),
                     Some(8) => ToolAction::FormField(FormKind::Barcode),
                     Some(9) => ToolAction::FormField(FormKind::Signature),
+                    Some(10) => ToolAction::EditForm,
                     _ => ToolAction::None,
                 };
             }
@@ -238,6 +239,7 @@ impl YouPdfApp {
                 Some(9) => ToolAction::Click(AnnotationKind::FreeText),
                 Some(10) => ToolAction::Erase,
                 Some(11) => ToolAction::Callout,
+                Some(12) => ToolAction::Click(AnnotationKind::FreeText),
                 _ => ToolAction::None,
             }
         }
