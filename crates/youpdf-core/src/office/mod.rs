@@ -1,4 +1,4 @@
-//! Export PDF → Word (`.docx`), Excel (`.xlsx`) et PowerPoint (`.pptx`).
+//! Import/Export PDF ↔ Word (`.docx`), Excel (`.xlsx`) et PowerPoint (`.pptx`).
 //!
 //! Les parties OOXML (Office Open XML) sont écrites à la main puis
 //! empaquetées avec la crate `zip`. Aucune dépendance `docx-rs` : chaque
@@ -169,8 +169,71 @@ impl Document {
     pub fn export_office(&self, path: impl AsRef<Path>, format: OfficeFormat) -> Result<()> {
         self.export_office_layout(path, format, OfficeLayout::Flow)
     }
+}
 
-    /// Exporte vers Office en choisissant la mise en page.
+/// Importe un fichier Office (`.docx`/`.xlsx`/`.pptx`) en PDF via
+/// LibreOffice (`soffice --convert-to pdf`).
+///
+/// `source` est le chemin du fichier Office, `dest` le chemin du PDF
+/// produit. Renvoie `Ok(())` si le convertisseur a écrit `dest`.
+///
+/// ponytail: macOS/Linux seulement. Windows : `soffice.exe` est au même
+/// chemin relatif ; ajouter une recherche `where` si le support
+/// multiplateforme devient nécessaire. Sans LibreOffice, l'opération
+/// échoue avec un message indiquant d'installer LibreOffice.
+pub fn import_office(source: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result<()> {
+    use std::process::Command;
+
+    let source = source.as_ref();
+    let dest = dest.as_ref();
+    if !source.is_file() {
+        return Err(Error::InvalidInput(format!(
+            "source file not found: {}",
+            source.display()
+        )));
+    }
+
+    let dir = dest
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
+    let status = Command::new("soffice")
+        .arg("--headless")
+        .arg("--convert-to")
+        .arg("pdf")
+        .arg("--outdir")
+        .arg(&dir)
+        .arg(source)
+        .status()
+        .map_err(|e| {
+            Error::Pdf(format!("soffice spawn failed (install LibreOffice?) : {e}"))
+        })?;
+    if !status.success() {
+        return Err(Error::Pdf(format!(
+            "soffice exited with status {}",
+            status.code().unwrap_or(-1)
+        )));
+    }
+
+    // LibreOffice nomme le PDF d'après le source, dans le dossier --outdir.
+    let stem = source
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "output".to_string());
+    let produced = dir.join(format!("{stem}.pdf"));
+    if produced == dest {
+        if !produced.is_file() {
+            return Err(Error::Pdf("LibreOffice produced no PDF".into()));
+        }
+        return Ok(());
+    }
+    std::fs::rename(&produced, dest).map_err(|e| {
+        Error::Pdf(format!("rename {} → {} : {e}", produced.display(), dest.display()))
+    })
+}
+
+impl Document {
+/// Exporte vers Office en choisissant la mise en page.
     ///
     /// `Exact` repositionne chaque fragment à ses coordonnées mesurées ;
     /// `Flow` reconstruit un document éditable. Les deux modes transportent

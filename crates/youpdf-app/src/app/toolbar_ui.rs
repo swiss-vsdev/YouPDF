@@ -454,6 +454,10 @@ impl YouPdfApp {
                                                 action = Some(MenuAction::Combine);
                                                 ui.close_menu();
                                             }
+                                            if submenu_row(ui, "From an Office file…", None) {
+                                                action = Some(MenuAction::FromOffice);
+                                                ui.close_menu();
+                                            }
                                         });
                                         menu_submenu(ui, "Tools", |ui| {
                                             for (label, item) in [
@@ -651,6 +655,7 @@ impl YouPdfApp {
                         MenuAction::RemoveProtection => self.remove_protection(ctx),
                         MenuAction::NewBlank => self.new_blank_page(ctx),
                         MenuAction::FromImages => self.import_images(ctx),
+                        MenuAction::FromOffice => self.import_office(ctx),
                         MenuAction::Combine => self.combine_active(ctx),
                         MenuAction::Slideshow => self.enter_slideshow(ctx),
                         MenuAction::Batch => self.batch_open = true,

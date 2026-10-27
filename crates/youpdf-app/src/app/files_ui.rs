@@ -335,6 +335,38 @@ impl YouPdfApp {
             }
         }
 
+        /// Nouveau document à partir d'un fichier Office (.docx/.xlsx/.pptx).
+        ///
+        /// ponytail: convertit par LibreOffice (`soffice --convert-to pdf`)
+        /// si le logiciel est installé ; sinon affiche un message d'erreur
+        /// explicite. Le PDF intermédiaire est ouvert comme un document
+        /// normal : il n'est pas supprimé (l'utilisateur peut le retrouver
+        /// à côté du fichier source).
+        pub(super) fn import_office(&mut self, ctx: &egui::Context) {
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("Office files", &["docx", "xlsx", "pptx"])
+                .pick_file()
+            else {
+                return;
+            };
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "office".to_owned());
+            let dest = std::env::temp_dir().join(format!("youpdf-{stem}.pdf"));
+            match youpdf_core::import_office(&path, &dest) {
+                Ok(()) => match Document::open(&dest) {
+                    Ok(doc) => {
+                        self.push_document(doc, Some(dest.clone()));
+                        self.create_open = false;
+                        self.toast(ctx, format!("Imported from {}", path.display()));
+                    }
+                    Err(err) => self.toast(ctx, format!("Imported PDF unreadable: {err}")),
+                },
+                Err(err) => self.toast(ctx, format!("Office import failed: {err}")),
+            }
+        }
+
         /// Nouveau document à partir d'une capture d'écran ou du presse-papiers.
         ///
         /// ponytail: macOS seulement (`screencapture` + `osascript`). Ajouter les
