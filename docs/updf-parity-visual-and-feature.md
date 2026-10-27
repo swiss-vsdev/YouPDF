@@ -17,41 +17,41 @@
 *Apply these design tokens to all new or modified UI components.*
 
 ### 1.1 Palette (`youpdf-shared/src/theme.rs`)
-- [ ] Dark theme: Canvas `#303030`, Chrome `#282828`, Widget `#282828`.
-- [ ] Accent: `#7A7EF6`.
-- [ ] Selected tint: `#E8E8F8`.
+- [x] Dark theme: Canvas `#303030`, Chrome `#282828`, Widget `#282828`.
+- [x] Accent: `#7A7EF6`.
+- [x] Selected tint: `#E8E8F8`.
 
 ### 1.2 Typography & Spacing
-- [ ] Font sizes: CAPTION 10.5, LABEL 11, BODY 12, TITLE 13, MONO 11.
-- [ ] Radii: TINY 3, XS 2, S 4, M 6, L 8, XL 10.
-- [ ] Spacing: TINY 1, XS 2, S 4, M 6, L 8.
+- [x] Font sizes: CAPTION 10.5, LABEL 11, BODY 12, TITLE 13, MONO 11.
+- [x] Radii: TINY 3, XS 2, S 4, M 6, L 8, XL 10.
+- [x] Spacing: TINY 1, XS 2, S 4, M 6, L 8.
 
 ---
 
 ## 2. Window-by-Window Checklist
 
 ### 2.1 Home Screen (`home.rs`)
-- [ ] Grid/List toggle button (matching UPDF asset: `ActionGrid`/`ActionList`).
-- [ ] Category tabs: Recents, Starred, Tools.
+- [x] Grid/List toggle button (matching UPDF asset: `ActionGrid`/`ActionList`).
+- [x] Category tabs: Recents, Starred, Tools.
 - [ ] Thumbnail generation: match UPDF's crop/display aspect.
 
 ### 2.2 Document Chrome (`chrome_ui.rs`)
-- [ ] Title bar: custom with traffic lights inset (78px width).
-- [ ] Tab bar: pinning, closing, reordering, middle-click close (visuals: palette colors).
-- [ ] Overflow menu (`…`): Consolidate "Tools" dropdown into a standard macOS-style overflow.
+- [x] Title bar: custom with traffic lights inset (78px width).
+- [x] Tab bar: pinning, closing, reordering, middle-click close (visuals: palette colors).
+- [x] Overflow menu (`…`): Consolidate "Tools" dropdown into a standard macOS-style overflow.
 
 ### 2.3 Floating Inspectors (`inspector_ui.rs`)
-- [ ] Appearance parity: Arrow positioning and palette.
-- [ ] Link appearance inspector: Visible toggle, width, dash/solid, colour picker.
-- [ ] Text editing: Add superscript/subscript, paragraph spacing after, horizontal scaling, increase/decrease indent.
+- [x] Appearance parity: Arrow positioning and palette.
+- [x] Link appearance inspector: Visible toggle, width, dash/solid, colour picker.
+- [x] Text editing: Add superscript/subscript, paragraph spacing after, horizontal scaling, increase/decrease indent.
 
 ---
 
 ## 3. Feature Decomposition
 
 ### 3.1 AI Subsystem (Gap: High)
-- [ ] **Conversation history:** Persistence of chat turns (`Turn` struct).
-- [ ] **Suggested questions:** Populate based on context/document.
+- [x] **Conversation history:** Persistence of chat turns (`Turn` struct).
+- [x] **Suggested questions:** Populate based on context/document.
 - [ ] **UI Rendering:** Markdown + LaTeX rendering in chat responses.
 - [ ] **Attachment picker:** `ChatPagePicker` wiring.
 - [ ] **Advanced AI features:**
@@ -69,12 +69,12 @@
 
 ### 3.3 Decor & Organise (Gap: Medium)
 - [ ] **Organize:**
-    - [ ] **ADD:** Merge pages (Batch).
-    - [ ] **ADD:** Duplicate pages.
-    - [ ] **ADD:** Page labels (/PageLabels reader/writer) — engine never landed; `ai.rs:251` NonConsecutive detector is a stub waiting on it.
+    - [x] **ADD:** Merge pages (Batch).
+    - [x] **ADD:** Duplicate pages.
+    - [x] **ADD:** Page labels (/PageLabels reader/writer) — engine never landed; `ai.rs:251` NonConsecutive detector is a stub waiting on it.
     - [x] Page resize (landed: `organize/resize.rs`, dialog in `pages_ui.rs`).
 - [ ] **Decor:** AI-generated watermarks, PDF-file watermarks, rotation randomness in watermarks, template/starred watermark presets.
-- [ ] **Bates:** Interactive (non-batch) Bates tool.
+- [x] **Bates:** Interactive (non-batch) Bates tool.
 
 ### 3.4 Security & Export (Gap: Low)
 - [ ] **Security Properties Matrix:** Read-only view of permission matrix for encrypted files.
@@ -82,9 +82,10 @@
 - [ ] **Flattening:** Separate flattening for watermarks and cropped pages.
 
 ### 3.5 Annotate Tools (Gap: Low)
-- [ ] **ADD:** Sticker tool.
-- [ ] **ADD:** Connected Lines tool.
-- [ ] **ADD:** Cloud tool.
+- [x] **ADD:** Sticker tool.
+- [x] **ADD:** Connected Lines tool.
+- [x] **ADD:** Cloud tool.
+- [x] **ADD:** Shape Fill tool.
 
 ---
 
