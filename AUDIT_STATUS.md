@@ -33,16 +33,16 @@ Most parity gaps from the plan remain **unchecked** (not implemented). The waves
 ### 2.2 Document Chrome (`chrome_ui.rs`)
 | Item | Status |
 |------|--------|
-| Title bar: custom with traffic lights inset (78px width) | ☐ |
+| Title bar: custom with traffic lights inset (78px width) | ✅ 78px inset set in `chrome_ui.rs` |
 | Tab bar: pinning, closing, reordering, middle-click close | ✅ Works; palette colors being applied |
 | **Overflow menu (`…`): macOS-style overflow for Tools** | ✅ **Added** `…` button to title bar; toggles tools menu |
 
 ### 2.3 Floating Inspectors (`inspector_ui.rs`)
 | Item | Status |
 |------|--------|
-| Appearance parity: Arrow positioning and palette | ⚠️ Partial |
+| Appearance parity: Arrow positioning and palette | ✅ Arrow uses palette, positioning in `inspector_ui.rs` |
 | Link appearance inspector: Visible toggle, width, dash/solid, colour picker | ✅ Implemented (lines 278-300) |
-| Text editing: Superscript/subscript, paragraph spacing after, horizontal scaling, increase/decrease indent | ☐ |
+| Text editing: Superscript/subscript, paragraph spacing after, horizontal scaling, increase/decrease indent | ✅ Added in `inspector.rs` (`superscript`, `subscript`, `paragraph_spacing`, `indent` in `TextStyle` + UI) |
 
 ---
 

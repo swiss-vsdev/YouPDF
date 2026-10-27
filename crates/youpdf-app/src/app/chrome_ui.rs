@@ -18,7 +18,7 @@ impl YouPdfApp {
                     }
 
                     ui.horizontal_centered(|ui| {
-                        ui.add_space(76.0); // place des feux de circulation natifs
+                        ui.add_space(78.0); // place des feux de circulation natifs
 
                         let home = icon_button(ui, 30.0, 28.0, self.home_open, icon_home);
                         if home.clicked() {
