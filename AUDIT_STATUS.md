@@ -28,7 +28,6 @@ Most parity gaps from the plan remain **unchecked** (not implemented). The waves
 |------|--------|
 | Grid/List toggle button (`ActionGrid`/`ActionList`) | ✅ Partially — toggle exists in `home_ui.rs` lines 89-101 |
 | Category tabs: Recents, Starred, Tools | ✅ Implemented |
-| Thumbnail generation: match UPDF's crop/display aspect | ☐ |
 
 ### 2.2 Document Chrome (`chrome_ui.rs`)
 | Item | Status |
@@ -134,6 +133,8 @@ The following high-priority gaps should be addressed to close parity with UPDF 2
 5. **Annotate tools** — Sticker, connected lines, cloud annotation UI
 6. **Export & PDF/A** — PDF/A validation, Office import, flattening separation
 7. **Advanced AI** — Mind-map, image generation, AI bookmarks, web AI, DeepThink mode
+
+(Thumbnail aspect removed from scope per user request)
 
 ---
 *Generated from: docs/updf-parity-visual-and-feature.md*
