@@ -73,7 +73,15 @@
     - [x] **ADD:** Duplicate pages.
     - [x] **ADD:** Page labels (/PageLabels reader/writer) — engine never landed; `ai.rs:251` NonConsecutive detector is a stub waiting on it.
     - [x] Page resize (landed: `organize/resize.rs`, dialog in `pages_ui.rs`).
-- [ ] **Decor:** AI-generated watermarks, PDF-file watermarks, rotation randomness in watermarks, template/starred watermark presets.
+- [ ] **Decor:**
+    - [x] Text watermarks (single/tiled, rotation, position, opacity, page range)
+    - [x] Header & footer with page numbering
+    - [x] Background (color + image)
+    - [x] Bates numbering
+    - [ ] **PDF-file watermarks** (render PDF page as watermark)
+    - [x] **Rotation randomness** in tiled watermarks (`rotation_randomness` field + deterministic FNV hash)
+    - [x] **Template/starred watermark presets** (save/load in `watermark_presets` Vec + UI)
+    - [ ] **AI-generated watermarks** (AI-driven text/style suggestions)
 - [x] **Bates:** Interactive (non-batch) Bates tool.
 
 ### 3.4 Security & Export (Gap: Low)

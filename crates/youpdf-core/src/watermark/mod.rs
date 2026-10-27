@@ -144,6 +144,9 @@ pub struct Watermark {
     pub opacity: f32,
     /// Rotation en degrés (45 = diagonale classique).
     pub rotation_deg: f32,
+    /// Variation aléatoire de rotation par tuile (0 = aucune variation).
+    /// En degrés, ex: 15 = ±15° autour de `rotation_deg`.
+    pub rotation_randomness: f32,
     /// Répète le texte sur toute la page au lieu d'un seul au centre.
     pub tiled: bool,
     /// Pages concernées.
@@ -167,6 +170,7 @@ impl Default for Watermark {
             color: [128, 128, 128],
             opacity: 0.25,
             rotation_deg: 45.0,
+            rotation_randomness: 0.0,
             tiled: false,
             pages: PageRange::All,
             position: WatermarkPosition::Center,

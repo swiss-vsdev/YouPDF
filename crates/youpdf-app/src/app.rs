@@ -1154,6 +1154,8 @@ pub struct YouPdfApp {
     watermark: Watermark,
     /// Première page décorée ; `None` = toutes.
     watermark_from: Option<u32>,
+    /// Filigranes sauvegardés (préréglages).
+    watermark_presets: Vec<Watermark>,
     /// Fenêtre « En-tête et pied de page » et son brouillon.
     header_footer_open: bool,
     header_footer: HeaderFooter,
@@ -1640,6 +1642,7 @@ impl YouPdfApp {
             watermark_open: false,
             watermark: Watermark::default(),
             watermark_from: None,
+            watermark_presets: Vec::new(),
             header_footer_open: false,
             header_footer: HeaderFooter::default(),
             header_footer_from: None,

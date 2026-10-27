@@ -111,10 +111,35 @@ pub(crate) fn watermark_ops(wm: &Watermark, width: f32, height: f32) -> Vec<u8> 
             step_y *= factor;
         }
         let mut y = size;
+        // Rotation aléatoire par tuile : on utilise un hash déterministe
+        // basé sur la position pour avoir un résultat reproductible.
+        // Simple deterministic hash for rotation randomness (no external deps).
+        fn tile_hash(x: f32, y: f32, wm_text: &str) -> u64 {
+            let mut h = 1469598103934665603u64; // FNV offset basis
+            for b in wm_text.as_bytes() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(1099511628211); // FNV prime
+            }
+            let x_bits = x.to_bits() as u64;
+            let y_bits = y.to_bits() as u64;
+            h ^= x_bits; h = h.wrapping_mul(1099511628211);
+            h ^= y_bits; h = h.wrapping_mul(1099511628211);
+            h
+        }
+
+        let mut y = size;
         while y < height + step_y {
             let mut x = 0.0_f32;
             while x < width + step_x {
-                paint_watermark_text(&mut out, wm, size, cos, sin, x, y);
+                let (tile_cos, tile_sin) = if wm.rotation_randomness > 0.0 {
+                    let h = tile_hash(x, y, &wm.text);
+                    let angle_offset = (h as f32 / u64::MAX as f32 - 0.5) * 2.0 * wm.rotation_randomness.to_radians();
+                    let total_rad = wm.rotation_deg.to_radians() + angle_offset;
+                    (total_rad.cos(), total_rad.sin())
+                } else {
+                    (cos, sin)
+                };
+                paint_watermark_text(&mut out, wm, size, tile_cos, tile_sin, x, y);
                 x += step_x;
             }
             y += step_y;
