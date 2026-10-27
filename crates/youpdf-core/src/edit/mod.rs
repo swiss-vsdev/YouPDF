@@ -187,12 +187,20 @@ pub struct TextStyle {
     pub underline: bool,
     /// Barré.
     pub strikeout: bool,
+    /// Texte en exposant.
+    pub superscript: bool,
+    /// Texte en indice.
+    pub subscript: bool,
     /// Alignement dans la boîte d'origine.
     pub align: TextAlign,
     /// Interligne, en multiples du corps.
     pub line_spacing: f32,
     /// Approche (espace ajouté après chaque caractère), en points.
     pub char_spacing: f32,
+    /// Espacement après paragraphe, en points.
+    pub paragraph_spacing: f32,
+    /// Indentation, en points.
+    pub indent: f32,
 }
 
 impl TextStyle {
@@ -215,9 +223,13 @@ impl TextStyle {
             italic: false,
             underline: false,
             strikeout: false,
+            superscript: false,
+            subscript: false,
             align: TextAlign::Left,
             line_spacing: 1.0,
             char_spacing: 0.0,
+            paragraph_spacing: 0.0,
+            indent: 0.0,
         }
     }
 }

@@ -311,6 +311,8 @@ pub fn text_style_row(
             ("I", style.italic, 1),
             ("U", style.underline, 2),
             ("S", style.strikeout, 3),
+            ("x²", style.superscript, 4),
+            ("x₂", style.subscript, 5),
         ] {
             if ui
                 .selectable_label(
@@ -323,7 +325,10 @@ pub fn text_style_row(
                     0 => style.bold = !style.bold,
                     1 => style.italic = !style.italic,
                     2 => style.underline = !style.underline,
-                    _ => style.strikeout = !style.strikeout,
+                    3 => style.strikeout = !style.strikeout,
+                    4 => style.superscript = !style.superscript,
+                    5 => style.subscript = !style.subscript,
+                    _ => {}
                 }
                 changed = true;
             }
@@ -373,6 +378,31 @@ pub fn text_style_row(
             changed = true;
         }
         spacing.on_hover_text(t("Character spacing"));
+
+        // Espacement après paragraphe.
+        let para_spacing = ui.add(
+            egui::DragValue::new(&mut style.paragraph_spacing)
+                .range(0.0..=72.0)
+                .speed(1.0)
+                .prefix("P "),
+        );
+        if para_spacing.changed() {
+            changed = true;
+        }
+        para_spacing.on_hover_text(t("Paragraph spacing"));
+
+        // Indentation.
+        let indent = ui.add(
+            egui::DragValue::new(&mut style.indent)
+                .range(-72.0..=72.0)
+                .speed(1.0)
+                .prefix("↤ "),
+        );
+        if indent.changed() {
+            changed = true;
+        }
+        indent.on_hover_text(t("Indent"));
+
         changed
     });
     if state.palette_open {
