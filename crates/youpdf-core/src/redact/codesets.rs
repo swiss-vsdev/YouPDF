@@ -50,6 +50,11 @@ pub const DEFAULT_CODE_SETS: &[CodeSetEntry] = &[
         pattern: r"\b5 U\.S\.C\. § 552\(b\)\(\d\)",
         example: "5 U.S.C. § 552(b)(6)",
     },
+    CodeSetEntry {
+        name: "IBAN",
+        pattern: r"\b[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}\b",
+        example: "GB82WEST12345698765432",
+    },
 ];
 
 /// Compile every pattern in `code_sets` into a `Regex` and find all matches
