@@ -66,6 +66,8 @@ impl Default for SignUi {
             request: CertificateRequest::default(),
             options: SignOptions {
                 field_name: "Signature1".into(),
+                page: 1,
+                rect: [100.0, 600.0, 300.0, 750.0],
                 ..Default::default()
             },
             signatures: Vec::new(),
