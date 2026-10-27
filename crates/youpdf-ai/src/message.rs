@@ -39,7 +39,22 @@ impl Message {
     }
 }
 
-/// Paramètres optionnels de génération.
+/// Un tour de conversation : un message de l'utilisateur et la réponse du modèle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Turn {
+    /// Message de l'utilisateur.
+    pub user: Message,
+    /// Réponse du modèle (optionnelle, peut être vide en attendant la réponse).
+    pub assistant: Option<String>,
+}
+
+/// Historique de conversation persistants.
+#[derive(Debug, Clone, Default)]
+pub struct ConversationHistory {
+    /// Tours de conversation (limité à `MAX_TURNS` pour éviter de grossir le stockage).
+    pub turns: Vec<Turn>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ChatOptions {
     pub temperature: Option<f32>,

@@ -457,6 +457,7 @@ const COMMENT_TOOLS: &[ModeTool] = &[
     ModeTool("Signature", icon_signature, true, false),
     ModeTool("Eraser", icon_eraser, false, false),
     ModeTool("Callout", icon_cursor, true, false),
+    ModeTool("Cloud", icon_eraser, true, false),
 ];
 
 const EDIT_TOOLS: &[ModeTool] = &[
@@ -651,6 +652,10 @@ enum ToolsEntry {
     CreateSignature,
     /// Fenêtre de tampon personnalisé.
     CustomStamp,
+    /// Outil tampon prédéfini (sticker).
+    Sticker,
+    /// Outil ligne connectée (polyline ouverte).
+    ConnectedLines,
 }
 
 /// Entrées du menu `Outils` : libellé, raccourci, action.
@@ -680,6 +685,8 @@ const TOOLS_MENU: &[(&str, &str, ToolsEntry)] = &[
     ("Sign…", "", ToolsEntry::Sign),
     ("Create signature…", "", ToolsEntry::CreateSignature),
     ("Custom stamp…", "", ToolsEntry::CustomStamp),
+    ("Sticker", "", ToolsEntry::Sticker),
+    ("Connected lines", "", ToolsEntry::ConnectedLines),
 ];
 
 /// Nature du brouillon de texte en cours de saisie.
@@ -690,6 +697,7 @@ enum DraftKind {
     Signature,
     Link,
     Stamp,
+    Cloud,
 }
 
 /// Type de brouillon demandé par l'outil courant.
@@ -712,6 +720,7 @@ fn draft_kind_for(mode: Option<usize>, tool: Option<usize>) -> DraftKind {
         Some(7) => DraftKind::Link,
         Some(8) => DraftKind::Stamp,
         Some(9) => DraftKind::Signature,
+        Some(10) => DraftKind::Cloud,
         _ => DraftKind::FreeText,
     }
 }
@@ -824,6 +833,10 @@ enum ToolAction {
     Measure,
     /// Clic pour poser un callout (3 clics : départ, genou, coin texte).
     Callout,
+    /// Clic pour poser un tampon prédéfini (sticker).
+    Sticker,
+    /// Glissé pour tracer une ligne connectée (polyline ouverte).
+    ConnectedLines,
 }
 
 /// Couleurs de préréglage proposées dans la popup.

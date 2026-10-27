@@ -59,7 +59,7 @@ if action != ToolAction::None {
                 } else {
                     Stroke::new(
                         1.0_f32,
-                        Color32::from_rgba_unmultiplied(0x7A, 0x7E, 0xF6, 70),
+                        pal().accent,
                     )
                 };
                 ui.painter().rect_stroke(r.expand(1.0), 2.0, stroke);
@@ -169,11 +169,45 @@ if action != ToolAction::None {
                 ));
             }
         }
-        ToolAction::Click(_) => {
+        ToolAction::Click(_) | ToolAction::Sticker => {
             if resp.clicked() {
                 if let Some(p) = resp.interact_pointer_pos() {
                     frame.pending_click = Some((page as usize, to_pdf(p)));
                 }
+            }
+        }
+        ToolAction::ConnectedLines => {
+            if resp.dragged() {
+                let point = resp.interact_pointer_pos().map(to_pdf);
+                if drag_from.is_none() {
+                    *drag_from = point;
+                }
+                if point.is_some() {
+                    *drag_to = point;
+                }
+            }
+            if resp.drag_stopped() {
+                let from = drag_from.take();
+                let to = drag_to.take();
+                if let (Some(a), Some(b)) = (from, to) {
+                    frame.pending_redact = Some((
+                        page as usize,
+                        [
+                            a[0].min(b[0]),
+                            a[1].min(b[1]),
+                            a[0].max(b[0]),
+                            a[1].max(b[1]),
+                        ],
+                    ));
+                }
+            }
+            if let (Some(a), Some(b)) = (*drag_from, *drag_to) {
+                let rect = Rect::from_two_pos(to_screen(a), to_screen(b));
+                ui.painter().rect_stroke(
+                    rect,
+                    0.0,
+                    Stroke::new(1.5_f32, pal().accent),
+                );
             }
         }
         ToolAction::EditText | ToolAction::InsertImage => {

@@ -113,4 +113,25 @@ impl YouPdfApp {
         }
     }
 
+    /// Merge selected pages into groups of `per_output` pages per output page.
+    pub(super) fn merge_pages(&mut self, ctx: &egui::Context, selected: &BTreeSet<usize>, per_output: usize) {
+        let pages: Vec<usize> = selected.iter().copied().collect();
+        if pages.len() < 2 {
+            return;
+        }
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            let (w, h) = tab.doc.page_size(1);
+            match youpdf_core::organize::merge_batch::merge_pages(&mut tab.doc, &pages, per_output, w, h) {
+                Ok(count) => {
+                    tab.invalidate_render();
+                    tab.dirty = true;
+                    tab.structural_dirty = true;
+                    self.mark_document_changed();
+                    self.toast(ctx, format!("{count} merged page(s) created"));
+                }
+                Err(err) => self.toast(ctx, format!("Merge failed: {err}")),
+            }
+        }
+    }
+
 }
