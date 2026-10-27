@@ -77,6 +77,7 @@
 - [x] **Bates:** Interactive (non-batch) Bates tool.
 
 ### 3.4 Security & Export (Gap: Low)
+- [x] **Digital Signatures:** PKCS#7 detached (RSA SHA-256), self-signed certificate, PKCS#12 import, signature validation, image-in-signature support.
 - [ ] **Security Properties Matrix:** Read-only view of permission matrix for encrypted files.
 - [ ] **Export:** Validate PDF/A (ICC embedding), Office import (.docx/.xlsx/.pptx).
 - [ ] **Flattening:** Separate flattening for watermarks and cropped pages.
