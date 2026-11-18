@@ -295,11 +295,16 @@ impl Document {
     /// Sauvegarde le document à l'emplacement indiqué.
     pub fn save(&mut self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
+        // Même sérialisation que `lopdf::Document::save` (`save_to` l'appelle),
+        // mais en mémoire : l'écriture sur disque est ensuite atomique.
+        let mut buf = Vec::new();
         self.inner
-            .save(path)
+            .save_to(&mut buf)
+            .map_err(|e| Error::Pdf(format!("sérialisation {} : {e}", path.display())))?;
+        youpdf_shared::atomic_write(path, &buf)
             .map_err(|e| Error::Pdf(format!("sauvegarde {} : {e}", path.display())))?;
-        // `lopdf::Document::save` peut normaliser le document (longueurs de
-        // flux, renumérotation) : la sérialisation en cache n'est plus sûre.
+        // La sérialisation peut normaliser le document (longueurs de flux,
+        // renumérotation) : la copie en cache n'est plus sûre.
         self.invalidate();
         Ok(())
     }

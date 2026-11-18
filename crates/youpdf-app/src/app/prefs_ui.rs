@@ -238,6 +238,7 @@ impl YouPdfApp {
         }
         self.autosave_at = now;
         let mut saved = 0usize;
+        let mut failed = 0usize;
         for tab in &mut self.tabs {
             if !tab.dirty || tab.protected {
                 continue;
@@ -246,15 +247,35 @@ impl YouPdfApp {
                 continue;
             };
             let annots = youpdf_core::annotation::transform::annots_to_page(&tab.doc, &tab.annots);
-            if tab.doc.save_with_annotations(&path, &annots).is_ok() {
-                tab.dirty = false;
-                tab.structural_dirty = false;
-                tab.baseline_annots = tab.annots.clone();
-                saved += 1;
+            match tab.doc.save_with_annotations(&path, &annots) {
+                Ok(()) => {
+                    tab.dirty = false;
+                    tab.structural_dirty = false;
+                    tab.baseline_annots = tab.annots.clone();
+                    // Même bookkeeping que la sauvegarde manuelle : sans cela
+                    // l'état « modifié » serait faux après edit → autosave → undo.
+                    tab.history_base = tab.doc.to_bytes().ok();
+                    tab.saved_hash = tab
+                        .history_base
+                        .as_deref()
+                        .map(fingerprint)
+                        .unwrap_or_default();
+                    saved += 1;
+                }
+                Err(err) => {
+                    failed += 1;
+                    tracing::warn!(error = %err, path = %path.display(), "autosave failed");
+                }
             }
         }
         if saved > 0 {
             self.toast(ctx, format!("Auto-saved {saved} document(s)"));
+        }
+        if failed > 0 {
+            self.toast(
+                ctx,
+                format!("Auto-save failed for {failed} document(s) — save manually to retry"),
+            );
         }
     }
 }

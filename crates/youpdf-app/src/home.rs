@@ -70,6 +70,8 @@ pub struct HomeView {
     pub category: HomeCategory,
     /// Grille ou liste.
     pub view_mode: ViewMode,
+    /// Fichier en attente d'une confirmation de suppression définitive.
+    pub pending_delete: Option<PathBuf>,
 }
 
 impl HomeView {
@@ -143,7 +145,7 @@ pub fn save_stars(stars: &[PathBuf]) {
         .map(|p| p.to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join("\n");
-    let _ = std::fs::write(path, body);
+    let _ = youpdf_shared::atomic_write(&path, body.as_bytes());
 }
 
 /// Vrai si `path` est marqué d'une étoile.
@@ -197,7 +199,7 @@ pub fn save_recents(recents: &[PathBuf]) {
         .map(|p| p.to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join("\n");
-    let _ = std::fs::write(path, body);
+    let _ = youpdf_shared::atomic_write(&path, body.as_bytes());
 }
 
 /// Tronque `text` à `max` caractères, en ajoutant un point de suspension

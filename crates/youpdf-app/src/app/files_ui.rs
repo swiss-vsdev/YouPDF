@@ -386,7 +386,12 @@ impl YouPdfApp {
                 // Le sélecteur interactif bloque la boucle UI : acceptable pour
                 // une capture, et il évite de toucher à l'état avant le résultat.
                 youpdf_core::capture::capture_region_interactive()
-                    .map(|path| std::fs::read(&path).ok())
+                    .map(|path| {
+                        let bytes = std::fs::read(&path).ok();
+                        // Le PNG temporaire n'est utile que le temps de le lire.
+                        let _ = std::fs::remove_file(&path);
+                        bytes
+                    })
                     .ok()
                     .flatten()
                     .map_or_else(

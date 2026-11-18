@@ -66,7 +66,13 @@ impl Document {
         // ne cherchait son champ par scan linéaire, ce qui refaisait le
         // parcours de tout l'AcroForm pour chaque entrée (O(k·f)). Un
         // index par nom ramène la recherche à O(1).
-        let fields = self.read_form_fields();
+        // Applique sur une copie : si un champ échoue en cours de route, le
+        // document courant reste intact au lieu de garder des écritures
+        // partielles sans drapeau « modifié » ni point d'annulation.
+        let mut staged = Document::from_lopdf(self.inner.clone());
+        staged.path = self.path.clone();
+
+        let fields = staged.read_form_fields();
         let mut by_name: std::collections::HashMap<&str, &FormField> =
             std::collections::HashMap::with_capacity(fields.len());
         for field in &fields {
@@ -79,11 +85,12 @@ impl Document {
                 // Nom inconnu : ignoré, ce n'est pas une erreur.
                 continue;
             };
-            self.set_field_value(field, &value)?;
+            staged.set_field_value(field, &value)?;
             applied += 1;
         }
         if applied > 0 {
-            self.touch();
+            staged.touch();
+            *self = staged;
         }
         Ok(applied)
     }

@@ -188,17 +188,10 @@ impl YouPdfApp {
                 self.reveal_path(&path);
             }
             if let Some(path) = delete {
-                self.recents.retain(|old| old != &path);
-                self.stars.retain(|old| old != &path);
-                self.home_thumbs.remove(&path);
-                save_recents(&self.recents);
-                home::save_stars(&self.stars);
-                if std::fs::remove_file(&path).is_ok() {
-                    self.toast(&ctx, "File deleted");
-                } else {
-                    self.toast(&ctx, "Could not delete the file");
-                }
+                // Suppression définitive : confirmation avant tout `remove_file`.
+                self.home.pending_delete = Some(path);
             }
+            self.confirm_delete_file(&ctx);
             if let Some(path) = open_new {
                 if path.is_file() {
                     self.open_path_new_tab(path);
@@ -216,6 +209,64 @@ impl YouPdfApp {
             }
             if let Some(id) = tool {
                 self.run_home_tool(id);
+            }
+        }
+
+        /// Confirmation d'une suppression définitive demandée depuis l'accueil.
+        pub(super) fn confirm_delete_file(&mut self, ctx: &egui::Context) {
+            let Some(path) = self.home.pending_delete.clone() else {
+                return;
+            };
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            let mut open = true;
+            let mut confirmed = false;
+            let mut cancel = false;
+            self.show_modal(
+                ctx,
+                "confirm-delete-file",
+                "Delete file",
+                420.0,
+                &mut open,
+                |_app, ui| {
+                    ui.label(RichText::new(format!("Delete “{name}” from your computer?")));
+                    ui.add_space(SPACE_S);
+                    ui.label(
+                        RichText::new("This permanently deletes the file. It cannot be undone.")
+                            .color(pal().state_bad),
+                    );
+                    ui.add_space(SPACE_M);
+                    ui.horizontal(|ui| {
+                        if ui.button(t("Cancel")).clicked() {
+                            cancel = true;
+                        }
+                        confirmed = ui
+                            .button(RichText::new("Delete file").color(pal().state_bad))
+                            .clicked();
+                    });
+                },
+            );
+            if cancel {
+                open = false;
+            }
+            if !open {
+                self.home.pending_delete = None;
+            }
+            if confirmed {
+                // Les entrées ne sont retirées qu'après une suppression réussie.
+                if std::fs::remove_file(&path).is_ok() {
+                    self.recents.retain(|old| old != &path);
+                    self.stars.retain(|old| old != &path);
+                    self.home_thumbs.remove(&path);
+                    save_recents(&self.recents);
+                    home::save_stars(&self.stars);
+                    self.home.pending_delete = None;
+                    self.toast(ctx, "File deleted");
+                } else {
+                    self.toast(ctx, "Could not delete the file — check its permissions");
+                }
             }
         }
 

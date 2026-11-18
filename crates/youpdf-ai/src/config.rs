@@ -185,7 +185,7 @@ impl AppSettings {
         }
         let raw = serde_json::to_string_pretty(self)
             .map_err(|e| Error::Config(format!("sérialisation : {e}")))?;
-        std::fs::write(&path, raw)
+        youpdf_shared::atomic_write(&path, raw.as_bytes())
             .map_err(|e| Error::Config(format!("écriture de {} : {e}", path.display())))?;
         tracing::debug!(path = %path.display(), "configuration enregistrée");
         Ok(())
