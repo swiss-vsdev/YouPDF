@@ -37,7 +37,7 @@ thiserror = "1"
 anyhow    = "1"
 
 # ---- Async ---------------------------------------------------------------
-tokio        = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio        = { version = "1", features = ["macros", "sync", "time"] }
 async-trait  = "0.1"
 
 # ---- HTTP (rustls : pas de dépendance OpenSSL) ---------------------------

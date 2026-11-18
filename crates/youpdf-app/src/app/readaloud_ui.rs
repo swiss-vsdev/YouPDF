@@ -105,9 +105,11 @@ impl YouPdfApp {
                     close = true;
                 }
 
-                // Requête de repaint : le processus `say` ne prévient pas
-                // l'application de sa fin, on sonde `is_playing` à chaque trame.
-                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+                // Le processus `say` ne prévient pas de sa fin : on ne sonde
+                // `is_playing` que pendant la lecture, pas au repos.
+                if app.tts.is_playing() {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(250));
+                }
             },
         );
 

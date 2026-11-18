@@ -66,6 +66,11 @@ impl YouPdfApp {
                             vec2(tile_width, size.y + 28.0),
                             Sense::click_and_drag(),
                         );
+                        // L'espace est déjà réservé : inutile de dessiner ou
+                        // de chercher une texture hors de l'écran.
+                        if !ui.is_rect_visible(rect) {
+                            continue;
+                        }
                         let picked = selected.contains(&(page as usize));
                         let img_rect = Rect::from_center_size(
                             pos2(rect.center().x, rect.min.y + 8.0 + size.y / 2.0),

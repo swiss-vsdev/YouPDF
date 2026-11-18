@@ -34,20 +34,27 @@ impl TtsEngine {
     ///
     /// Chaque ligne a le format `Nom  # Langage` (ex. `Alice  # English`).
     /// Sur une plateforme sans `say`, renvoie un vecteur vide.
-    pub fn list_voices() -> Vec<String> {
-        let Ok(output) = Command::new("say").arg("-v").arg("?").output() else {
-            return Vec::new();
-        };
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.splitn(2, '#').collect();
-                parts
-                    .first()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
+    pub fn list_voices() -> &'static [String] {
+        // `say -v ?` lance un processus ; le panneau demande la liste à
+        // chaque repaint, donc on ne le fait qu'une fois par exécution.
+        static VOICES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+        VOICES
+            .get_or_init(|| {
+                let Ok(output) = Command::new("say").arg("-v").arg("?").output() else {
+                    return Vec::new();
+                };
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .filter_map(|line| {
+                        let parts: Vec<&str> = line.splitn(2, '#').collect();
+                        parts
+                            .first()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                    })
+                    .collect()
             })
-            .collect()
+            .as_slice()
     }
 
     /// Lance la lecture de `text` et arrête toute lecture précédente.

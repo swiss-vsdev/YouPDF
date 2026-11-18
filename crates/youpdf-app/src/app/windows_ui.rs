@@ -309,6 +309,16 @@ impl YouPdfApp {
             if !self.props_open {
                 return;
             }
+            // L'index de recherche coûte une extraction du document entier :
+            // le construire une fois par onglet, pas à chaque repaint.
+            let active = self.active;
+            if self.search_index.as_ref().map(|(id, _)| *id) != Some(active) {
+                if let Some(tab) = self.tabs.get(active) {
+                    if let Ok(index) = youpdf_core::SearchIndex::build(&tab.doc) {
+                        self.search_index = Some((active, index));
+                    }
+                }
+            }
             let Some(tab) = self.tabs.get(self.active) else {
                 self.props_open = false;
                 return;
@@ -326,9 +336,16 @@ impl YouPdfApp {
                 .and_then(|p| std::fs::metadata(p).ok())
                 .map(|m| format!("{:.1} KB", m.len() as f64 / 1024.0))
                 .unwrap_or_else(|| "—".to_owned());
-            let stats = youpdf_core::search::DocumentStats::from_index(
-                &youpdf_core::SearchIndex::build(&tab.doc).expect("build index"),
-            );
+            let stats = self
+                .search_index
+                .as_ref()
+                .filter(|(id, _)| *id == active)
+                .map(|(_, index)| youpdf_core::search::DocumentStats::from_index(index));
+            let count = |n: Option<usize>| n.map(|v| v.to_string()).unwrap_or_else(|| "—".to_owned());
+            let words = count(stats.map(|s| s.words));
+            let cjk = count(stats.map(|s| s.cjk));
+            let spaces = count(stats.map(|s| s.spaces));
+            let total_chars = count(stats.map(|s| s.total_chars));
             let perms = youpdf_core::read_permissions(&tab.doc);
             let mut open = true;
             let title = tab.title.clone();
@@ -349,10 +366,10 @@ impl YouPdfApp {
                 row("Subject", meta.subject.as_deref().unwrap_or("—"));
                 row("Keywords", meta.keywords.as_deref().unwrap_or("—"));
                 row("Producer", meta.producer.as_deref().unwrap_or("—"));
-                row("Word count", &stats.words.to_string());
-                row("CJK", &stats.cjk.to_string());
-                row("Spaces", &stats.spaces.to_string());
-                row("Total chars", &stats.total_chars.to_string());
+                row("Word count", &words);
+                row("CJK", &cjk);
+                row("Spaces", &spaces);
+                row("Total chars", &total_chars);
                 if let Some(perms) = &perms {
                     ui.add_space(SPACE_S);
                     ui.label(section("Permissions"));
