@@ -49,11 +49,15 @@ fn prefs_body(app: &mut YouPdfApp, ui: &mut egui::Ui, settings: &mut youpdf_ai::
             egui::ComboBox::from_id_salt("prefs-zoom")
                 .selected_text(settings.default_zoom.clone())
                 .show_ui(ui, |ui| {
-                    for option in ["fit-width", "fit-page", "actual"] {
+                    for (value, label) in [
+                        ("fit-width", "Fit width"),
+                        ("fit-page", "Fit page"),
+                        ("actual", "Actual size"),
+                    ] {
                         ui.selectable_value(
                             &mut settings.default_zoom,
-                            option.to_string(),
-                            option,
+                            value.to_string(),
+                            label,
                         );
                     }
                 });

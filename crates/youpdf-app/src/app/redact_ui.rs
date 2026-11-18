@@ -134,7 +134,9 @@ impl YouPdfApp {
                         }
                         if ui
                             .add(
-                                egui::Button::new(RichText::new(t("Continue")).color(Color32::WHITE))
+                                // Texte sombre sur l'accent : blanc donnait ~3.4:1,
+                                // sous le seuil WCAG AA pour ce corps de 12 px.
+                                egui::Button::new(RichText::new(t("Continue")).color(Color32::from_gray(16)))
                                     .fill(pal().accent),
                             )
                             .clicked()

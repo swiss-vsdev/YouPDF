@@ -23,12 +23,39 @@ impl YouPdfApp {
                 return;
             }
 
+            // Cohérence avec la vue Organiser : supprimer des pages se
+            // confirme, quel que soit le chemin d'accès.
+            let mut delete_confirmed = true;
+            if let PageAction::Delete = action {
+                let count = pages.len();
+                let mut open = true;
+                let mut confirmed = false;
+                self.show_modal(
+                    ctx,
+                    "confirm-delete-pages-canvas",
+                    "Delete pages",
+                    340.0,
+                    &mut open,
+                    |_app, ui| {
+                        ui.label(format!("Remove {count} page(s) from this document?"));
+                        ui.add_space(SPACE_S);
+                        ui.label(RichText::new("You can undo this afterwards.").color(pal().muted));
+                        ui.add_space(SPACE_M);
+                        ui.horizontal(|ui| {
+                            let _ = ui.button(t("Cancel"));
+                            confirmed = ui.button(t("Delete")).clicked();
+                        });
+                    },
+                );
+                delete_confirmed = confirmed;
+            }
+
             let doc = &mut self.tabs[active].doc;
             let outcome: Result<Option<String>, String> = match action {
                 PageAction::Rotate(delta) => doc
                     .rotate_pages(&pages, delta)
                     .map(|count| Some(format!("{count} page(s) rotated")))
-                    .map_err(|err| format!("Rotation failed: {err}")),
+                    .map_err(|_| "Could not rotate the pages — try again".to_owned()),
                 PageAction::Blank(mut width, mut height) => {
                     if width <= 0.0 || height <= 0.0 {
                         let (dw, dh) = doc.page_size(last as u32);
@@ -37,7 +64,7 @@ impl YouPdfApp {
                     }
                     doc.insert_blank_page_after(last, width, height)
                         .map(|_| Some(format!("Blank page inserted after page {last}")))
-                        .map_err(|err| format!("Insert failed: {err}"))
+                        .map_err(|_| "Could not insert the pages — try again".to_owned())
                 }
                 PageAction::InsertFile => match rfd::FileDialog::new()
                     .add_filter("PDF", &["pdf"])
@@ -46,7 +73,7 @@ impl YouPdfApp {
                     Some(path) => doc
                         .insert_pages_after(last, &path)
                         .map(|count| Some(format!("{count} page(s) inserted after page {last}")))
-                        .map_err(|err| format!("Insert failed: {err}")),
+                        .map_err(|_| "Could not insert the pages — try again".to_owned()),
                     None => Ok(None),
                 },
                 PageAction::Extract => match rfd::FileDialog::new()
@@ -63,26 +90,28 @@ impl YouPdfApp {
                                 path.file_name().unwrap_or_default().to_string_lossy()
                             ))
                         })
-                        .map_err(|err| format!("Extract failed: {err}")),
+                        .map_err(|_| "Could not extract the pages — try again".to_owned()),
                     None => Ok(None),
                 },
                 PageAction::Duplicate => doc
                     .duplicate_pages(&pages)
                     .map(|count| Some(format!("{count} page(s) duplicated")))
-                    .map_err(|err| format!("Duplicate failed: {err}")),
+                    .map_err(|_| "Could not duplicate the pages — try again".to_owned()),
                 PageAction::Delete => {
-                    if pages.len() >= total {
+                    if !delete_confirmed {
+                        Ok(None)
+                    } else if pages.len() >= total {
                         Err("Keep at least one page".to_owned())
                     } else {
                         doc.delete_pages(&pages)
                             .map(|count| Some(format!("{count} page(s) removed")))
-                            .map_err(|err| format!("Delete failed: {err}"))
+                            .map_err(|_| "Could not delete the pages — try again".to_owned())
                     }
                 }
                 PageAction::Move(from, to) => doc
                     .move_page(from, to)
                     .map(|_| Some(format!("Page {from} moved to position {to}")))
-                    .map_err(|err| format!("Move failed: {err}")),
+                    .map_err(|_| "Could not move the page — try again".to_owned()),
                 PageAction::Properties(_) => Ok(None),
             };
 

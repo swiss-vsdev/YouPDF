@@ -193,7 +193,7 @@ pub(crate) fn panel_action(
         ui.painter().rect_filled(rect, Rounding::same(RADIUS_M), pal().widget_bg);
     } else if resp.hovered() {
         ui.painter()
-            .rect_filled(rect, Rounding::same(RADIUS_M), Color32::from_rgb(0x33, 0x33, 0x33));
+            .rect_filled(rect, Rounding::same(RADIUS_M), pal().hover_bg);
     }
     let color = if selected || resp.hovered() { pal().icon_bright } else { pal().icon };
     draw(ui.painter(), rect.shrink(8.0), color);

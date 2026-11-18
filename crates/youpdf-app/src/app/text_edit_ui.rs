@@ -358,6 +358,9 @@ impl YouPdfApp {
                 }
             }
             if changed > 0 {
+                // Sans snapshot, la prochaine annulation ramènerait à l'état
+                // d'avant le remplacement au lieu de l'annuler.
+                self.mark_document_changed();
                 self.search_index = None;
                 self.run_search(ctx);
             }

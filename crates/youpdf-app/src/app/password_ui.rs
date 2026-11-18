@@ -99,7 +99,8 @@ impl YouPdfApp {
                 },
                 Err(err) => {
                     let mut prompt = prompt;
-                    prompt.value.clear();
+                    // On garde la saisie : un mot de passe mal tapé se corrige
+                    // sans tout retaper.
                     prompt.error = Some(format!("{err}"));
                     self.password_prompt = Some(prompt);
                 }

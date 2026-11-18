@@ -95,7 +95,7 @@ impl YouPdfApp {
 
             if self.replace_open {
                 ui.add_space(SPACE_M);
-                let mut replace_now = false;
+                let mut ask_replace = false;
                 ui.horizontal(|ui| {
                     ui.add_space(12.0);
                     let resp = ui.add_sized(
@@ -103,23 +103,50 @@ impl YouPdfApp {
                         TextEdit::singleline(&mut self.replace_text).hint_text("Replace with"),
                     );
                     if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        replace_now = true;
+                        ask_replace = true;
                     }
                 });
                 ui.add_space(SPACE_M);
                 ui.horizontal(|ui| {
                     ui.add_space(12.0);
                     if ui.button(t("Replace all")).clicked() {
-                        replace_now = true;
+                        ask_replace = true;
                     }
                 });
-                if replace_now {
+                if ask_replace {
+                    // Une réécriture de masse se confirme : le nombre est
+                    // affiché et l'action reste annulable.
+                    let count = self.results.len();
                     let replacement = self.replace_text.clone();
-                    let changed = self.replace_matches(ctx, &replacement);
-                    if changed > 0 {
-                        self.toast(ctx, format!("{changed} replacement(s)"));
-                    } else {
-                        self.toast(ctx, "Nothing replaced");
+                    let mut open = true;
+                    let mut confirmed = false;
+                    self.show_modal(
+                        ctx,
+                        "confirm-replace-all",
+                        "Replace all",
+                        380.0,
+                        &mut open,
+                        |_app, ui| {
+                            ui.label(format!("Replace {count} match(es) in this document?"));
+                            ui.add_space(SPACE_S);
+                            ui.label(
+                                RichText::new("This rewrites page content. You can undo it afterwards.")
+                                    .color(pal().muted),
+                            );
+                            ui.add_space(SPACE_M);
+                            ui.horizontal(|ui| {
+                                let _ = ui.button(t("Cancel"));
+                                confirmed = ui.button(t("Replace all")).clicked();
+                            });
+                        },
+                    );
+                    if confirmed {
+                        let changed = self.replace_matches(ctx, &replacement);
+                        if changed > 0 {
+                            self.toast(ctx, format!("{changed} replacement(s)"));
+                        } else {
+                            self.toast(ctx, "Nothing replaced");
+                        }
                     }
                 }
             }
