@@ -907,22 +907,30 @@ impl YouPdfApp {
                         Some(app.page_label_prefix.clone())
                     };
                     let label = PageLabel::new(prefix, style, app.page_label_start);
-                    let mut labels = get_page_labels(
-                        &app.tabs.get(app.active).unwrap().doc,
-                    )
-                    .unwrap_or_default();
-                    labels.insert(app.page_label_from_page.saturating_sub(1), label);
                     if let Some(tab) = app.tabs.get_mut(app.active) {
-                        let _ = set_page_labels(&mut tab.doc, &labels);
-                        app.mark_document_changed();
-                        app.toast(ctx, "Page labels updated");
+                        let mut labels = get_page_labels(&tab.doc).unwrap_or_default();
+                        labels.insert(app.page_label_from_page.saturating_sub(1), label);
+                        match set_page_labels(&mut tab.doc, &labels) {
+                            Ok(()) => {
+                                app.mark_document_changed();
+                                app.toast(ctx, "Page labels updated");
+                            }
+                            Err(_) => app.toast(ctx, "Could not update page labels — try again"),
+                        }
                     }
                 }
                 if ui.button("Clear all").clicked() {
                     if let Some(tab) = app.tabs.get_mut(app.active) {
-                        let _ = youpdf_core::organize::labels::set_page_labels(&mut tab.doc, &std::collections::BTreeMap::new());
-                        app.mark_document_changed();
-                        app.toast(ctx, "Page labels cleared");
+                        match youpdf_core::organize::labels::set_page_labels(
+                            &mut tab.doc,
+                            &std::collections::BTreeMap::new(),
+                        ) {
+                            Ok(()) => {
+                                app.mark_document_changed();
+                                app.toast(ctx, "Page labels cleared");
+                            }
+                            Err(_) => app.toast(ctx, "Could not clear page labels — try again"),
+                        }
                     }
                 }
             });

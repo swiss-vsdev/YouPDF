@@ -48,13 +48,6 @@ pub struct Turn {
     pub assistant: Option<String>,
 }
 
-/// Historique de conversation persistants.
-#[derive(Debug, Clone, Default)]
-pub struct ConversationHistory {
-    /// Tours de conversation (limité à `MAX_TURNS` pour éviter de grossir le stockage).
-    pub turns: Vec<Turn>,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ChatOptions {
     pub temperature: Option<f32>,

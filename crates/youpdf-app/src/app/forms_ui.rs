@@ -467,14 +467,21 @@ impl YouPdfApp {
         }
         if apply {
             if let Some(idx) = self.form_date_target.take() {
+                let mut applied = false;
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     if let Some(field) = tab.forms.get(idx).cloned() {
-                        let _ = tab.doc.fill_form_field(&field, &self.form_date_value);
-                        tab.forms = tab.doc.read_form_fields();
-                        self.mark_document_changed();
+                        if tab.doc.fill_form_field(&field, &self.form_date_value).is_ok() {
+                            tab.forms = tab.doc.read_form_fields();
+                            self.mark_document_changed();
+                            applied = true;
+                        }
                     }
                 }
-                self.toast(ctx, "Date set".to_string());
+                if applied {
+                    self.toast(ctx, "Date set");
+                } else {
+                    self.toast(ctx, "Could not set the date — try again");
+                }
             }
             self.form_date_open = false;
         }
@@ -510,6 +517,7 @@ impl YouPdfApp {
             self.form_options_target = None;
         }
         if apply {
+            let mut updated = false;
             if let Some(idx) = self.form_options_target.take() {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     if let Some(field) = tab.forms.get(idx).cloned() {
@@ -523,12 +531,18 @@ impl YouPdfApp {
                         if props.default_value.is_empty() {
                             props.default_value = props.options.first().cloned().unwrap_or_default();
                         }
-                        let _ = tab.doc.update_form_field(&field, &props);
-                        tab.forms = tab.doc.read_form_fields();
-                        self.mark_document_changed();
+                        if tab.doc.update_form_field(&field, &props).is_ok() {
+                            tab.forms = tab.doc.read_form_fields();
+                            self.mark_document_changed();
+                            updated = true;
+                        }
                     }
                 }
-                self.toast(ctx, "Options updated".to_string());
+                if updated {
+                    self.toast(ctx, "Options updated");
+                } else {
+                    self.toast(ctx, "Could not update the options — try again");
+                }
             }
             self.form_options_open = false;
         }
@@ -564,15 +578,22 @@ impl YouPdfApp {
             self.form_barcode_target = None;
         }
         if apply {
+            let mut applied = false;
             if let Some(idx) = self.form_barcode_target.take() {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     if let Some(field) = tab.forms.get(idx).cloned() {
-                        let _ = tab.doc.fill_form_field(&field, &self.form_barcode_value);
-                        tab.forms = tab.doc.read_form_fields();
-                        self.mark_document_changed();
+                        if tab.doc.fill_form_field(&field, &self.form_barcode_value).is_ok() {
+                            tab.forms = tab.doc.read_form_fields();
+                            self.mark_document_changed();
+                            applied = true;
+                        }
                     }
                 }
-                self.toast(ctx, "Barcode set".to_string());
+                if applied {
+                    self.toast(ctx, "Barcode set");
+                } else {
+                    self.toast(ctx, "Could not set the barcode — try again");
+                }
             }
             self.form_barcode_open = false;
         }

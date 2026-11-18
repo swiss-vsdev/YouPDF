@@ -484,6 +484,25 @@ impl AiPanel {
         self.settings.providers.iter().find(|p| p.id == id).cloned()
     }
 
+    /// Fournisseur et modèle actifs, ou le message à afficher.
+    fn active_model(&self) -> std::result::Result<(youpdf_ai::ProviderConfig, String), &'static str> {
+        let config = self.active_config().ok_or("Select a provider first.")?;
+        let model = self
+            .settings
+            .active_model
+            .clone()
+            .or_else(|| config.default_model.clone())
+            .ok_or("Choose a model first.")?;
+        Ok((config, model))
+    }
+
+    /// Écriture des réglages : un échec ne doit pas passer inaperçu.
+    fn save_settings(&self) {
+        if let Err(err) = self.settings.save() {
+            tracing::warn!(error = %err, "could not save AI settings");
+        }
+    }
+
     /// Demande la liste des modèles du fournisseur actif.
     fn list_models(&mut self) {
         if !self.enabled() {
@@ -518,18 +537,12 @@ impl AiPanel {
             self.status = Some("Type a question first.".to_string());
             return;
         }
-        let Some(config) = self.active_config() else {
-            self.status = Some("Select a provider first.".to_string());
-            return;
-        };
-        let model = self
-            .settings
-            .active_model
-            .clone()
-            .or_else(|| config.default_model.clone());
-        let Some(model) = model else {
-            self.status = Some("Choose a model first.".to_string());
-            return;
+        let (config, model) = match self.active_model() {
+            Ok(values) => values,
+            Err(message) => {
+                self.status = Some(message.to_string());
+                return;
+            }
         };
 
         let context = ChatContext {
@@ -577,18 +590,12 @@ impl AiPanel {
             self.status = Some("A request is already running.".to_string());
             return;
         }
-        let Some(config) = self.active_config() else {
-            self.status = Some("Select a provider first.".to_string());
-            return;
-        };
-        let model = self
-            .settings
-            .active_model
-            .clone()
-            .or_else(|| config.default_model.clone());
-        let Some(model) = model else {
-            self.status = Some("Choose a model first.".to_string());
-            return;
+        let (config, model) = match self.active_model() {
+            Ok(values) => values,
+            Err(message) => {
+                self.status = Some(message.to_string());
+                return;
+            }
         };
         let target = self.translate_options.target_language.clone();
         let total = doc.page_count();
@@ -701,7 +708,7 @@ impl AiPanel {
             if !enabled {
                 self.disable();
             }
-            let _ = self.settings.save();
+            self.save_settings();
         }
 
         if !self.settings.ai_enabled {
@@ -755,7 +762,7 @@ impl AiPanel {
             self.settings.active_provider = Some(id);
             self.models.clear();
             self.status = None;
-            let _ = self.settings.save();
+            self.save_settings();
         }
 
         // --- Détails du fournisseur actif ---------------------------------
@@ -860,7 +867,7 @@ impl AiPanel {
                             .clicked()
                         {
                             self.settings.active_model = Some(model.id.clone());
-                            let _ = self.settings.save();
+                            self.save_settings();
                         }
                     }
                 });
@@ -868,7 +875,7 @@ impl AiPanel {
 
             if changed {
                 self.settings.providers[index] = config;
-                let _ = self.settings.save();
+                self.save_settings();
             }
 
             // Actions différées : elles empruntent tout `self`.
