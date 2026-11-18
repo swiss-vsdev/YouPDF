@@ -23,10 +23,16 @@ pub fn icon_pill(
 ) -> egui::Response {
     let width = if chevron { 38.0 } else { 30.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 26.0), Sense::click());
+    // ponytail: same capsule rule as `pill_button` — the icon pills in the
+    // mode-tool bar must render identically to the labelled ones.
+    let capsule = Rounding::same(rect.height() / 2.0);
     if primary || selected {
-        ui.painter().rect_filled(rect, Rounding::same(RADIUS_M), pal().accent);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(RADIUS_M), pal().hover_bg);
+        ui.painter().rect_filled(rect, capsule, pal().accent);
+    } else {
+        ui.painter().rect_filled(rect, capsule, pal().widget_bg);
+        if resp.hovered() {
+            ui.painter().rect_filled(rect, capsule, pal().hover_bg);
+        }
     }
     let icon_rect = Rect::from_center_size(
         pos2(rect.min.x + 13.0, rect.center().y),

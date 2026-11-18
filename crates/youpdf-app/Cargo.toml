@@ -37,3 +37,11 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Rastérisation du nom dans « Créer une signature ». `epaint` tire déjà
 # `ab_glyph` pour ses propres polices.
 ab_glyph = "0.2"
+
+# Barre de menu macOS native (9 menus, comme UPDF). `eframe` tire déjà
+# `objc2`/`objc2-app-kit`/`objc2-foundation` 0.5.x / 0.2.2 : on les
+# réutilise pour construire un `NSMenu` réel au lieu d'un bouton `…`.
+[target."cfg(target_os = \"macos\")".dependencies]
+objc2          = "0.5"
+objc2-app-kit  = { version = "0.2", features = ["NSApplication", "NSMenu", "NSMenuItem", "NSResponder", "NSEvent", "NSRunningApplication", "NSCell", "NSWindow", "NSView"] }
+objc2-foundation = "0.2"

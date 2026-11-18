@@ -105,6 +105,35 @@ impl YouPdfApp {
                 ];
                 DIGITS.iter().position(|key| i.key_pressed(*key))
             });
+            // ⌘[ / ⌘] : historique de navigation de page (Go ▸ Back/Forward
+            // to Page). Placé avant le garde `cmd` pour éviter un double test.
+            if !typing && cmd {
+                let (back, forward) = ctx.input(|i| {
+                    (
+                        i.key_pressed(egui::Key::OpenBracket),
+                        i.key_pressed(egui::Key::CloseBracket),
+                    )
+                });
+                if back {
+                    self.step_page_history(-1);
+                    return;
+                }
+                if forward {
+                    self.step_page_history(1);
+                    return;
+                }
+            }
+            // ⌥⌘T : View ▸ Toolbar ▸ Show/Hide Toolbar. Placé avant le garde
+            // `cmd` ci-dessous : le raccourci utilise ⌥, pas ⌘, et il ne doit
+            // pas être avalé par la branche « !cmd → return ».
+            if !typing
+                && ctx.input(|i| i.modifiers.command)
+                && ctx.input(|i| i.modifiers.alt)
+                && ctx.input(|i| i.key_pressed(egui::Key::T))
+            {
+                self.toggle_toolbar();
+                return;
+            }
             if let Some(index) = ctrl_tool {
                 match index {
                     0..=3 => {

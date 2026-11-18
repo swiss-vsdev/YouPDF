@@ -25,6 +25,23 @@ impl YouPdfApp {
             {
                 return;
             }
+            // View ▸ Toolbar : Keep Hidden masque la barre jusqu'à un Show.
+            if self.toolbar_hidden {
+                return;
+            }
+            // View ▸ Toolbar ▸ Scroll Pages Display : la barre se révèle
+            // lorsque le pointeur touche le haut de la fenêtre, même sans
+            // défilement (UPDF 2.5.6). La cible est le bord supérieur de la
+            // fenêtre, pas le bord du canevas : la barre flotte juste sous la
+            // barre de titre.
+            if self.toolbar_visibility == ToolbarVisibility::Scroll && self.toolbar_hidden {
+                if let Some(pos) = ctx.pointer_latest_pos() {
+                    let top_of_window = ctx.screen_rect().min.y;
+                    if pos.y <= top_of_window + TITLE_H + 6.0 {
+                        self.reveal_toolbar();
+                    }
+                }
+            }
             let top = TITLE_H + 8.0;
             // Les barres flottantes sont ancrées au canevas, pas à la fenêtre :
             // le panneau latéral les décale (comme dans la référence).
@@ -498,6 +515,10 @@ impl YouPdfApp {
                                                 action = Some(MenuAction::RemoveProtection);
                                                 ui.close_menu();
                                             }
+                                            if submenu_row(ui, "Security Properties…", None) {
+                                                action = Some(MenuAction::SecurityProperties);
+                                                ui.close_menu();
+                                            }
                                         });
                                         menu_submenu(ui, "Bookmarks", |ui| {
                                             if submenu_row(ui, "Generate bookmarks", None) {
@@ -593,91 +614,223 @@ impl YouPdfApp {
                 self.actions_opened = false;
                 if let Some(action) = action {
                     self.actions_open = false;
-                    match action {
-                        MenuAction::Undo => self.undo(ctx),
-                        MenuAction::Redo => self.redo(ctx),
-                        MenuAction::Save => self.save_active(ctx),
-                        MenuAction::SaveAs => self.save_as(ctx),
-                        MenuAction::Export => self.export_open = true,
-                        MenuAction::ExportText(format) => {
-                            self.export_mode = ExportMode::Text;
-                            self.export_format = format;
-                            self.export_open = true;
-                        }
-                        MenuAction::ExportImage(format) => {
-                            self.export_mode = ExportMode::Image;
-                            self.export_image_format = format;
-                            self.export_open = true;
-                        }
-                        MenuAction::ExportLongImage => {
-                            self.export_mode = ExportMode::LongImage;
-                            self.export_open = true;
-                        }
-                        MenuAction::ExportEmbedded => {
-                            self.export_mode = ExportMode::Embedded;
-                            self.export_open = true;
-                        }
-                        MenuAction::ExportOffice(format) => {
-                            self.export_mode = ExportMode::Office;
-                            self.export_office_format = format;
-                            self.export_open = true;
-                        }
-                        MenuAction::Flatten => self.flatten_annotations(ctx),
-                        MenuAction::Properties => self.props_open = true,
-                        MenuAction::Close => {
-                            let idx = self.active;
-                            self.close_tab(idx);
-                        }
-                        MenuAction::Layout(layout) => self.set_page_layout(ctx, layout),
-                        MenuAction::Fullscreen => self.toggle_fullscreen(ctx),
-                        MenuAction::Watermark => self.watermark_open = true,
-                        MenuAction::HeaderFooter => self.header_footer_open = true,
-                        MenuAction::PageNumbers => {
-                            // Même fenêtre : on préremplit la numérotation.
-                            if self.header_footer.page_numbers.is_none() {
-                                self.header_footer.page_numbers = Some(NumberStyle::Numeric);
-                            }
-                            self.header_footer_open = true;
-                        }
-                        MenuAction::Compress => self.compress_open = true,
-                        MenuAction::Protect => self.protect_open = true,
-                        MenuAction::Crop => self.crop_open = true,
-                        MenuAction::Background => self.background_open = true,
-                        MenuAction::Bates => self.bates_open = true,
-                        MenuAction::Compare => {
-                            self.compare_report = None;
-                            self.compare_open = true;
-                        }
-                        MenuAction::Ocr => self.ocr_open = true,
-                        MenuAction::Create => self.create_open = true,
-                        MenuAction::Print => self.print_active(ctx),
-                        MenuAction::Reveal => self.reveal_active(ctx),
-                        MenuAction::RemoveProtection => self.remove_protection(ctx),
-                        MenuAction::NewBlank => self.new_blank_page(ctx),
-                        MenuAction::FromImages => self.import_images(ctx),
-                        MenuAction::FromOffice => self.import_office(ctx),
-                        MenuAction::Combine => self.combine_active(ctx),
-                        MenuAction::Slideshow => self.enter_slideshow(ctx),
-                        MenuAction::Batch => self.batch_open = true,
-                        MenuAction::Extract => self.extract_open = true,
-                        MenuAction::Preferences => self.prefs_open = true,
-                        MenuAction::AiEnabled => self.ai.open = true,
-                        MenuAction::Conformance(level) => self.conformance_save(ctx, level),
-                        MenuAction::ImagePdf => self.image_pdf_save(ctx),
-                        MenuAction::GenerateOutline => self.generate_bookmarks(ctx),
-                        MenuAction::ClearOutline => self.clear_bookmarks(ctx),
-                        MenuAction::Theme(theme) => {
-                            self.theme = theme;
-                            // Le thème est une préférence persistante : on
-                            // l'enregistre au même endroit que le reste.
-                            self.ai.settings.theme_index = Theme::ALL
-                                .iter()
-                                .position(|candidate| *candidate == theme)
-                                .unwrap_or(0);
-                            let _ = self.ai.settings.save();
-                        }
-                    }
+                    self.dispatch_menu_action(ctx, action);
                 }
+            }
+        }
+
+        pub(super) fn dispatch_menu_action(&mut self, ctx: &egui::Context, action: MenuAction) {
+            match action {
+                MenuAction::Undo => self.undo(ctx),
+                MenuAction::Redo => self.redo(ctx),
+                MenuAction::Save => self.save_active(ctx),
+                MenuAction::SaveAs => self.save_as(ctx),
+                MenuAction::Export => self.export_open = true,
+                MenuAction::ExportText(format) => {
+                    self.export_mode = ExportMode::Text;
+                    self.export_format = format;
+                    self.export_open = true;
+                }
+                MenuAction::ExportImage(format) => {
+                    self.export_mode = ExportMode::Image;
+                    self.export_image_format = format;
+                    self.export_open = true;
+                }
+                MenuAction::ExportLongImage => {
+                    self.export_mode = ExportMode::LongImage;
+                    self.export_open = true;
+                }
+                MenuAction::ExportEmbedded => {
+                    self.export_mode = ExportMode::Embedded;
+                    self.export_open = true;
+                }
+                MenuAction::ExportOffice(format) => {
+                    self.export_mode = ExportMode::Office;
+                    self.export_office_format = format;
+                    self.export_open = true;
+                }
+                MenuAction::Flatten => self.flatten_annotations(ctx),
+                MenuAction::Properties => self.props_open = true,
+                MenuAction::Close => {
+                    let idx = self.active;
+                    self.close_tab(idx);
+                }
+                MenuAction::Layout(layout) => self.set_page_layout(ctx, layout),
+                MenuAction::Fullscreen => self.toggle_fullscreen(ctx),
+                MenuAction::Watermark => self.watermark_open = true,
+                MenuAction::HeaderFooter => self.header_footer_open = true,
+                MenuAction::PageNumbers => {
+                    // Même fenêtre : on préremplit la numérotation.
+                    if self.header_footer.page_numbers.is_none() {
+                        self.header_footer.page_numbers = Some(NumberStyle::Numeric);
+                    }
+                    self.header_footer_open = true;
+                }
+                MenuAction::Compress => self.compress_open = true,
+                MenuAction::Protect => self.protect_open = true,
+                MenuAction::Crop => self.crop_open = true,
+                MenuAction::Background => self.background_open = true,
+                MenuAction::Bates => self.bates_open = true,
+                MenuAction::Compare => {
+                    self.compare_report = None;
+                    self.compare_open = true;
+                }
+                MenuAction::Ocr => self.ocr_open = true,
+                MenuAction::Create => self.create_open = true,
+                MenuAction::Print => self.print_active(ctx),
+                MenuAction::Reveal => self.reveal_active(ctx),
+                MenuAction::RemoveProtection => self.remove_protection(ctx),
+                MenuAction::SecurityProperties => self.security_props_open = true,
+                MenuAction::NewBlank => self.new_blank_page(ctx),
+                MenuAction::FromImages => self.import_images(ctx),
+                MenuAction::FromOffice => self.import_office(ctx),
+                MenuAction::Combine => self.combine_active(ctx),
+                MenuAction::Slideshow => self.enter_slideshow(ctx),
+                MenuAction::Batch => self.batch_open = true,
+                MenuAction::Extract => self.extract_open = true,
+                MenuAction::Preferences => self.prefs_open = true,
+                MenuAction::AiEnabled => self.ai.open = true,
+                MenuAction::Conformance(level) => self.conformance_save(ctx, level),
+                MenuAction::ImagePdf => self.image_pdf_save(ctx),
+                MenuAction::GenerateOutline => self.generate_bookmarks(ctx),
+                MenuAction::ClearOutline => self.clear_bookmarks(ctx),
+                MenuAction::Theme(theme) => {
+                    self.theme = theme;
+                    // Le thème est une préférence persistante : on
+                    // l'enregistre au même endroit que le reste.
+                    self.ai.settings.theme_index = Theme::ALL
+                        .iter()
+                        .position(|candidate| *candidate == theme)
+                        .unwrap_or(0);
+                    let _ = self.ai.settings.save();
+                }
+                MenuAction::ToolbarKeep => self.set_toolbar_visibility(0),
+                MenuAction::ToolbarScroll => self.set_toolbar_visibility(1),
+                MenuAction::ToolbarHidden => self.set_toolbar_visibility(2),
+                MenuAction::ToolbarShow => self.toggle_toolbar(),
+            }
+        }
+
+        /// Aiguille les commandes de la barre de menus macOS native. Les codes
+        /// du `MenuAction` passent par `code_to_action`/`dispatch_menu_action` ;
+        /// ceux-là portent sur la navigation, le zoom, le presse-papiers et les
+        /// onglets, qui n'ont pas d'`MenuAction` dédiée.
+        pub(super) fn dispatch_native_menu(&mut self, ctx: &egui::Context, code: isize) {
+            match code {
+                // View : zoom.
+                40 => self.zoom_by(1.1),
+                41 => self.zoom_by(1.0 / 1.1),
+                42 => self.set_zoom(Some(1.0)),
+                43 => self.set_zoom_mode(ZoomMode::FitWidth),
+                44 => self.set_zoom_mode(ZoomMode::FitPage),
+                45 => self.toggle_fullscreen(ctx),
+                // Edit : presse-papiers (texte de la page).
+                32 | 33 => self.copy_selection(ctx),
+                36 => self.select_page_text(),
+                // File : nouveau document.
+                10 => self.new_blank_page(ctx),
+                11 => self.import_images(ctx),
+                12 => self.import_office(ctx),
+                13 => self.open_dialog(),
+                // Go : navigation de page (1-based, comme `self.jump`).
+                100 => self.jump = Some(1),
+                101 => self.jump_page_relative(-1),
+                102 => self.jump_page_relative(1),
+                103 => self.jump = Some(self.active_total() as usize),
+                104 => self.panel = Some(Panel::Search),
+                // Go ▸ Back to Page / Forward to Page : historique de navigation.
+                105 => self.step_page_history(-1),
+                106 => self.step_page_history(1),
+                // View ▸ Page Display ▸ Show Cover Page in Two Page View :
+                // bascule, comme un case à cocher. L'état est propagé à
+                // `menu::set_cover_state` pour que `validateMenuItem:` le
+                // reflète au prochain ouverture du menu.
+                120 => {
+                    self.page_display.show_cover_page = !self.page_display.show_cover_page;
+                    menu::set_cover_state(self.page_display.show_cover_page);
+                }
+                // View ▸ Toolbar : radio Keep / Scroll / Hidden + Show/Hide.
+                // Les trois premiers sont des modes, le quatrième une bascule
+                // (⌥⌘T) qui commute l'état courant. `validateMenuItem:` lit
+                // `menu::toolbar_mode()` pour cocher le bon bouton.
+                121 => self.set_toolbar_visibility(0),
+                122 => self.set_toolbar_visibility(1),
+                123 => self.set_toolbar_visibility(2),
+                124 => self.toggle_toolbar(),
+                // Tab : navigation d'onglets.
+                110 => self.activate_tab((self.active + 1) % self.tabs.len().max(1)),
+                111 => {
+                    let n = self.tabs.len().max(1);
+                    self.activate_tab((self.active + n - 1) % n);
+                }
+                _ => {}
+            }
+        }
+
+        /// Décale la page courante de `delta` pages et déclenche le défilement.
+        fn jump_page_relative(&mut self, delta: isize) {
+            let total = self.active_total();
+            let cur = self.tabs.get(self.active).map_or(1, |t| t.page) as isize;
+            let target = (cur + delta).clamp(1, total as isize) as usize;
+            self.jump = Some(target);
+        }
+
+        /// View ▸ Toolbar ▸ Keep / Scroll / Hidden (tags 121–123). Coche le bon
+        /// bouton radio dans le menu et réinitialise le masquage.
+        fn set_toolbar_visibility(&mut self, mode: u8) {
+            self.toolbar_visibility = match mode {
+                1 => ToolbarVisibility::Scroll,
+                2 => ToolbarVisibility::Hidden,
+                _ => ToolbarVisibility::Keep,
+            };
+            self.toolbar_hidden = false;
+            menu::set_toolbar_mode(self.toolbar_visibility as u8);
+        }
+
+        /// View ▸ Toolbar ▸ Show/Hide Toolbar (tag 124, ⌥⌘T) : commute l'état
+        /// courant. Keep ↔ Hidden ; Scroll repasse à Keep si cachée.
+        pub(super) fn toggle_toolbar(&mut self) {
+            self.toolbar_hidden = !self.toolbar_hidden;
+            if self.toolbar_hidden {
+                self.toolbar_visibility = ToolbarVisibility::Keep;
+            } else if self.toolbar_visibility == ToolbarVisibility::Hidden {
+                self.toolbar_visibility = ToolbarVisibility::Keep;
+            }
+            menu::set_toolbar_mode(self.toolbar_visibility as u8);
+        }
+
+        /// Repose la barre au défilement vers le haut (Scroll Pages Display).
+        pub(super) fn reveal_toolbar(&mut self) {
+            if self.toolbar_visibility == ToolbarVisibility::Scroll {
+                self.toolbar_hidden = false;
+            }
+        }
+
+        /// Enregistre la page courante de l'onglet actif (une fois par trame).
+        pub(super) fn record_page_history(&mut self) {
+            if let Some(tab) = self.tabs.get_mut(self.active) {
+                tab.record_page_visit();
+            }
+        }
+
+        /// Recule/avance dans l'historique de page, puis déclenche le défilement
+        /// vers la page atteinte.
+        pub(super) fn step_page_history(&mut self, delta: isize) {
+            let target = self
+                .tabs
+                .get_mut(self.active)
+                .and_then(|tab| tab.step_page_visit(delta));
+            if let Some(page) = target {
+                self.jump = Some(page);
+            }
+        }
+
+        /// Sélectionne l'onglet `index` (borné), comme un clic sur sa pastille.
+        fn activate_tab(&mut self, index: usize) {
+            if index < self.tabs.len() {
+                self.active = index;
+                self.last_active = index;
+                self.reset_document_session();
             }
         }
 

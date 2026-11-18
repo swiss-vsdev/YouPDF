@@ -73,6 +73,8 @@ mod measure_ui;
 mod password_ui;
 mod icons;
 mod history;
+#[cfg(target_os = "macos")]
+mod menu;
 #[allow(unused_imports)]
 pub use icons::*;
 
@@ -175,8 +177,6 @@ const PAGE_SPACING: f32 = 16.0;
 const CARD_W: f32 = 160.0;
 const CARD_H: f32 = 200.0;
 const GAP: f32 = 12.0;
-/// Raccourcis d'outils de l'écran d'accueil.
-const CELL_W: f32 = 160.0;
 const CELL_H: f32 = 64.0;
 
 // --------------------------------------------------------------------------
@@ -195,6 +195,27 @@ enum PageLayout {
     TwoPages,
     /// Première page seule, puis deux par deux, comme un livre ouvert.
     Cover,
+}
+
+/// Affiche la page de couverture seule en mode deux pages (View ▸ Page Display
+/// ▸ Show Cover Page in Two Page View). Quand elle est active, la première page
+/// occupe un rangée à part et les suivantes s'apparient à partir de la page 2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+struct PageDisplaySettings {
+    pub show_cover_page: bool,
+}
+
+/// Affichage de la barre d'outils flottante (View ▸ Toolbar, UPDF 2.5.6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum ToolbarVisibility {
+    /// Toujours visible.
+    #[default]
+    Keep,
+    /// Masquée au défilement vers le bas, réapparaît vers le haut ou quand le
+    /// pointeur remonte en haut de la fenêtre.
+    Scroll,
+    /// Masquée jusqu'à View ▸ Toolbar ▸ Show ou ⌥⌘T.
+    Hidden,
 }
 
 /// Affichage d'une comparaison de deux documents.
@@ -302,6 +323,8 @@ enum MenuAction {
     Reveal,
     /// Enlève la protection par mot de passe (copie déchiffrée).
     RemoveProtection,
+    /// Ouvre la fenêtre « Security Properties » (matrice des permissions).
+    SecurityProperties,
     /// Nouveau document d'une page vierge.
     NewBlank,
     /// Nouveau document à partir d'un fichier Office (.docx/.xlsx/.pptx).
@@ -328,6 +351,15 @@ enum MenuAction {
     ClearOutline,
     /// Change le thème de l'interface.
     Theme(Theme),
+    /// View ▸ Toolbar ▸ Keep Display : la barre est toujours visible.
+    ToolbarKeep,
+    /// View ▸ Toolbar ▸ Scroll Pages Display : masquée au défilement, révélée
+    /// vers le haut ou quand le pointeur remonte en haut de la fenêtre.
+    ToolbarScroll,
+    /// View ▸ Toolbar ▸ Keep Hidden : masquée jusqu'à Show/Hide Toolbar.
+    ToolbarHidden,
+    /// View ▸ Toolbar ▸ Show/Hide Toolbar (⌥⌘T) : bascule l'état courant.
+    ToolbarShow,
 }
 
 /// Action demandée depuis le menu contextuel d'un onglet.
@@ -358,7 +390,16 @@ fn moved_active(active: usize, from: usize, pos: usize) -> usize {
 
 /// Répartit les pages en rangées selon la disposition choisie. Chaque rangée
 /// occupe une ligne du canevas et contient une ou deux pages.
-fn page_layout_rows(layout: PageLayout, total: u32, current: u32) -> Vec<Vec<u32>> {
+///
+/// `show_cover_page` s'applique au mode deux pages (View ▸ Page Display ▸ Show
+/// Cover Page in Two Page View) : la première page occupe une rangée à part et
+/// les suivantes s'apparient à partir de la page 2, comme en mode « livre ».
+fn page_layout_rows(
+    layout: PageLayout,
+    total: u32,
+    current: u32,
+    show_cover_page: bool,
+) -> Vec<Vec<u32>> {
     if total == 0 {
         return Vec::new();
     }
@@ -379,6 +420,11 @@ fn page_layout_rows(layout: PageLayout, total: u32, current: u32) -> Vec<Vec<u32
     match layout {
         PageLayout::Single => vec![vec![current.clamp(1, total)]],
         PageLayout::Continuous => (1..=total).map(|page| vec![page]).collect(),
+        PageLayout::TwoPages if show_cover_page => {
+            let mut rows = vec![vec![1]];
+            rows.extend(pairs(2));
+            rows
+        }
         PageLayout::TwoPages => pairs(1),
         PageLayout::Cover => {
             let mut rows = vec![vec![1]];
@@ -897,6 +943,11 @@ struct Tab {
     title: String,
     /// Page courante (1-indexée).
     page: usize,
+    /// Historique de navigation de page (1-indexé) pour Go ▸ Back/Forward.
+    /// `page_history_pos` indexe l'entrée courante ; les entrées après sont le
+    /// « futur » qu'on coupe dès qu'on visite une nouvelle page.
+    page_history: Vec<usize>,
+    page_history_pos: usize,
     /// `None` = ajustement automatique (voir `zoom_fit_page`).
     zoom: Option<f32>,
     /// Vrai quand l'ajustement automatique garde toute la page visible.
@@ -966,6 +1017,8 @@ impl Tab {
             path,
             title,
             page: 1,
+            page_history: vec![1],
+            page_history_pos: 0,
             zoom: None,
             zoom_fit_page: true,
             cache: HashMap::new(),
@@ -993,6 +1046,34 @@ impl Tab {
 
     fn total(&self) -> usize {
         self.doc.page_count()
+    }
+
+    /// Enregistre la page courante si elle diffère de l'entrée courante.
+    /// Appelé une fois par trame : couvre tous les changements de page (molette,
+    /// clic, vignettes, signets, liens, recherche…) sans toucher chaque site.
+    fn record_page_visit(&mut self) {
+        let page = self.page;
+        if self.page_history.get(self.page_history_pos) == Some(&page) {
+            return;
+        }
+        // Nouvelle visite après un retour : le « futur » est remplacé, comme
+        // dans l'historique d'un navigateur.
+        self.page_history.truncate(self.page_history_pos + 1);
+        self.page_history.push(page);
+        self.page_history_pos = self.page_history.len() - 1;
+    }
+
+    /// Recule (`delta < 0`) ou avance (`delta > 0`) dans l'historique de page.
+    /// Retourne la page cible, ou `None` si on est à une extrémité.
+    fn step_page_visit(&mut self, delta: isize) -> Option<usize> {
+        let next = self.page_history_pos as isize + delta;
+        if next < 0 || next as usize >= self.page_history.len() {
+            return None;
+        }
+        self.page_history_pos = next as usize;
+        let page = self.page_history[self.page_history_pos];
+        self.page = page;
+        Some(page)
     }
 
     /// Le rendu en cache n'est plus d'actualité : les bitmaps et la couleur de
@@ -1192,6 +1273,8 @@ pub struct YouPdfApp {
     compress_estimate: Option<(usize, usize)>,
     /// Fenêtre « Protéger » et ses réglages.
     protect_open: bool,
+    /// Fenêtre « Security Properties » (matrice des permissions).
+    security_props_open: bool,
     protect: EncryptionOptions,
     /// Fenêtre « Recadrage » et ses marges.
     crop_open: bool,
@@ -1298,6 +1381,8 @@ pub struct YouPdfApp {
     measure_known: f32,
     /// Longueur en points du dernier tracé, base de l'étalonnage.
     measure_last_len: Option<f32>,
+    /// Libellé personnalisé ajouté au prochain tracé de mesure.
+    measure_label: Option<String>,
     /// Fenêtre « Extraire les données » et son résultat.
     extract_open: bool,
     extract_tables: Vec<ExtractedTable>,
@@ -1439,6 +1524,7 @@ pub struct YouPdfApp {
     /// Largeur courante du panneau latéral (redimensionnable, 180–450 pt).
     panel_w: f32,
     page_layout: PageLayout,
+    page_display: PageDisplaySettings,
     /// Plein écran natif demandé par le menu `…`.
     fullscreen: bool,
     /// Le menu `…` vient d'être ouvert dans cette trame (le clic qui l'ouvre
@@ -1505,6 +1591,10 @@ pub struct YouPdfApp {
     /// Nettoyer les métadonnées en même temps que le caviardage.
     redact_sanitize: bool,
     redact_code_sets: std::collections::HashSet<usize>,
+    /// Reproduire chaque marque sur toutes les pages du document.
+    redact_repeat_across_pages: bool,
+    /// Réduire le corps du texte superposé pour tenir dans la zone.
+    redact_auto_size: bool,
     /// Champ de formulaire sélectionné et saisie en cours.
     form_edit: Option<(usize, String)>,
     /// Brouillon des propriétés du champ sélectionné.
@@ -1541,6 +1631,10 @@ pub struct YouPdfApp {
     form_data_format: FormDataFormat,
     /// Fond du canevas choisi dans Aspect.
     canvas_style: usize,
+    /// Mode d'affichage de la barre d'outils flottante (View ▸ Toolbar).
+    toolbar_visibility: ToolbarVisibility,
+    /// Vrai quand la barre est effectivement masquée (mode Scroll/Hidden).
+    toolbar_hidden: bool,
     /// Ombre portée sous les pages.
     page_shadow: bool,
     /// Teinte d'affichage des pages : indice dans `PAGE_TINTS` (0 = aucune).
@@ -1699,6 +1793,7 @@ impl YouPdfApp {
             compress_extras: CompressionExtras::default(),
             compress_estimate: None,
             protect_open: false,
+            security_props_open: false,
             protect: EncryptionOptions::default(),
             crop_open: false,
             crop: CropMargins::default(),
@@ -1761,6 +1856,7 @@ impl YouPdfApp {
             measure_unit: "in".to_owned(),
             measure_known: 1.0,
             measure_last_len: None,
+            measure_label: None,
             extract_open: false,
             extract_tables: Vec::new(),
             extract_pairs: Vec::new(),
@@ -1837,6 +1933,7 @@ impl YouPdfApp {
             ai_doc_tab: None,
             ai_doc_text: String::new(),
             page_layout: PageLayout::default(),
+            page_display: PageDisplaySettings::default(),
             panel_w: PANEL_W,
             fullscreen: false,
             actions_opened: false,
@@ -1871,10 +1968,14 @@ impl YouPdfApp {
             edit_text: None,
             redact_sanitize: true,
             redact_code_sets: std::collections::HashSet::new(),
+            redact_repeat_across_pages: false,
+            redact_auto_size: false,
             form_edit: None,
             form_props: None,
             form_data_format: FormDataFormat::Fdf,
             canvas_style: 0,
+            toolbar_visibility: ToolbarVisibility::default(),
+            toolbar_hidden: false,
             page_shadow: true,
             page_tint: 0,
             page_border: false,
@@ -1944,6 +2045,19 @@ impl YouPdfApp {
         if let Ok(mode) = std::env::var("YOUPDF_MODE") {
             app.mode = mode.parse::<usize>().ok().filter(|m| *m < MODES.len());
         }
+
+        #[cfg(target_os = "macos")]
+        {
+            // Installe la barre des menus macOS native. On ne remplace PAS
+            // le délégué de l'application : winit/eframe en est le délégué et a
+            // besoin de recevoir les événements (sinon panic « a delegate was
+            // not configured » dans la boucle d'événements). Le délégué YouPDF
+            // est retenu dans un `static` pour servir de cible aux actions.
+            if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+                menu::install_menu(mtm);
+            }
+        }
+
         app
     }
 
@@ -2090,7 +2204,25 @@ impl eframe::App for YouPdfApp {
             self.presenter_window(ctx);
             return;
         }
+        // Enregistre la page atteinte à la trame précédente, avant d'appliquer
+        // les raccourcis : les sauts Back/Forward positionnent déjà le curseur,
+        // ils ne doivent donc pas créer une nouvelle entrée.
+        self.record_page_history();
         self.shortcuts(ctx);
+        #[cfg(target_os = "macos")]
+        {
+            // Commandes issues de la barre de menus macOS native.
+            for code in menu::take_pending() {
+                match menu::code_to_action(code) {
+                    Some(action) => self.dispatch_menu_action(ctx, action),
+                    None => self.dispatch_native_menu(ctx, code),
+                }
+            }
+            // L'état de la touche de couverture (case à cocher) est demandé
+            // par AppKit à chaque ouverture du menu, et le délégué n'a pas
+            // accès à `YouPdfApp`. On le propage une fois par trame.
+            menu::set_cover_state(self.page_display.show_cover_page);
+        }
         self.autosave_tick(ctx);
         self.title_bar(ctx);
         self.rail(ctx);
@@ -2121,6 +2253,7 @@ impl eframe::App for YouPdfApp {
         self.header_footer_window(ctx);
         self.compress_window(ctx);
         self.protect_window(ctx);
+        self.security_properties_window(ctx);
         self.prefs_window(ctx);
         self.crop_window(ctx);
         self.tile_split_window(ctx);
@@ -2305,6 +2438,8 @@ mod tests {
             path: None,
             title: "test".to_owned(),
             page: 1,
+            page_history: vec![1],
+            page_history_pos: 0,
             zoom: None,
             zoom_fit_page: true,
             cache: HashMap::new(),
@@ -2328,6 +2463,28 @@ mod tests {
             pinned: false,
             protected: false,
         }
+    }
+
+    #[test]
+    fn page_history_back_forward_and_branch() {
+        let mut tab = un_onglet_vide();
+        tab.record_page_visit(); // page 1, point de départ
+        tab.page = 3;
+        tab.record_page_visit();
+        tab.page = 7;
+        tab.record_page_visit();
+        assert_eq!(tab.page_history, vec![1, 3, 7]);
+        assert_eq!(tab.step_page_visit(-1), Some(3));
+        assert_eq!(tab.page, 3);
+        assert_eq!(tab.step_page_visit(-1), Some(1));
+        assert_eq!(tab.step_page_visit(-1), None); // début de l'historique
+        assert_eq!(tab.step_page_visit(1), Some(3));
+        // Une nouvelle page après un retour coupe le « futur ».
+        tab.page = 5;
+        tab.record_page_visit();
+        assert_eq!(tab.page_history, vec![1, 3, 5]);
+        assert_eq!(tab.step_page_visit(1), None);
+        assert_eq!(tab.step_page_visit(-1), Some(3));
     }
 
     /// Un nouveau rendu du même palier réécrit la texture existante : même
@@ -2426,7 +2583,7 @@ mod tests {
                 PageLayout::TwoPages,
                 PageLayout::Cover,
             ] {
-                let rows = page_layout_rows(layout, total, 3);
+                let rows = page_layout_rows(layout, total, 3, false);
                 let pages = cachet(&rows);
                 assert_eq!(
                     pages.len(),
@@ -2452,23 +2609,42 @@ mod tests {
     #[test]
     fn cover_pairs_pages_after_the_first() {
         assert_eq!(
-            page_layout_rows(PageLayout::Cover, 5, 1),
+            page_layout_rows(PageLayout::Cover, 5, 1, false),
             vec![vec![1], vec![2, 3], vec![4, 5]]
         );
         assert_eq!(
-            page_layout_rows(PageLayout::TwoPages, 5, 1),
+            page_layout_rows(PageLayout::TwoPages, 5, 1, false),
             vec![vec![1, 2], vec![3, 4], vec![5]]
         );
         assert_eq!(
-            page_layout_rows(PageLayout::Continuous, 3, 2),
+            page_layout_rows(PageLayout::Continuous, 3, 2, false),
             vec![vec![1], vec![2], vec![3]]
         );
         assert_eq!(
-            page_layout_rows(PageLayout::Single, 3, 9),
+            page_layout_rows(PageLayout::Single, 3, 9, false),
             vec![vec![3]],
             "la page courante est ramenée dans les bornes"
         );
-        assert!(page_layout_rows(PageLayout::Continuous, 0, 1).is_empty());
+        assert!(page_layout_rows(PageLayout::Continuous, 0, 1, false).is_empty());
+    }
+
+    /// La touche « Show Cover Page in Two Page View » (UPDF 2.5.6) fait de
+    /// la première page une page seule, puis appariée à partir de la page 2.
+    #[test]
+    fn cover_page_toggle_in_two_pages() {
+        assert_eq!(
+            page_layout_rows(PageLayout::TwoPages, 5, 1, true),
+            vec![vec![1], vec![2, 3], vec![4, 5]]
+        );
+        assert_eq!(
+            page_layout_rows(PageLayout::TwoPages, 5, 1, false),
+            vec![vec![1, 2], vec![3, 4], vec![5]]
+        );
+        // Une page de plus : la dernière page est seule, comme un livre.
+        assert_eq!(
+            page_layout_rows(PageLayout::TwoPages, 6, 1, true),
+            vec![vec![1], vec![2, 3], vec![4, 5], vec![6]]
+        );
     }
 
     /// Bloc de texte de test : rectangle et corps suffisent.

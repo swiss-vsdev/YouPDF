@@ -632,7 +632,7 @@ impl YouPdfApp {
                 .order(Order::Foreground)
                 .show(ctx, |ui| {
                     Frame::none()
-                        .fill(Color32::from_rgba_unmultiplied(0x28, 0x28, 0x28, 0xF2))
+                        .fill(youpdf_shared::theme::page_border())
                         .rounding(Rounding::same(RADIUS_L))
                         .inner_margin(Margin::symmetric(12.0, 6.0))
                         .show(ui, |ui| {

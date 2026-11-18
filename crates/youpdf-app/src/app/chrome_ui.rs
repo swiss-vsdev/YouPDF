@@ -1,5 +1,11 @@
 //! Méthodes de `YouPdfApp` extraites de `app.rs` (panel chrome_ui).
 
+/// Réservation pour les feux de circulation macOS (fermer / minimiser /
+/// plein écran). Mesurée à 1× : trois boutons de 12 px séparés de 8 px,
+/// encadrés d'un bord de 7 px — le dernier bouton s'arrête à 59 px, et le
+/// hit-zone s'étire jusqu'à 78 px. La valeur est un constant mesuré, pas
+/// un guess : `title_bar` la reserve avant de poser le premier outil.
+pub(super) const TRAFFIC_LIGHT_INSET: f32 = 78.0;
 
 use super::*;
 
@@ -18,7 +24,7 @@ impl YouPdfApp {
                     }
 
                     ui.horizontal_centered(|ui| {
-                        ui.add_space(78.0); // place des feux de circulation natifs
+                        ui.add_space(TRAFFIC_LIGHT_INSET); // place des feux de circulation natifs
 
                         let home = icon_button(ui, 30.0, 28.0, self.home_open, icon_home);
                         if home.clicked() {
@@ -66,7 +72,7 @@ impl YouPdfApp {
                                 ui.painter().rect_filled(
                                     rect,
                                     Rounding::same(RADIUS_L),
-                                    Color32::from_rgb(0x33, 0x33, 0x33),
+                                    youpdf_shared::theme::panel_hover(),
                                 );
                             }
                             if dragging.is_some() && resp.contains_pointer() {
@@ -94,7 +100,7 @@ impl YouPdfApp {
                                     ui.painter().rect_filled(
                                         x_rect,
                                         Rounding::same(RADIUS_S),
-                                        Color32::from_rgb(0x4A, 0x4A, 0x4A),
+                                        youpdf_shared::theme::panel_hover(),
                                     );
                                 }
                                 icon_close(
@@ -239,7 +245,7 @@ impl YouPdfApp {
                                     ui.painter().rect_filled(
                                         rect,
                                         Rounding::same(RADIUS_M),
-                                        Color32::from_rgb(0x33, 0x33, 0x33),
+                                        youpdf_shared::theme::panel_hover(),
                                     );
                                 }
                                 icon_grid(
@@ -261,7 +267,7 @@ impl YouPdfApp {
                                     ui.painter().rect_filled(
                                         rect,
                                         Rounding::same(RADIUS_M),
-                                        Color32::from_rgb(0x33, 0x33, 0x33),
+                                        youpdf_shared::theme::panel_hover(),
                                     );
                                 }
                                 let active = self.search_case
