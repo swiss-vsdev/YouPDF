@@ -117,3 +117,21 @@ pub fn build_provider(config: &ProviderConfig) -> Result<Arc<dyn AiProvider>> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::http_error;
+
+    #[test]
+    fn erreur_http_ne_divulgue_pas_le_corps() {
+        let err = http_error(
+            "https://provider.example/v1/chat/completions",
+            reqwest::StatusCode::BAD_GATEWAY,
+            "internal token SECRET_BODY_1234",
+        )
+        .to_string();
+        assert!(err.contains("502"), "{err}");
+        assert!(!err.contains("SECRET_BODY_1234"), "{err}");
+        assert!(err.contains("Check the provider settings"), "{err}");
+    }
+}

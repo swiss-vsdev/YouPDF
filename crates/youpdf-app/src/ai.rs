@@ -1189,8 +1189,27 @@ fn task_label(task: AiTask) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_page_defects, PageDefect};
+    use super::{detect_page_defects, AiPanel, PageDefect};
+    use youpdf_ai::AppSettings;
     use youpdf_core::blank_document;
+
+    /// Interrupteur éteint : aucune demande ne doit partir, même si une
+    /// méthode de requête est appelée directement (hors du panneau).
+    #[test]
+    fn sans_reseau_quand_ia_desactivee() {
+        let mut panel = AiPanel::with_settings(AppSettings::default());
+        assert!(!panel.enabled());
+
+        panel.list_models();
+        assert!(panel.requests.is_none(), "list_models a ouvert un canal");
+        panel.submit("question", None, None);
+        assert!(panel.requests.is_none(), "submit a ouvert un canal");
+        assert!(panel.turns.is_empty(), "submit a ajouté un tour sans envoi");
+        assert_eq!(
+            panel.status.as_deref(),
+            Some("AI is off. Turn it on first.")
+        );
+    }
 
     /// Page sans texte = Blank, page hors table = Invalid, format différent de
     /// la référence = MismatchedDimensions.
