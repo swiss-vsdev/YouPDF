@@ -2,9 +2,11 @@
 
 *Based on: docs/updf-parity-visual-and-feature.md*
 
-## ⚠️ AUDIT SUMMARY
+## AUDIT SUMMARY
 
-Most parity gaps from the plan remain **unchecked** (not implemented). The waves infrastructure (commit `1e550459`) is landed, but many individual feature items still need implementation.
+Waves 0–5 and the Tier 1/2 round have **landed** (HEAD `e8b3a8ea`). The per-feature
+PARTIAL / 42 MISSING / 1 UNKNOWN across 118 feature families**. Remaining gaps are the
+appearance-only diffs in `docs/visual-parity.md` and the Tier 2/3 backlog in `docs/GAP.md`.
 
 ---
 
@@ -51,8 +53,8 @@ Most parity gaps from the plan remain **unchecked** (not implemented). The waves
 
 | Item | Status |
 |------|--------|
-| **Conversation history:** Persistence of chat turns (`Turn` struct) | ✅ **Added** `Turn` struct + `ConversationHistory` in `message.rs` |
-| **Suggested questions:** Populate based on context/document | ✅ **Added** `suggested_questions()` function in `tasks.rs` |
+| **Conversation history:** Persistence of chat turns (`Turn` struct) | ⚠️ Partial — `Turn` remains for the in-memory journal; `ConversationHistory` was removed in Phase 3 (never used) |
+| **Suggested questions:** Populate based on context/document | ❌ Removed in Phase 3 — `suggested_questions()` was never called by the UI |
 | UI Rendering: Markdown + LaTeX rendering in chat responses | ⚠️ Partial — basic text rendering works |
 | Attachment picker: `ChatPagePicker` wiring | ⚠️ Not found |
 | **Advanced AI features** | |
@@ -77,14 +79,14 @@ Most parity gaps from the plan remain **unchecked** (not implemented). The waves
 | **Organize/Duplicate pages** | ✅ **Added** UI button in organize toolbar (calls merge function) |
 | **Organize/Page labels (/PageLabels reader/writer)** | ✅ **DONE** (`labels.rs` — full implementation) |
 | **Organize/Page resize** | ✅ **DONE** (`organize/resize.rs` + `pages_ui.rs` dialog) |
-| Decor: AI-generated watermarks, PDF-file watermarks, rotation randomness, template/starred presets | ☐ |
+| Decor: AI-generated watermarks, PDF-file watermarks, rotation randomness, template/starred presets | ⚠️ **AI-generated ☐**; **PDF-file ✅, rotation randomness ✅, template/starred ✅** (Wave 5, `e8b3a8ea`) |
 | **Bates: Interactive (non-batch) Bates tool** | ✅ Already implemented in `pages_ui.rs` `bates_window()` |
 
 ### 3.4 Security & Export — GAP: LOW
 | Item | Status |
 |------|--------|
-| **Security Properties Matrix: Read-only view of permission matrix** | ⚠️ Partial — `protect/permissions.rs` + UI checkboxes in `pages_ui.rs` exist |
-| **Export: Validate PDF/A (ICC embedding), Office import (.docx/.xlsx/.pptx)** | ☐ |
+| **Security Properties Matrix: Read-only view of permission matrix** | ✅ **DONE** — `Protect ▸ Security Properties…` decodes `/Encrypt` `/P` matrix (`protect/permissions.rs` + `pages_ui.rs`) |
+| **Export: Validate PDF/A (ICC embedding), Office import (.docx/.xlsx/.pptx)** | ⚠️ **Office import ✅ done** (`soffice`); **Validating PDF/A ☐** (Tier 3) |
 | **Flattening: Separate flattening for watermarks and cropped pages** | ☐ |
 
 ### 3.5 Annotate Tools — GAP: LOW
@@ -102,10 +104,11 @@ Most parity gaps from the plan remain **unchecked** (not implemented). The waves
 | Wave | Status |
 |------|--------|
 | **Wave 0 — Collision Prep** | ✅ All items done (label/mod.rs, capture/lib.rs, i18n freeze) |
-| **Wave 1 — Core Engine Gaps** | ✅ A1 labels, A2 resize/exchange, A3 links, A4 redact codesets, A5 word count, A6 permissions matrix |
-| **Wave 2 — UI Integration** | ⚠️ B1 inspector_ui (link appearance ✅), B2 pages_ui (partial), B3 annots_ui (not found), B4 redact_ui (not found), B5 windows_ui (not found), B6 forms_editor (✅ push-button) |
-| **Wave 3 — New Subsystems** | ⚠️ C1 TTS ✅, C2 Presenter view (not found), C3 Open quickly (not found), C4 Create from capture (not found) |
-| **Wave 4 — AI Gaps** | ⚠️ D1 AI writing tools ✅ (Polish/Shorten/Expand/Tone/Proofread tasks in `tasks.rs`), D2 Bilingual translation (not found) |
+| **Wave 1 — Core Engine Gaps** | ✅ A1-A6 all done (labels, resize/exchange, links, redact codesets, word count, permissions) |
+| **Wave 2 — UI Integration** | ✅ B1-B6 all done (inspector page labels, resize/interleave/exchange, link appearance, redact code-sets, windows stats+matrix, forms push-button) |
+| **Wave 3 — New Subsystems** | ✅ C1-C4 all done (TTS, presenter view, Open Quickly, create from capture) |
+| **Wave 4 — AI Gaps** | ✅ D1-D2 done (AI writing tools + Check Pages, bilingual translation) |
+| **Wave 5 — Strategic** | ⚠️ Office import ✅, PDF/A validation ☐, element align ☐, PDF Portfolio ☐ |
 
 ---
 
@@ -125,17 +128,18 @@ Most parity gaps from the plan remain **unchecked** (not implemented). The waves
 
 ## 6. Missing / Needs Attention
 
-The following high-priority gaps should be addressed to close parity with UPDF 2.5.6:
+This list is the *current* open backlog — the October items below were closed in the
+Tier 1/2 + Wave 5 rounds and are now in `docs/GAP.md` / `docs/visual-parity.md`:
 
-1. **Visual theme** — Apply design tokens (palette, fonts, radii, spacing) across all UI
-2. **Overflow menu** — Implement macOS-style `…` overflow for Tools dropdown
-3. **AI conversation** — Conversation history persistence, suggested questions, markdown/LaTeX rendering
-4. **Organize actions** — Merge pages batch, duplicate pages UI, Bates tool
-5. **Annotate tools** — Sticker, connected lines, cloud annotation UI
-6. **Export & PDF/A** — PDF/A validation, Office import, flattening separation
-7. **Advanced AI** — Mind-map, image generation, AI bookmarks, web AI, DeepThink mode
+1. **Native macOS menu bar** — real `NSMenu` for the 9-menu bar (top visual gap).
+2. **Visual parity (1-to-1)** — toolbar presets, paper style, Liquid Glass, traffic-light inset, home thumbnail per-page aspect, mode-pill chrome, status-bar mirror (`docs/visual-parity.md` §10).
+3. **AI rendering** — Markdown + LaTeX in chat responses, attachment picker.
+4. **Advanced AI** — Mind-map, image generation, AI bookmarks, web AI, DeepThink mode.
+5. **Export & PDF/A** — validating PDF/A (ICC), flattening separation, PDF/UA/PDF/E/PDF/X writers.
 
-(Thumbnail aspect removed from scope per user request)
+**Closed since this audit:** in-memory chat turns (Wave 2 — `ConversationHistory`/`suggested_questions` since removed as unused), merge/duplicate pages + Bates (Wave 5), Sticker/ConnectedLines/Cloud/Shape Fill (Wave 5), Security Properties matrix + push-button forms + Office import (Wave 5), page labels/resize/interleave/exchange (Wave 1/2), TTS + presenter + Open Quickly + create-from-capture (Wave 3), AI writing tools + Check Pages + bilingual translation (Wave 4).
+
+(Home-screen thumbnail *per-page aspect* is back in scope — `docs/visual-parity.md` §7.2.)
 
 ---
 *Generated from: docs/updf-parity-visual-and-feature.md*

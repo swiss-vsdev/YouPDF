@@ -1,6 +1,31 @@
 # YouPDF Improvements Summary
 
-## Session Changes (based on AUDIT_STATUS.md audit)
+> **Coverage note:** this file records the Wave 2–3 session (theme fix, overflow menu, AI
+> history, merge/sticker/connected-lines). It does **not** cover the later Tier 1/2 round,
+> Wave 4/5, or the external reference material — see `docs/GAP.md` (per-feature + analysis
+> evidence), `docs/STATUS.md` (shipped state), and `docs/visual-parity.md` (appearance).
+> A condensed Tier 1/2 supplement follows this historical record.
+
+## Tier 1/2 round + Wave 4/5 supplement (November 2026)
+
+Landed since this file's original session, per `docs/GAP.md` / `docs/STATUS.md`:
+
+- **Tier 1 (7/9 closed):** Open Quickly (`home_ui.rs` `open_quickly_panel`, ⌘F);
+  presenter view (`slideshow_ui.rs` `presenter_window`); read-aloud TTS (`capture/tts.rs`
+  + `readaloud_ui.rs`); document stats (`windows_ui.rs:329` `DocumentStats`); security
+  properties matrix (`protect/permissions.rs` + `pages_ui.rs`); link appearance
+  (`links.rs` + `inspector_ui.rs`); redaction code sets + repeat-across-pages + auto-size
+  (`redact/codesets.rs`).
+- **Tier 2:** page labels (`organize/labels.rs`); page resize (`organize/resize.rs`);
+  interleave/exchange (`organize/exchange.rs`); measure azimuth/altitude + markup labels
+  (`measure_ui.rs`, 8 tests).
+- **Wave 4:** AI writing tools (Polish/Shorten/Expand/Proofread/Tone) + AI Check Pages
+  (`detect_page_defects`); whole-PDF bilingual translation (`translate_page`/`translate_pdf`).
+- **Wave 5:** Office import (`soffice --convert-to pdf`); create-from-capture
+  (`capture/screenshot.rs`); PDF-file watermarks; watermark rotation randomness +
+  template/starred presets.
+
+## Original session changes (Wave 2–3)
 
 ### 1. Visual Theme Fix
 - **File**: `crates/youpdf-shared/src/theme.rs`
@@ -14,12 +39,12 @@
 
 ### 3. AI Conversation History
 - **File**: `crates/youpdf-ai/src/message.rs`
-- **Change**: Added `Turn` struct (user message + optional assistant response) and `ConversationHistory` type
+- **Change**: Added `Turn` struct (user message + optional assistant response) and `ConversationHistory` type — ⚠️ `ConversationHistory` was removed in Phase 3 as unused; `Turn` remains for the in-memory journal
 - **Impact**: Foundation for persistent chat history across sessions
 
 ### 4. AI Suggested Questions
 - **File**: `crates/youpdf-ai/src/tasks.rs`
-- **Change**: Added `suggested_questions(document_name, page_count, n)` function generating default questions: "Summarize this document", "What are the key points?", etc.
+- **Change**: Added `suggested_questions(document_name, page_count, n)` function — ⚠️ removed in Phase 3: no UI call site ever used it
 - **Impact**: Pre-fills chat with common questions based on document context
 
 ### 5. Hardcoded Color Fixes
