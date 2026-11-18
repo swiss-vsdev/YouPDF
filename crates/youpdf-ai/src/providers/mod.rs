@@ -13,6 +13,19 @@ use crate::keyring::SecretStore;
 use crate::provider::AiProvider;
 use crate::registry::ProviderId;
 
+/// Erreur HTTP sans corps brut.
+///
+/// Le texte renvoyé par un fournisseur peut refléter des données de la
+/// requête ou du contenu interne ; il n'aide pas l'utilisateur. On garde le
+/// détail en journal `debug` pour le diagnostic et on affiche un message
+/// court avec une action à suivre.
+pub(crate) fn http_error(url: &str, status: reqwest::StatusCode, body: &str) -> Error {
+    tracing::debug!(url = %url, status = %status, body = %body, "réponse HTTP en erreur");
+    Error::Ai(format!(
+        "The provider returned HTTP {status}. Check the provider settings and try again."
+    ))
+}
+
 /// Construit un fournisseur à partir de sa configuration.
 ///
 /// La clé API est récupérée automatiquement depuis le trousseau système

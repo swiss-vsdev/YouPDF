@@ -396,6 +396,12 @@ impl AiPanel {
 
     /// Envoie une demande au fil de travail, en le démarrant au besoin.
     fn send(&mut self, request: AiRequest) {
+        // Défense en profondeur : l'interface le vérifie déjà, mais aucune
+        // demande ne doit partir si l'interrupteur est éteint.
+        if !self.enabled() {
+            self.status = Some("AI is off. Turn it on first.".to_string());
+            return;
+        }
         if self.requests.is_none() {
             let (request_tx, request_rx) = channel();
             let (reply_tx, reply_rx) = channel();
@@ -480,6 +486,10 @@ impl AiPanel {
 
     /// Demande la liste des modèles du fournisseur actif.
     fn list_models(&mut self) {
+        if !self.enabled() {
+            self.status = Some("AI is off. Turn it on first.".to_string());
+            return;
+        }
         if self.busy {
             self.status = Some("A request is already running.".to_string());
             return;
@@ -494,6 +504,10 @@ impl AiPanel {
 
     /// Envoie la tâche sélectionnée au fournisseur actif.
     fn submit(&mut self, doc_text: &str, doc_name: Option<&str>, doc_pages: Option<usize>) {
+        if !self.enabled() {
+            self.status = Some("AI is off. Turn it on first.".to_string());
+            return;
+        }
         // Une seule demande à la fois : sinon une seconde question resterait
         // en file et partirait après une coupure de l'IA.
         if self.busy {
@@ -555,6 +569,10 @@ impl AiPanel {
     /// document : il ne fait que le traduire, et c'est l'interface qui
     /// écrit le résultat).
     fn translate_pdf(&mut self, doc: &youpdf_core::Document) {
+        if !self.enabled() {
+            self.status = Some("AI is off. Turn it on first.".to_string());
+            return;
+        }
         if self.busy {
             self.status = Some("A request is already running.".to_string());
             return;

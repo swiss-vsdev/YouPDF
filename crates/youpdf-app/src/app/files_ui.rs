@@ -274,6 +274,13 @@ impl YouPdfApp {
         /// C'est le pendant de `open_with_system` pour les liens : un clic sur un
         /// lien `/URI` confie l'adresse au navigateur du système.
         pub(super) fn open_url(&self, url: &str) -> std::io::Result<()> {
+            // Dernier garde-fou : une URI vient d'un PDF non fiable.
+            if !youpdf_core::is_safe_uri(url) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "this document contains an unsafe link, which was blocked",
+                ));
+            }
             #[cfg(target_os = "macos")]
             let child = std::process::Command::new("open").arg(url).spawn();
             #[cfg(target_os = "windows")]
@@ -449,12 +456,28 @@ impl YouPdfApp {
                     return;
                 }
             };
-            let tmp = std::env::temp_dir().join(format!("youpdf-print-{}.pdf", std::process::id()));
-            if let Err(err) = std::fs::write(&tmp, &bytes) {
+            // Nom unique + création exclusive : un lien symbolique préparé
+            // dans /tmp ne peut pas détourner l'écriture.
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let tmp = std::env::temp_dir().join(format!(
+                "youpdf-print-{}-{nanos}.pdf",
+                std::process::id()
+            ));
+            let written = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
+                .and_then(|mut file| std::io::Write::write_all(&mut file, &bytes));
+            if let Err(err) = written {
                 self.toast(ctx, format!("Print failed: {err}"));
                 return;
             }
-            match std::process::Command::new("lp").arg(&tmp).output() {
+            let result = std::process::Command::new("lp").arg(&tmp).output();
+            let _ = std::fs::remove_file(&tmp);
+            match result {
                 Ok(output) if output.status.success() => {
                     self.toast(ctx, "Sent to the default printer");
                 }

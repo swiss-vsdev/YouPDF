@@ -5,6 +5,10 @@ on:
     tags: ['v*.*.*']
   workflow_dispatch:
 
+# Le token n'a que la lecture par défaut ; seul le job de release écrit.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build ${{ matrix.name }}
@@ -100,6 +104,8 @@ jobs:
     name: Create GitHub release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4

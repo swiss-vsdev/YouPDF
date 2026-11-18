@@ -142,7 +142,7 @@ impl AiProvider for AnthropicProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Ai(format!("{url} → HTTP {status} : {body}")));
+            return Err(crate::providers::http_error(&url, status, &body));
         }
 
         let parsed: MessagesResponse = resp

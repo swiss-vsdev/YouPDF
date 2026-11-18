@@ -104,7 +104,7 @@ impl AiProvider for OllamaProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Ai(format!("{url} → HTTP {status} : {body}")));
+            return Err(crate::providers::http_error(&url, status, &body));
         }
 
         let parsed: TagsResponse = resp
@@ -169,7 +169,7 @@ impl AiProvider for OllamaProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Ai(format!("{url} → HTTP {status} : {body}")));
+            return Err(crate::providers::http_error(&url, status, &body));
         }
 
         let parsed: ChatResponseWire = resp
@@ -210,7 +210,7 @@ impl AiProvider for OllamaProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Ai(format!("{url} → HTTP {status} : {body}")));
+            return Err(crate::providers::http_error(&url, status, &body));
         }
 
         let parsed: EmbedResponse = resp

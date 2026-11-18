@@ -69,7 +69,7 @@ pub use edit::{
 };
 pub use extract::{ExtractedTable, KeyValue};
 pub use forms::{FieldProperties, FormDataFormat, FormField, FormFieldKind, NewFormField};
-pub use links::{LinkAction, LinkAppearance, PageLink};
+pub use links::{is_safe_uri, LinkAction, LinkAppearance, PageLink};
 pub use measure::{MeasureKind, Measurement};
 pub use metadata::DocumentMetadata;
 pub use ocr::{

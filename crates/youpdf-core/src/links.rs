@@ -14,6 +14,19 @@ use lopdf::{Dictionary, Object};
 
 use crate::document::Document;
 
+/// Schemes qu'un lien PDF peut confier au système d'exploitation.
+///
+/// Une URI `/URI` vient d'un document non fiable. Seuls les schemes
+/// d'information sont autorisés : `file:` ou un scheme personnalisé
+/// pourraient ouvrir un fichier local ou lancer une application tierce
+/// en un seul clic.
+pub fn is_safe_uri(uri: &str) -> bool {
+    let lower = uri.trim().to_ascii_lowercase();
+    ["http://", "https://", "mailto:"]
+        .iter()
+        .any(|scheme| lower.starts_with(scheme))
+}
+
 /// Ce qu'un clic sur un lien déclenche.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LinkAction {
@@ -392,4 +405,30 @@ pub fn get_link_appearance(
         }
     }
     Some(appearance)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_safe_uri;
+
+    #[test]
+    fn seuls_les_schemes_dinformation_sont_autorises() {
+        for uri in [
+            "https://example.com/doc",
+            "HTTP://example.com",
+            " http://localhost:8080/a",
+            "mailto:someone@example.com",
+        ] {
+            assert!(is_safe_uri(uri), "{uri:?} devrait être accepté");
+        }
+        for uri in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,x",
+            "custom-handler://payload",
+            "",
+        ] {
+            assert!(!is_safe_uri(uri), "{uri:?} devrait être refusé");
+        }
+    }
 }
