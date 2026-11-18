@@ -81,7 +81,10 @@ pub use icons::*;
 use history::trim_history;
 
 use crate::ai::AiPanel;
-use crate::home::{self, HomeCategory, HomeView, ViewMode, load_recents, save_recents, shorten};
+use crate::home::{
+    self, HomeCategory, HomeView, ViewMode, load_opened_times, load_recents,
+    save_recents_with_times, shorten,
+};
 use crate::app::batch_types::{BatchEntry, BatchEvent};
 use crate::inspector::{
     arrow_x, image_controls, markup_row, paint_arrow, place_inspector, text_style_row, AnnotationId,
@@ -132,7 +135,10 @@ use youpdf_core::structure::outline::{
 // --------------------------------------------------------------------------
 
 /// Fonds de canevas nommés par la référence, hors « Auto » (voir
-/// `YouPdfApp::canvas_style`).
+/// `YouPdfApp::canvas_style`). Dark a été mesuré sur les captures UPDF 2.5.6
+/// (`document-view.png`, `document-editor.png`, `home.png`) : 48/48/48 hors
+/// page. Les quatre valeurs sont aussi celles des jetons `canvas_bg` des
+/// quatre thèmes — garanti par `canvas_bg_matches_reference_themes`.
 const CANVAS_THEMES: [(&str, Color32); 4] = [
     ("Dark", Color32::from_rgb(0x30, 0x30, 0x30)),
     ("Light", Color32::from_rgb(0xEC, 0xEC, 0xEE)),
@@ -161,6 +167,11 @@ const ADDED_GREEN: Color32 = Color32::from_rgb(0x28, 0xA7, 0x45);
 const REMOVED_RED: Color32 = Color32::from_rgb(0xDC, 0x35, 0x45);
 const MODIFIED_AMBER: Color32 = Color32::from_rgb(0xFF, 0xC1, 0x07);
 
+/// Hauteur de la barre de titre / onglets. Mesurée sur UPDF 2.5.6
+/// (`docs/screenshots/document-view.png`, capture Retina 2×) : la bande
+/// `chrome_bg` va de y=0 à y=76 px, puis 3 px de séparateur (y=77–79),
+/// soit 80 px = 40 pt à 2×. Valeur mesurée, pas un guess — cf. §2.2 de
+/// `docs/visual-parity.md`.
 const TITLE_H: f32 = 40.0;
 /// Nombre maximal d'états conservés dans une pile d'annulation.
 const HISTORY_LIMIT: usize = 20;
@@ -174,10 +185,12 @@ const RAIL_W: f32 = 52.0;
 const PANEL_W: f32 = 210.0;
 const PAGE_SPACING: f32 = 16.0;
 /// Cartes de l'écran d'accueil (onglets Récents / Favoris).
-const CARD_W: f32 = 160.0;
-const CARD_H: f32 = 200.0;
-const GAP: f32 = 12.0;
-const CELL_H: f32 = 64.0;
+// Mesuré en pixels natifs sur la capture UPDF 2.5.6
+// (docs/screenshots/Capture … 18.58.16.png, 2934×1912, Retina 2×) :
+// carte 376×494 px → 188×247 pt, gouttière 50 px → 25 pt.
+const CARD_W: f32 = 188.0;
+const CARD_H: f32 = 247.0;
+const GAP: f32 = 25.0;
 
 // --------------------------------------------------------------------------
 // Disposition des pages
@@ -203,6 +216,68 @@ enum PageLayout {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 struct PageDisplaySettings {
     pub show_cover_page: bool,
+}
+
+/// Papier sur lequel la page est posée (View ▸ Background & Display ▸ Paper,
+/// UPDF 2.5.6). « Solid » ne ajoute rien : la page rendue reste telle quelle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum PaperStyle {
+    #[default]
+    Solid,
+    Dotted,
+    Ruled,
+}
+
+/// Pas du motif papier, en points. Un aperçu de 28 px est ramené à 7 px pour
+/// que ses points restent visibles.
+const PAPER_STEP: f32 = 24.0;
+
+/// Colonnes et lignes du motif papier dans `rect`, espacées d'un pas qui
+/// s'adapte aux petits aperçus du panneau Aspect.
+fn paper_grid(rect: Rect) -> (Vec<f32>, Vec<f32>) {
+    let step = PAPER_STEP
+        .min(rect.width() / 4.0)
+        .min(rect.height() / 4.0)
+        .max(1.0);
+    let mut xs = Vec::new();
+    let mut x = rect.min.x + step;
+    while x < rect.max.x {
+        xs.push(x);
+        x += step;
+    }
+    let mut ys = Vec::new();
+    let mut y = rect.min.y + step;
+    while y < rect.max.y {
+        ys.push(y);
+        y += step;
+    }
+    (xs, ys)
+}
+
+/// Pose le motif papier (points ou lignes) sur `rect`. Le uni ne peint rien :
+/// la page rendue garde son fond d'origine.
+fn paint_paper(p: &egui::Painter, rect: Rect, style: PaperStyle) {
+    let base = pal().separator;
+    let color = Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 90);
+    let (xs, ys) = paper_grid(rect);
+    match style {
+        PaperStyle::Solid => {}
+        PaperStyle::Dotted => {
+            for y in &ys {
+                for x in &xs {
+                    p.circle_filled(pos2(*x, *y), 1.0, color);
+                }
+            }
+        }
+        PaperStyle::Ruled => {
+            for y in ys {
+                p.line_segment(
+                    [pos2(rect.min.x, y), pos2(rect.max.x, y)],
+                    Stroke::new(0.7_f32, color),
+                );
+            }
+        }
+    }
 }
 
 /// Affichage de la barre d'outils flottante (View ▸ Toolbar, UPDF 2.5.6).
@@ -452,7 +527,7 @@ enum Panel {
 impl Panel {
     fn title(self) -> &'static str {
         match self {
-            Panel::Thumbnails => "Pages",
+            Panel::Thumbnails => "Thumbnails",
             Panel::Search => "Search",
             Panel::Bookmarks => "Bookmarks",
             Panel::Comments => "Comments",
@@ -583,8 +658,8 @@ struct TextSel {
 }
 
 use youpdf_core::text::geometry::{
-    expand_to_line, expand_to_word, hit_quads, hit_rects, hit_runs, hit_selection_text, text_hit,
-    TextHit,
+    expand_to_line, expand_to_word, hit_quads, hit_rects, hit_runs, hit_selection_text,
+    text_hit_anchor, text_hit_head, TextHit,
 };
 
 
@@ -727,6 +802,24 @@ const TOOLS_MENU: &[(&str, &str, ToolsEntry)] = &[
     ("Create signature…", "", ToolsEntry::CreateSignature),
     ("Custom stamp…", "", ToolsEntry::CustomStamp),
 ];
+
+/// Outils de la grille, dédupliqués et bornés à `TOOLS_MENU`.
+///
+/// Les réglages peuvent venir d'une version antérieure ou d'un fichier édité
+/// à la main : une entrée obsolète ne doit pas faire disparaître la barre.
+/// Une liste vide retombe sur les quatre modes, comme au premier lancement.
+fn toolbar_tools(settings: &youpdf_ai::AppSettings) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    for &idx in &settings.toolbar_tools {
+        if idx < TOOLS_MENU.len() && !out.contains(&idx) {
+            out.push(idx);
+        }
+    }
+    if out.is_empty() {
+        out.extend(0..4);
+    }
+    out
+}
 
 /// Nature du brouillon de texte en cours de saisie.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1220,6 +1313,8 @@ pub struct YouPdfApp {
     image_alpha: f32,
     /// Liste déroulante `Outils` ouverte.
     tools_open: bool,
+    /// Fenêtre de personnalisation de la grille d'outils.
+    toolbar_customize_open: bool,
     /// Menu `…` (enregistrer, exporter, propriétés).
     actions_open: bool,
     /// Fenêtre « Propriétés du document ».
@@ -1536,8 +1631,14 @@ pub struct YouPdfApp {
     activity_open: bool,
     /// Derniers fichiers ouverts, du plus récent au plus ancien.
     recents: Vec<PathBuf>,
+    /// Horodatage Unix de la dernière ouverture, par fichier.
+    recent_times: std::collections::HashMap<PathBuf, u64>,
+    /// Icônes 3D Fluent Emoji (accent visuel, Phosphor reste le reste).
+    fluent: crate::fluent::FluentIcons,
     /// Fenêtre « Organiser les pages » ouverte.
     organize_open: bool,
+    /// Interrupteur « Sélection multiple » de la barre UPDF.
+    organize_multi: bool,
     /// Pages cochées dans cette fenêtre (vide = document entier).
     organize_selected: BTreeSet<usize>,
     /// Pages par fichier pour le découpage.
@@ -1631,6 +1732,8 @@ pub struct YouPdfApp {
     form_data_format: FormDataFormat,
     /// Fond du canevas choisi dans Aspect.
     canvas_style: usize,
+    /// Papier (uni, pointillé ou réglé) sous la page et dans la gouttière.
+    paper_style: PaperStyle,
     /// Mode d'affichage de la barre d'outils flottante (View ▸ Toolbar).
     toolbar_visibility: ToolbarVisibility,
     /// Vrai quand la barre est effectivement masquée (mode Scroll/Hidden).
@@ -1712,6 +1815,11 @@ pub struct YouPdfApp {
 }
 
 impl YouPdfApp {
+    /// Persiste l'ordre des récents et leurs horodatages d'ouverture.
+    pub(super) fn persist_recents(&self) {
+        save_recents_with_times(&self.recents, &self.recent_times);
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
         crate::fonts::install(&cc.egui_ctx);
         // La configuration est lue une seule fois : le thème en vient, et le
@@ -1763,6 +1871,7 @@ impl YouPdfApp {
             image_crop: None,
             image_alpha: 1.0,
             tools_open: false,
+            toolbar_customize_open: false,
             actions_open: false,
             props_open: false,
             watermark_open: false,
@@ -1940,7 +2049,10 @@ impl YouPdfApp {
             activity: Vec::new(),
             activity_open: false,
             recents: load_recents(),
+            recent_times: load_opened_times(),
+            fluent: crate::fluent::FluentIcons::load(&cc.egui_ctx),
             organize_open: false,
+            organize_multi: false,
             organize_selected: BTreeSet::new(),
             organize_split: 1,
             organize_anchor: None,
@@ -1974,6 +2086,7 @@ impl YouPdfApp {
             form_props: None,
             form_data_format: FormDataFormat::Fdf,
             canvas_style: 0,
+            paper_style: PaperStyle::default(),
             toolbar_visibility: ToolbarVisibility::default(),
             toolbar_hidden: false,
             page_shadow: true,
@@ -2225,9 +2338,16 @@ impl eframe::App for YouPdfApp {
         }
         self.autosave_tick(ctx);
         self.title_bar(ctx);
-        self.rail(ctx);
-        self.side_panel(ctx);
-        self.status_bar(ctx);
+        // L'accueil UPDF occupe toute la largeur : ni rail, ni panneau
+        // latéral, ni barre d'état (visibles seulement avec un document).
+        let home = self.tabs.is_empty() || self.home_open;
+        // L'organiseur UPDF occupe aussi toute la largeur : pas de rail,
+        // ni de panneau de vignettes, ni de barre d'état.
+        if !home && !self.organize_open {
+            self.rail(ctx);
+            self.side_panel(ctx);
+            self.status_bar(ctx);
+        }
         CentralPanel::default()
             .frame(Frame::none().fill(self.canvas_background()))
             .show(ctx, |ui| {
@@ -2235,7 +2355,7 @@ impl eframe::App for YouPdfApp {
                 // vierge. C'est la garantie du mode lecture : sans ce
                 // garde, un démarrage sur « blank document » laissait un
                 // PDF vide à la place de l'écran d'accueil.
-                if self.tabs.is_empty() || self.home_open {
+                if home {
                     self.empty_state(ui);
                 } else if self.organize_open {
                     self.organize_view(ui);
@@ -2419,10 +2539,48 @@ enum CommentAction {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+    use youpdf_core::text::geometry::text_hit;
     use youpdf_core::{PageLink, TextChar};
 
     fn cachet(rows: &[Vec<u32>]) -> HashSet<u32> {
         rows.iter().flatten().copied().collect()
+    }
+
+    #[test]
+    fn canvas_bg_matches_reference_themes() {
+        // Les fonds nommés par UPDF et les jetons des quatre thèmes doivent
+        // rester les mêmes : `canvas_background()` les utilise dans les deux
+        // branches (Auto et choix explicite).
+        for (theme, (name, color)) in Theme::ALL.iter().zip(CANVAS_THEMES.iter()) {
+            assert_eq!(theme.palette().canvas_bg, *color, "canvas {}", name);
+        }
+    }
+
+    #[test]
+    fn paper_grid_adapts_to_small_previews() {
+        let preview = Rect::from_min_size(pos2(0.0, 0.0), vec2(28.0, 28.0));
+        let (xs, ys) = paper_grid(preview);
+        assert_eq!((xs.len(), ys.len()), (3, 3));
+        assert_eq!(xs[0], 7.0);
+
+        let page = Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 800.0));
+        let (xs, ys) = paper_grid(page);
+        assert_eq!((xs.len(), ys.len()), (24, 33));
+        assert!(xs.iter().all(|x| *x >= 0.0 && *x <= 600.0));
+    }
+
+    #[test]
+    fn toolbar_tools_normalizes_stale_settings() {
+        let mut settings = youpdf_ai::AppSettings::default();
+        assert_eq!(toolbar_tools(&settings), vec![0, 1, 2, 3]);
+
+        // Un réglage édité à la main ne doit pas casser la grille : entrées
+        // hors table, doublons, puis repli sur les quatre modes si tout est
+        // invalide.
+        settings.toolbar_tools = vec![2, 999, 2, 4];
+        assert_eq!(toolbar_tools(&settings), vec![2, 4]);
+        settings.toolbar_tools = vec![999];
+        assert_eq!(toolbar_tools(&settings), vec![0, 1, 2, 3]);
     }
 
     fn history_entry(marker: u8, len: usize) -> HistoryEntry {
@@ -2746,6 +2904,24 @@ mod tests {
             vec![(0, 1, 2), (1, 0, 1)]
         );
         assert_eq!(hit_selection_text(&frags, span), "b c");
+    }
+
+    /// Poser le curseur sur la première lettre l'inclut dans la sélection :
+    /// l'ancre est son bord gauche, la tête son bord droit.
+    #[test]
+    fn highlight_starting_on_first_letter_includes_it() {
+        let frags = vec![frag_chars("abc", [10.0, 100.0, 40.0, 112.0], 12.0)];
+        let anchor = text_hit_anchor(&frags, [16.0, 106.0]).expect("ancre");
+        let head = text_hit_head(&frags, [16.0, 106.0]).expect("tête");
+        assert_eq!(anchor, TextHit { fragment: 0, offset: 0 });
+        assert_eq!(head, TextHit { fragment: 0, offset: 1 });
+        assert_eq!(hit_runs(&frags, Some((anchor, head))), vec![(0, 0, 1)]);
+        assert_eq!(hit_selection_text(&frags, Some((anchor, head))), "a");
+
+        // Glisser de la première à la dernière lettre prend les deux bouts.
+        let head = text_hit_head(&frags, [36.0, 106.0]).expect("tête");
+        assert_eq!(head, TextHit { fragment: 0, offset: 3 });
+        assert_eq!(hit_selection_text(&frags, Some((anchor, head))), "abc");
     }
 
     /// Un point tombe sur la frontière de caractère la plus proche.

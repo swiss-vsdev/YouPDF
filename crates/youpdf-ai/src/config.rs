@@ -58,6 +58,11 @@ impl ProviderConfig {
     }
 }
 
+/// Outils par défaut de la grille : les quatre modes, dans l'ordre UPDF.
+fn default_toolbar_tools() -> Vec<usize> {
+    vec![0, 1, 2, 3]
+}
+
 /// Configuration globale de l'application.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -96,6 +101,13 @@ pub struct AppSettings {
     pub startup: String,
     /// Activer Liquid Glass (translucidité du chrome).
     pub liquid_glass: bool,
+    /// Outils affichés dans la grille de la barre d'outils, dans l'ordre.
+    /// Indices dans la table `TOOLS_MENU` de l'application : les quatre
+    /// premiers sont les modes, les suivants les outils ajoutés par
+    /// l'utilisateur (« Custom Tools »). Une configuration plus ancienne,
+    /// sans ce champ, retombe sur les quatre modes.
+    #[serde(default = "default_toolbar_tools")]
+    pub toolbar_tools: Vec<usize>,
 }
 
 impl Default for AppSettings {
@@ -120,6 +132,7 @@ impl Default for AppSettings {
             measure_unit: "in".to_string(),
             startup: "home".to_string(),
             liquid_glass: false,
+            toolbar_tools: default_toolbar_tools(),
         }
     }
 }

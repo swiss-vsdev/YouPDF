@@ -8,6 +8,9 @@ use egui::{FontData, FontDefinitions, FontFamily};
 
 /// Polices Apple, par ordre de préférence.
 const SF: &[&str] = &["/System/Library/Fonts/SFNS.ttf"];
+
+/// SF Pro Rounded : formes plus rondes et pleines pour l'accueil.
+const SF_ROUNDED: &[&str] = &["/System/Library/Fonts/SFNSRounded.ttf"];
 const PINGFANG: &[&str] = &["/System/Library/Fonts/PingFang.ttc"];
 const HELVETICA: &[&str] = &[
     "/System/Library/Fonts/HelveticaNeue.ttc",
@@ -20,7 +23,12 @@ pub fn install(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
 
-    for (name, paths) in [("SF", SF), ("PingFang", PINGFANG), ("Helvetica", HELVETICA)] {
+    for (name, paths) in [
+        ("SFRounded", SF_ROUNDED),
+        ("SF", SF),
+        ("PingFang", PINGFANG),
+        ("Helvetica", HELVETICA),
+    ] {
         if let Some(data) = load(paths) {
             fonts.font_data.insert(name.to_owned(), data);
         }
@@ -30,7 +38,7 @@ pub fn install(ctx: &egui::Context) {
     // enfin Phosphor (icônes), les emojis et Hack — dernier car seul à
     // fournir ⇧ (U+21E7) et divers symboles.
     let mut family = Vec::new();
-    for name in ["SF", "Ubuntu-Light", "PingFang", "Helvetica"] {
+    for name in ["SFRounded", "SF", "Ubuntu-Light", "PingFang", "Helvetica"] {
         if fonts.font_data.contains_key(name) {
             family.push(name.to_owned());
         }

@@ -40,6 +40,38 @@ impl YouPdfApp {
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 ui.add_space(12.0);
+                ui.label(section(t("Paper style")));
+            });
+            ui.add_space(SPACE_M);
+            ui.horizontal_wrapped(|ui| {
+                ui.add_space(12.0);
+                for (style, name) in [
+                    (PaperStyle::Solid, "Solid"),
+                    (PaperStyle::Dotted, "Dotted"),
+                    (PaperStyle::Ruled, "Ruled"),
+                ] {
+                    let (rect, resp) =
+                        ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+                    ui.painter()
+                        .rect_filled(rect, Rounding::same(RADIUS_M), Color32::WHITE);
+                    paint_paper(ui.painter(), rect, style);
+                    if self.paper_style == style {
+                        ui.painter().rect_stroke(
+                            rect.expand(2.0),
+                            7.0,
+                            Stroke::new(1.5_f32, pal().accent),
+                        );
+                    }
+                    if resp.clicked() {
+                        self.paper_style = style;
+                    }
+                    resp.on_hover_text(t(name));
+                }
+            });
+
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.add_space(12.0);
                 ui.label(section(t("Page tint")));
             });
             ui.add_space(SPACE_M);

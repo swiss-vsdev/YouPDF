@@ -4,3 +4,7 @@
 /state
 /docs/rea
 /docs/subagents
+/scripts/__pycache__
+/graphify-out/cache
+graphify-out/.graphify_python
+graphify-out/.graphify_root

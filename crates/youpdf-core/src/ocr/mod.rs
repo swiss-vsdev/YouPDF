@@ -189,6 +189,12 @@ pub struct OcrWord {
     pub confidence: i32,
     /// Texte.
     pub text: String,
+    /// Regroupement tesseract : bloc, paragraphe, ligne. Le calque texte
+    /// s'en sert pour donner une seule taille de police par paragraphe et
+    /// une seule ligne de base par ligne, comme dans le document scanné.
+    pub block: i32,
+    pub paragraph: i32,
+    pub line: i32,
 }
 
 /// Interface d'un moteur OCR.

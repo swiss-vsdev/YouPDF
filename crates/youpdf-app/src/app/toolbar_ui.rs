@@ -188,6 +188,10 @@ impl YouPdfApp {
                     self.text_sel = None;
                 }
             } else {
+                // La grille suit les préférences : ordre et visibilité sont
+                // modifiables depuis « Customize toolbar… » (§2.3).
+                let tools = toolbar_tools(&self.ai.settings);
+                let mut chosen: Option<ToolsEntry> = None;
                 Area::new(Id::new("modes"))
                     .anchor(Align2::CENTER_TOP, modes_anchor)
                     .order(Order::Foreground)
@@ -198,27 +202,41 @@ impl YouPdfApp {
                             .inner_margin(Margin::symmetric(4.0, 4.0))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    for (idx, (label, draw)) in MODES.iter().enumerate() {
-                                        let selected = self.mode == Some(idx);
-                                        let resp = pill_button(
-                                            ui, label, *draw, false, false, selected,
-                                        );
-                                        if resp.clicked() {
-                                            self.mode = Some(idx);
-                                            self.tools_open = false;
-                                            self.annot_tool = Some(0);
-                                            self.preset_open = false;
-                                            self.text_sel = None;
+                                    for idx in tools {
+                                        let (label, draw) = if idx < MODES.len() {
+                                            (t(MODES[idx].0), MODES[idx].1)
+                                        } else {
+                                            (t(TOOLS_MENU[idx].0), icon_tools as IconFn)
+                                        };
+                                        let selected = self.mode == Some(idx) && idx < MODES.len();
+                                        if pill_button(ui, label, draw, false, false, selected)
+                                            .clicked()
+                                        {
+                                            if idx < MODES.len() {
+                                                self.mode = Some(idx);
+                                                self.tools_open = false;
+                                                self.annot_tool = Some(0);
+                                                self.preset_open = false;
+                                                self.text_sel = None;
+                                            } else {
+                                                chosen = Some(TOOLS_MENU[idx].2);
+                                            }
                                         }
                                     }
                                 });
                             });
                     });
+                if let Some(entry) = chosen {
+                    self.tools_open = false;
+                    self.dispatch_tools_entry(ctx, entry);
+                }
             }
 
-            // Liste déroulante `Outils`.
+            // Panneau `Outils` en grille d'icônes, calqué sur UPDF 2.5.6
+            // (capture docs/screenshots/Capture … 18.59.52.png).
             if self.tools_open {
                 let mut chosen: Option<ToolsEntry> = None;
+                let mut customize = false;
                 Area::new(Id::new("tools-menu"))
                     .fixed_pos(pos2(canvas_left + 10.0, top + 38.0))
                     .order(Order::Foreground)
@@ -227,57 +245,157 @@ impl YouPdfApp {
                             .fill(pal().chrome_bg)
                             .rounding(Rounding::same(RADIUS_L))
                             .stroke(Stroke::new(1.0_f32, pal().separator))
-                            .inner_margin(Margin::symmetric(4.0, 4.0))
+                            .inner_margin(Margin::symmetric(12.0, 10.0))
                             .show(ui, |ui| {
-                                for (idx, (label, shortcut, entry)) in TOOLS_MENU.iter().enumerate() {
-                                    // Deux séparateurs : après les quatre modes, et
-                                    // avant la conversion et l'entretien.
-                                    if idx == 4 || idx == 11 {
-                                        ui.add_space(SPACE_S);
-                                        let sep = ui.cursor().top();
-                                        ui.painter().hline(
-                                            ui.max_rect().x_range(),
-                                            sep,
-                                            Stroke::new(1.0_f32, pal().separator),
-                                        );
-                                        ui.add_space(SPACE_S);
+                                ui.set_width(264.0);
+                                ui.label(RichText::new(t("Mode")).size(LABEL).color(pal().muted));
+                                ui.horizontal(|ui| {
+                                    for (idx, label) in [
+                                        (0usize, "Comment"),
+                                        (1, "Edit PDF"),
+                                        (2, "Prepare form"),
+                                        (3, "Redact"),
+                                    ] {
+                                        if ui
+                                            .add(
+                                                Button::new(RichText::new(t(label)).size(11.0))
+                                                    .rounding(Rounding::same(5.0)),
+                                            )
+                                            .clicked()
+                                        {
+                                            chosen = Some(ToolsEntry::Mode(idx));
+                                        }
                                     }
-                                    if menu_row(ui, t(label), shortcut, None) {
-                                        chosen = Some(*entry);
+                                    let (r, _) =
+                                        ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+                                    icon_ellipsis(ui.painter(), r, pal().muted);
+                                });
+                                ui.separator();
+
+                                // Utilitaire local : une tuile = icône + libellé.
+                                fn tile(
+                                    ui: &mut egui::Ui,
+                                    label: &str,
+                                    icon: IconFn,
+                                    entry: ToolsEntry,
+                                    chosen: &mut Option<ToolsEntry>,
+                                ) {
+                                    let (rect, resp) =
+                                        ui.allocate_exact_size(vec2(58.0, 58.0), Sense::click());
+                                    let fill = if resp.hovered() {
+                                        pal().hover_bg
+                                    } else {
+                                        pal().widget_bg
+                                    };
+                                    ui.painter().rect_filled(
+                                        rect.shrink(3.0),
+                                        Rounding::same(10.0),
+                                        fill,
+                                    );
+                                    let color = if resp.hovered() {
+                                        pal().icon_bright
+                                    } else {
+                                        pal().icon
+                                    };
+                                    icon(
+                                        ui.painter(),
+                                        Rect::from_center_size(
+                                            rect.center() - vec2(0.0, 6.0),
+                                            vec2(26.0, 26.0),
+                                        ),
+                                        color,
+                                    );
+                                    ui.painter().text(
+                                        rect.center_bottom() + vec2(0.0, -11.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        label,
+                                        FontId::proportional(10.0),
+                                        color,
+                                    );
+                                    if resp.clicked() {
+                                        *chosen = Some(entry);
                                     }
+                                }
+
+                                fn section(
+                                    ui: &mut egui::Ui,
+                                    title: &str,
+                                    tiles: &[(&str, IconFn, ToolsEntry)],
+                                    chosen: &mut Option<ToolsEntry>,
+                                ) {
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(title).size(LABEL).color(pal().muted));
+                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                            ui.label(
+                                                RichText::new(t("Other"))
+                                                    .size(11.0)
+                                                    .color(pal().accent),
+                                            );
+                                        });
+                                    });
+                                    for row in tiles.chunks(4) {
+                                        ui.horizontal(|ui| {
+                                            for (label, icon, entry) in row {
+                                                tile(ui, label, *icon, *entry, chosen);
+                                            }
+                                        });
+                                    }
+                                    ui.separator();
+                                }
+
+                                section(
+                                    ui,
+                                    t("Organize pages"),
+                                    &[
+                                        (t("Insert"), icon_file_plus as IconFn, ToolsEntry::Organize),
+                                        (t("Extract"), icon_export as IconFn, ToolsEntry::Organize),
+                                        (t("Replace"), icon_page as IconFn, ToolsEntry::Organize),
+                                        (t("Rotate"), icon_rotate_right as IconFn, ToolsEntry::Organize),
+                                    ],
+                                    &mut chosen,
+                                );
+                                section(
+                                    ui,
+                                    "Modifier le fichier PDF",
+                                    &[
+                                        ("OCR", icon_text as IconFn, ToolsEntry::Ocr),
+                                        (t("Compare"), icon_search as IconFn, ToolsEntry::Compare),
+                                        (t("Crop pages"), icon_scissors as IconFn, ToolsEntry::Crop),
+                                        (t("Split pages"), icon_grid as IconFn, ToolsEntry::TileSplit),
+                                        (t("Watermark"), icon_text as IconFn, ToolsEntry::Watermark),
+                                        (t("Background"), icon_image as IconFn, ToolsEntry::Background),
+                                        (t("Header & footer"), icon_list as IconFn, ToolsEntry::HeaderFooter),
+                                        (t("Bates numbering"), icon_text as IconFn, ToolsEntry::Bates),
+                                    ],
+                                    &mut chosen,
+                                );
+                                section(
+                                    ui,
+                                    "Convertisseur de fichiers PDF",
+                                    &[
+                                        (t("Image"), icon_image as IconFn, ToolsEntry::Convert),
+                                        (t("Word"), icon_file_plus as IconFn, ToolsEntry::Convert),
+                                        (t("Excel"), icon_grid as IconFn, ToolsEntry::Convert),
+                                        (t("PowerPoint"), icon_page as IconFn, ToolsEntry::Convert),
+                                    ],
+                                    &mut chosen,
+                                );
+                                if menu_row(ui, t("Customize toolbar…"), "", None) {
+                                    customize = true;
                                 }
                             });
                     });
+                if customize {
+                    self.tools_open = false;
+                    self.toolbar_customize_open = true;
+                }
                 if let Some(entry) = chosen {
                     self.tools_open = false;
-                    match entry {
-                        ToolsEntry::Mode(idx) => {
-                            self.mode = Some(idx);
-                            self.annot_tool = Some(0);
-                            self.preset_open = false;
-                            self.text_sel = None;
-                        }
-                        ToolsEntry::Organize => self.organize_open = true,
-                        ToolsEntry::TileSplit => self.tile_split_open = true,
-                        ToolsEntry::Crop => self.crop_open = true,
-                        ToolsEntry::Watermark => self.watermark_open = true,
-                        ToolsEntry::Background => self.background_open = true,
-                        ToolsEntry::HeaderFooter => self.header_footer_open = true,
-                        ToolsEntry::Bates => self.bates_open = true,
-                        ToolsEntry::Measure => self.measure_open = true,
-                        ToolsEntry::Ocr => self.ocr_open = true,
-                        ToolsEntry::Convert => self.export_open = true,
-                        ToolsEntry::Create => self.create_open = true,
-                        ToolsEntry::Compare => self.compare_open = true,
-                        ToolsEntry::Protect => self.protect_open = true,
-                        ToolsEntry::Compress => self.compress_open = true,
-                        ToolsEntry::Flatten => self.flatten_annotations(ctx),
-                        ToolsEntry::Sign => self.sign_open = true,
-                        ToolsEntry::CreateSignature => self.marks.signature_open = true,
-                        ToolsEntry::CustomStamp => self.marks.stamp_open = true,
-                    }
+                    self.dispatch_tools_entry(ctx, entry);
                 }
             }
+
+            self.toolbar_customize_window(ctx);
 
             self.preset_popup(ctx, canvas_left, top);
 
@@ -834,4 +952,156 @@ impl YouPdfApp {
             }
         }
 
+        /// Exécute une entrée du menu Outils. Partagée avec les pastilles
+        /// ajoutées à la grille, pour qu'un outil personnalisé fasse exactement
+        /// la même chose que sa ligne de menu.
+        pub(super) fn dispatch_tools_entry(&mut self, ctx: &egui::Context, entry: ToolsEntry) {
+            match entry {
+                ToolsEntry::Mode(idx) => {
+                    self.mode = Some(idx);
+                    self.annot_tool = Some(0);
+                    self.preset_open = false;
+                    self.text_sel = None;
+                }
+                ToolsEntry::Organize => self.organize_open = true,
+                ToolsEntry::TileSplit => self.tile_split_open = true,
+                ToolsEntry::Crop => self.crop_open = true,
+                ToolsEntry::Watermark => self.watermark_open = true,
+                ToolsEntry::Background => self.background_open = true,
+                ToolsEntry::HeaderFooter => self.header_footer_open = true,
+                ToolsEntry::Bates => self.bates_open = true,
+                ToolsEntry::Measure => self.measure_open = true,
+                ToolsEntry::Ocr => self.ocr_open = true,
+                ToolsEntry::Convert => self.export_open = true,
+                ToolsEntry::Create => self.create_open = true,
+                ToolsEntry::Compare => self.compare_open = true,
+                ToolsEntry::Protect => self.protect_open = true,
+                ToolsEntry::Compress => self.compress_open = true,
+                ToolsEntry::Flatten => self.flatten_annotations(ctx),
+                ToolsEntry::Sign => self.sign_open = true,
+                ToolsEntry::CreateSignature => self.marks.signature_open = true,
+                ToolsEntry::CustomStamp => self.marks.stamp_open = true,
+            }
+        }
+
+        /// Grille d'outils personnalisable (§2.3) : favoris, outils ajoutés et
+        /// réordonnancement. Les changements sont persistés dans `settings.json`.
+        pub(super) fn toolbar_customize_window(&mut self, ctx: &egui::Context) {
+            if !self.toolbar_customize_open {
+                return;
+            }
+            let mut open = true;
+            let changed = self.show_modal(
+                ctx,
+                "modal-toolbar-tools",
+                "Customize toolbar",
+                460.0,
+                &mut open,
+                |app, ui| {
+                    let mut changed = false;
+                    let tools = toolbar_tools(&app.ai.settings);
+                    let favorites: Vec<(usize, usize)> = tools
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .filter(|(_, idx)| *idx < MODES.len())
+                        .collect();
+                    let custom: Vec<(usize, usize)> = tools
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .filter(|(_, idx)| *idx >= MODES.len())
+                        .collect();
+                    let available: Vec<usize> = (0..TOOLS_MENU.len())
+                        .filter(|idx| !tools.contains(idx))
+                        .collect();
+
+                    ScrollArea::vertical()
+                        .id_salt("toolbar-tools-scroll")
+                        .max_height(460.0)
+                        .show(ui, |ui| {
+                            ui.set_min_width(400.0);
+                            toolbar_section(ui, app, "Favorited Tools", &favorites, &mut changed);
+                            ui.add_space(SPACE_M);
+                            toolbar_section(ui, app, "Custom Tools", &custom, &mut changed);
+                            ui.add_space(SPACE_M);
+                            ui.separator();
+                            ui.label(
+                                RichText::new(t("Add Tools"))
+                                    .size(TITLE)
+                                    .color(pal().icon_bright),
+                            );
+                            for idx in available {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(t(TOOLS_MENU[idx].0))
+                                            .size(BODY)
+                                            .color(pal().icon_bright),
+                                    );
+                                    if ui.button("+").clicked() {
+                                        app.ai.settings.toolbar_tools.push(idx);
+                                        changed = true;
+                                    }
+                                });
+                            }
+                        });
+                    changed
+                },
+            );
+            if !open {
+                self.toolbar_customize_open = false;
+            }
+            if changed.unwrap_or(false) {
+                let _ = self.ai.settings.save();
+            }
+        }
+
+}
+
+/// Une section de la fenêtre de personnalisation. `entries` porte la position
+/// globale dans `toolbar_tools` : les sections ne sont que des vues filtrées
+/// de la même liste, donc monter/descendre doit agir sur la liste entière.
+fn toolbar_section(
+    ui: &mut egui::Ui,
+    app: &mut YouPdfApp,
+    title: &'static str,
+    entries: &[(usize, usize)],
+    changed: &mut bool,
+) {
+    ui.label(RichText::new(t(title)).size(TITLE).color(pal().icon_bright));
+    if entries.is_empty() {
+        ui.label(RichText::new("—").size(CAPTION).color(pal().muted));
+        return;
+    }
+    // ponytail: une ligne cliquée par frame au plus ; la liste est reconstruite
+    // à chaque frame, donc un second clic agirait sur l'ancienne position.
+    for &(pos, idx) in entries {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(t(TOOLS_MENU[idx].0))
+                    .size(BODY)
+                    .color(pal().icon_bright),
+            );
+            if ui.button("↑").clicked() && pos > 0 {
+                app.ai.settings.toolbar_tools.swap(pos - 1, pos);
+                *changed = true;
+            }
+            if ui.button("↓").clicked() && pos + 1 < app.ai.settings.toolbar_tools.len() {
+                app.ai.settings.toolbar_tools.swap(pos, pos + 1);
+                *changed = true;
+            }
+            // La grille garde au moins un outil : une liste vide retomberait
+            // sur les quatre modes par défaut (réglage absent ou corrompu).
+            if ui
+                .add_enabled(
+                    app.ai.settings.toolbar_tools.len() > 1,
+                    egui::Button::new("−"),
+                )
+                .clicked()
+            {
+                app.ai.settings.toolbar_tools.remove(pos);
+                *changed = true;
+            }
+        });
+    }
 }

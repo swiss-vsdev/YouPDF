@@ -20,13 +20,10 @@ pub enum HomeCategory {
 }
 
 impl HomeCategory {
-    /// Tous les onglets, dans l'ordre d'affichage.
-    pub const ALL: [HomeCategory; 3] = [Self::Recents, Self::Starred, Self::Tools];
-
-    /// Libellé affiché.
+    /// Libellé affiché (clé de traduction, comme le reste de l'interface).
     pub fn label(self) -> &'static str {
         match self {
-            Self::Recents => "Recents",
+            Self::Recents => "Recent",
             Self::Starred => "Starred",
             Self::Tools => "Tools",
         }
@@ -51,14 +48,6 @@ impl ViewMode {
             Self::List => "List view",
         }
     }
-
-    /// Bascule grille ⇄ liste.
-    pub fn toggled(self) -> ViewMode {
-        match self {
-            Self::Grid => Self::List,
-            Self::List => Self::Grid,
-        }
-    }
 }
 
 /// État persistant de l'écran d'accueil.
@@ -66,6 +55,8 @@ impl ViewMode {
 pub struct HomeView {
     /// Filtre de recherche sur le nom de fichier.
     pub search_filter: String,
+    /// Le champ de recherche est dévoilé au clic sur l'icône (UPDF home).
+    pub search_open: bool,
     /// Onglet courant.
     pub category: HomeCategory,
     /// Grille ou liste.
@@ -171,6 +162,10 @@ fn recents_file() -> Option<PathBuf> {
 }
 
 /// Lit la liste des fichiers récents ; liste vide si le fichier manque.
+///
+/// Format : un chemin par ligne, avec optionnellement `<TAB>horodatage Unix`
+/// (dernière ouverture). Les anciennes lignes sans horodatage restent lisibles.
+/// Aucune borne : l'accueil doit pouvoir afficher tous les fichiers ouverts.
 pub fn load_recents() -> Vec<PathBuf> {
     let Some(path) = recents_file() else {
         return Vec::new();
@@ -180,14 +175,33 @@ pub fn load_recents() -> Vec<PathBuf> {
     };
     text.lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| PathBuf::from(line.trim()))
-        .take(8)
+        .map(|line| {
+            let entry = line.trim();
+            let raw = entry.rsplit_once('\t').map_or(entry, |(p, _)| p);
+            PathBuf::from(raw)
+        })
         .collect()
 }
 
-/// Écrit la liste des fichiers récents. Une erreur d'écriture est ignorée :
-/// la liste est un confort, pas une donnée du document.
-pub fn save_recents(recents: &[PathBuf]) {
+/// Horodatages de dernière ouverture, lus dans le même fichier.
+pub fn load_opened_times() -> std::collections::HashMap<PathBuf, u64> {
+    let Some(path) = recents_file() else {
+        return std::collections::HashMap::new();
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return std::collections::HashMap::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let (p, ts) = line.trim().rsplit_once('\t')?;
+            let secs = ts.trim().parse::<u64>().ok()?;
+            Some((PathBuf::from(p), secs))
+        })
+        .collect()
+}
+
+/// Écrit chemins et horodatages d'ouverture. Erreur ignorée : confort, pas donnée.
+pub fn save_recents_with_times(recents: &[PathBuf], times: &std::collections::HashMap<PathBuf, u64>) {
     let Some(path) = recents_file() else {
         return;
     };
@@ -196,7 +210,13 @@ pub fn save_recents(recents: &[PathBuf]) {
     }
     let body: String = recents
         .iter()
-        .map(|p| p.to_string_lossy().into_owned())
+        .map(|p| {
+            let name = p.to_string_lossy();
+            match times.get(p) {
+                Some(ts) => format!("{name}\t{ts}"),
+                None => name.into_owned(),
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let _ = youpdf_shared::atomic_write(&path, body.as_bytes());

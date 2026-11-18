@@ -70,6 +70,43 @@ pub fn text_hit(frags: &[TextFragment], point: [f32; 2]) -> Option<TextHit> {
     best.map(|(_, hit)| hit)
 }
 
+/// Ancre d'un glissé : si le pointeur est **sur** un caractère, sa frontière
+/// est son bord gauche, pour que ce caractère fasse partie de la sélection.
+/// Sans ce cas, poser le doigt sur la première lettre donne une ancre après
+/// elle et la première lettre n'est jamais mise en évidence.
+pub fn text_hit_anchor(frags: &[TextFragment], point: [f32; 2]) -> Option<TextHit> {
+    hit_inside_char(frags, point, false)
+}
+
+/// Tête d'un glissé : miroir de [`text_hit_anchor`], la frontière est le bord
+/// droit du caractère sous le pointeur, qui est donc lui aussi inclus.
+pub fn text_hit_head(frags: &[TextFragment], point: [f32; 2]) -> Option<TextHit> {
+    hit_inside_char(frags, point, true)
+}
+
+fn hit_inside_char(frags: &[TextFragment], point: [f32; 2], after: bool) -> Option<TextHit> {
+    let mut best: Option<(f32, TextHit)> = None;
+    for (fragment, frag) in frags.iter().enumerate() {
+        let len = hit_len(frag);
+        if len == 0 || point[1] < frag.rect[1] || point[1] > frag.rect[3] {
+            continue;
+        }
+        for index in 0..len {
+            let box_ = char_box(frag, index);
+            if point[0] < box_[0] || point[0] > box_[2] {
+                continue;
+            }
+            let offset = if after { index + 1 } else { index }.min(len);
+            let hit = TextHit { fragment, offset };
+            let distance = (point[1] - (frag.rect[1] + frag.rect[3]) * 0.5).abs();
+            if best.map_or(true, |(current, _)| distance < current) {
+                best = Some((distance, hit));
+            }
+        }
+    }
+    best.map(|(_, hit)| hit).or_else(|| text_hit(frags, point))
+}
+
 /// Caractère du fragment à l'offset donné, ou `None` si l'offset est hors
 /// du fragment.
 pub fn char_at(frag: &TextFragment, offset: usize) -> Option<char> {

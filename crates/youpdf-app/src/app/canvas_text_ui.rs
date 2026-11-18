@@ -47,7 +47,7 @@ if text_drag {
             let hit = tab
                 .fragments
                 .get(&page)
-                .and_then(|frags| text_hit(frags, point));
+                .and_then(|frags| text_hit_anchor(frags, point));
             if let Some(hit) = hit {
                 frame.sel = Some(TextSel {
                     page,
@@ -61,7 +61,7 @@ if text_drag {
             let hit = tab
                 .fragments
                 .get(&page)
-                .and_then(|frags| text_hit(frags, point));
+                .and_then(|frags| text_hit_head(frags, point));
             if let (Some(s), Some(hit)) = (frame.sel.as_mut(), hit) {
                 if s.page == page {
                     if let Some((_, head)) = s.span.as_mut() {
@@ -118,7 +118,7 @@ if text_drag {
                     let span = point
                         .and_then(|point| {
                             tab.fragments.get(&page).and_then(|frags| {
-                                text_hit(frags, point).and_then(|hit| {
+                                text_hit_anchor(frags, point).and_then(|hit| {
                                     if clicks == 2 {
                                         expand_to_word(frags, hit)
                                     } else {

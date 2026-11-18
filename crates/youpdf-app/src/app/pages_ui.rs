@@ -349,6 +349,9 @@ impl YouPdfApp {
         if !self.scan_banner {
             return;
         }
+        // La barre d'outils flottante est dessinée par-dessus le panneau
+        // central : sans cette réserve, le bandeau passe dessous.
+        ui.add_space(CANVAS_TOP_GAP);
         let palette = pal();
         Frame::none()
             .fill(palette.widget_bg)

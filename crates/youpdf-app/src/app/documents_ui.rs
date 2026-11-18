@@ -84,10 +84,15 @@ impl YouPdfApp {
             self.last_active = self.active;
             self.reset_document_session();
             if let Some(path) = path {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                self.recent_times.insert(path.clone(), now);
                 self.recents.retain(|old| old != &path);
                 self.recents.insert(0, path);
-                self.recents.truncate(8);
-                save_recents(&self.recents);
+                // Pas de plafond : UPDF garde tout l'historique d'ouverture.
+                self.persist_recents();
             }
             self.search_index = None;
             self.results.clear();

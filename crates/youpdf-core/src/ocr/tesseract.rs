@@ -135,44 +135,75 @@ impl TesseractEngine {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut words = Vec::new();
-        let mut full_text = String::new();
+        Ok(parse_tsv(&stdout))
+    }
+}
 
-        for (i, line) in stdout.lines().enumerate() {
-            if i == 0 {
-                continue; // en-tête
-            }
-            let fields: Vec<&str> = line.split('\t').collect();
-            if fields.len() < 12 {
-                continue;
-            }
-            // Colonnes TSV : level, page_num, block_num, par_num, line_num,
-            // word_num, left, top, width, height, conf, text
-            let level = fields[0].parse::<i32>().unwrap_or(0);
-            if level != 5 {
-                continue; // on ne garde que les mots
-            }
-            let parse = |s: &str| s.parse::<i32>().unwrap_or(0);
-            let conf = parse(fields[10]);
-            let text = fields[11].trim();
-            if text.is_empty() || conf < 30 {
-                continue;
-            }
-            words.push(OcrWord {
-                left: parse(fields[6]),
-                top: parse(fields[7]),
-                width: parse(fields[8]),
-                height: parse(fields[9]),
-                confidence: conf,
-                text: text.to_string(),
-            });
-            if !full_text.is_empty() {
-                full_text.push(' ');
-            }
-            full_text.push_str(text);
+/// Parse la sortie TSV de tesseract en texte plein + mots positionnés.
+fn parse_tsv(stdout: &str) -> (String, Vec<OcrWord>) {
+    let mut words = Vec::new();
+    let mut full_text = String::new();
+
+    for (i, line) in stdout.lines().enumerate() {
+        if i == 0 {
+            continue; // en-tête
         }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 12 {
+            continue;
+        }
+        // Colonnes TSV : level, page_num, block_num, par_num, line_num,
+        // word_num, left, top, width, height, conf, text
+        let level = fields[0].parse::<i32>().unwrap_or(0);
+        if level != 5 {
+            continue; // on ne garde que les mots
+        }
+        let parse = |s: &str| s.parse::<i32>().unwrap_or(0);
+        // Tesseract 5 écrit la confiance en décimal (`95.547981`) dans la
+        // colonne TSV `conf`. Un `parse::<i32>()` la transformait en 0,
+        // ce qui jetait **tous** les mots et produisait un PDF sans calque
+        // texte. Le champ `OcrWord::confidence` reste un entier arrondi.
+        let conf = fields[10].parse::<f32>().unwrap_or(0.0);
+        let text = fields[11].trim();
+        if text.is_empty() || conf < 30.0 {
+            continue;
+        }
+        words.push(OcrWord {
+            left: parse(fields[6]),
+            top: parse(fields[7]),
+            width: parse(fields[8]),
+            height: parse(fields[9]),
+            confidence: conf.round() as i32,
+            text: text.to_string(),
+            block: parse(fields[2]),
+            paragraph: parse(fields[3]),
+            line: parse(fields[4]),
+        });
+        if !full_text.is_empty() {
+            full_text.push(' ');
+        }
+        full_text.push_str(text);
+    }
 
-        Ok((full_text, words))
+    (full_text, words)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_tsv;
+
+    /// Tesseract 5 émet `conf` en décimal ; les mots fiables sont gardés.
+    #[test]
+    fn tsv_decimal_confidence_keeps_words() {
+        let tsv = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n\
+1\t1\t0\t0\t0\t0\t0\t0\t2250\t750\t-1\t\n\
+5\t1\t1\t1\t1\t1\t152\t305\t61\t20\t95.547981\tHello\n\
+5\t1\t1\t1\t1\t2\t217\t305\t69\t21\t12.100000\tlow\n";
+        let (text, words) = parse_tsv(tsv);
+        assert_eq!(text, "Hello");
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].text, "Hello");
+        assert_eq!(words[0].confidence, 96);
     }
 }
 

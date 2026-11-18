@@ -31,6 +31,9 @@ impl OcrEngine for FakeEngine {
                 height: 20,
                 confidence: 95,
                 text: "Bonjour".to_string(),
+                block: 1,
+                paragraph: 1,
+                line: 1,
             }],
         })
     }

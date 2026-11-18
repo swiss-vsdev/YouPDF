@@ -138,10 +138,6 @@ pub fn icon_grid(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::SQUARES_FOUR);
 }
 
-pub fn icon_rotate_left(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::ARROW_COUNTER_CLOCKWISE);
-}
-
 pub fn icon_rotate_right(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::ARROW_CLOCKWISE);
 }
@@ -158,8 +154,26 @@ pub fn icon_file_plus(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::FILE_PLUS);
 }
 
-pub fn icon_gear(p: &Painter, r: Rect, c: Color32) {
-    glyph(p, r, c, ph::GEAR);
+/// Dossier avec un plus : bouton « Ouvrir un fichier » de l'accueil UPDF.
+pub fn icon_folder_plus(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::FOLDER_PLUS);
+}
+
+/// Tri de l'accueil UPDF.
+pub fn icon_sort(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::SORT_ASCENDING);
+}
+
+pub fn icon_lock(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::FILE_LOCK);
+}
+
+pub fn icon_measure(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::ARROWS_LEFT_RIGHT);
+}
+
+pub fn icon_compress(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::ARROWS_IN);
 }
 
 pub fn icon_undo(p: &Painter, r: Rect, c: Color32) {

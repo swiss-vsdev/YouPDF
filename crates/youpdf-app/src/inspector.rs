@@ -6,7 +6,7 @@
 //! testable : l'inspecteur ne doit jamais sortir du cadre de la fenêtre.
 use youpdf_shared::{LABEL, MONO, muted, pal, t, RADIUS_XS};
 
-use egui::{pos2, Color32, Painter, Rect, RichText, Rounding, Sense, Shape, Stroke, Vec2};
+use egui::{pos2, Color32, Painter, Pos2, Rect, RichText, Rounding, Sense, Shape, Stroke, Vec2};
 use egui_phosphor::regular as ph;
 use youpdf_core::{AnnotationKind, ImageTransform, PatchFont, TextAlign, TextStyle};
 
@@ -169,6 +169,30 @@ pub fn arrow_x(bounds: Rect, rect: Rect) -> f32 {
     bounds.center().x.clamp(low, high)
 }
 
+/// Sommet, base gauche et base droite de la flèche, en coordonnées écran.
+///
+/// La flèche sort du bord du panneau qui regarde l'élément : bord du haut
+/// quand le panneau est posé dessous (`arrow_up`), bord du bas sinon. Le
+/// débordement vaut `ARROW_GAP - 1` dans les deux sens (§6.2 de la table de
+/// parité) — le `- 1` garde la pointe à l'intérieur de l'espace de 6 pt
+/// laissé par `place_inspector`.
+pub fn arrow_triangle(rect: Rect, arrow_x: f32, arrow_up: bool) -> [Pos2; 3] {
+    let half = 7.0;
+    if arrow_up {
+        [
+            pos2(arrow_x, rect.min.y - ARROW_GAP + 1.0),
+            pos2(arrow_x - half, rect.min.y + 0.5),
+            pos2(arrow_x + half, rect.min.y + 0.5),
+        ]
+    } else {
+        [
+            pos2(arrow_x, rect.max.y + ARROW_GAP - 1.0),
+            pos2(arrow_x - half, rect.max.y - 0.5),
+            pos2(arrow_x + half, rect.max.y - 0.5),
+        ]
+    }
+}
+
 /// Dessine la flèche du panneau vers l'élément visé.
 ///
 /// Le trait du cadre est recouvert là où la flèche le touche, sinon la
@@ -181,20 +205,7 @@ pub fn paint_arrow(
     fill: Color32,
     border: Color32,
 ) {
-    let half = 7.0;
-    let (tip, a, b) = if arrow_up {
-        (
-            pos2(arrow_x, rect.min.y - ARROW_GAP + 1.0),
-            pos2(arrow_x - half, rect.min.y + 0.5),
-            pos2(arrow_x + half, rect.min.y + 0.5),
-        )
-    } else {
-        (
-            pos2(arrow_x, rect.max.y + ARROW_GAP - 1.0),
-            pos2(arrow_x - half, rect.max.y - 0.5),
-            pos2(arrow_x + half, rect.max.y - 0.5),
-        )
-    };
+    let [tip, a, b] = arrow_triangle(rect, arrow_x, arrow_up);
     painter.add(Shape::convex_polygon(
         vec![tip, a, b],
         fill,
@@ -664,6 +675,28 @@ mod tests {
         let bounds = Rect::from_min_size(pos2(10.0, 10.0), vec2(2.0, 2.0));
         let rect = Rect::from_min_size(pos2(0.0, 20.0), vec2(4.0, 4.0));
         assert_eq!(arrow_x(bounds, rect), 12.0);
+    }
+
+    /// La flèche sort du bord qui regarde la cible, avec un débordement
+    /// identique vers le haut et vers le bas (§6.2).
+    #[test]
+    fn arrow_overhang_is_symmetric_and_faces_the_anchor() {
+        let rect = Rect::from_min_size(pos2(100.0, 200.0), vec2(300.0, 66.0));
+        let target = Rect::from_min_size(pos2(230.0, 300.0), vec2(40.0, 20.0));
+        let x = arrow_x(target, rect);
+        assert_eq!(x, 250.0, "la pointe suit le centre de la cible");
+
+        let down = arrow_triangle(rect, x, false);
+        let up = arrow_triangle(rect, x, true);
+        assert_eq!(down[0].y - rect.max.y, ARROW_GAP - 1.0);
+        assert_eq!(rect.min.y - up[0].y, ARROW_GAP - 1.0);
+        assert_eq!(down[0].y - rect.max.y, rect.min.y - up[0].y);
+        assert_eq!(down[0].x, x);
+        assert_eq!(up[0].x, x);
+        assert_eq!((down[1].x, down[2].x), (x - 7.0, x + 7.0));
+        // La base reste dans le cadre ; seule la pointe déborde.
+        assert!(down[1].y < rect.max.y && down[2].y < rect.max.y);
+        assert!(up[1].y > rect.min.y && up[2].y > rect.min.y);
     }
 
     /// L'en-tête nomme la cible, et les accesseurs restent cohérents.

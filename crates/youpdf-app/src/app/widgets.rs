@@ -223,30 +223,6 @@ pub(crate) fn status_button(ui: &mut egui::Ui, glyph: &str, tip: &str) -> bool {
     resp.clicked()
 }
 
-/// Bouton d'action de la fenêtre d'organisation : icône puis libellé.
-pub(crate) fn organize_button(ui: &mut egui::Ui, icon: IconFn, label: &str) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(vec2(116.0, 28.0), Sense::click());
-    ui.painter().rect_filled(
-        rect,
-        Rounding::same(RADIUS_M),
-        if resp.hovered() { pal().hover_bg } else { pal().widget_bg },
-    );
-    let color = if resp.hovered() { pal().icon_bright } else { pal().icon };
-    icon(
-        ui.painter(),
-        Rect::from_center_size(pos2(rect.min.x + 15.0, rect.center().y), vec2(14.0, 14.0)),
-        color,
-    );
-    ui.painter().text(
-        pos2(rect.min.x + 28.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(BODY),
-        color,
-    );
-    resp.clicked()
-}
-
 /// Vrai si le réglage `mode` correspond au zoom courant de l'onglet.
 pub(super) fn zoom_choice_matches(mode: ZoomMode, zoom: Option<f32>, fit_page: bool) -> bool {
     match mode {

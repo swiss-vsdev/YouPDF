@@ -235,7 +235,7 @@ impl YouPdfApp {
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         ui.add_space(12.0);
-                        ui.label(RichText::new(panel.title()).size(TITLE).strong());
+                        ui.label(RichText::new(t(panel.title())).size(TITLE).strong());
                         if panel == Panel::Thumbnails {
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 ui.add_space(10.0);

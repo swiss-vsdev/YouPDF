@@ -212,6 +212,7 @@ impl YouPdfApp {
             let selected_annot = self.selected_annot;
             let has_selection = self.has_annot_selection;
             let show_shadow = self.page_shadow;
+            let paper_style = self.paper_style;
             let tint = PAGE_TINTS[self.page_tint.min(PAGE_TINTS.len() - 1)].1;
             let tint_color = Color32::from_rgba_unmultiplied(tint[0], tint[1], tint[2], tint[3]);
             let tint_on = tint[3] > 0;
@@ -473,6 +474,19 @@ impl YouPdfApp {
                             // tout ce que l'interface ajoute ensuite.
                             if tint_on {
                                 ui.painter().rect_filled(page_rect, Rounding::ZERO, tint_color);
+                            }
+                            // Papier posé sur la page et débordant dans la
+                            // gouttière : le motif se lit sur la feuille
+                            // autant que dans l'espace entre deux pages.
+                            // ponytail: traits directs plutôt qu'une texture
+                            // GPU — ~2 000 points par page au pas de 24 pt,
+                            // une texture ne paierait qu'au-delà de ce palier.
+                            if paper_style != PaperStyle::Solid {
+                                paint_paper(
+                                    ui.painter(),
+                                    page_rect.expand(PAGE_SPACING * 0.4),
+                                    paper_style,
+                                );
                             }
                             if show_border {
                                 // Gris moyen plutôt que la couleur de séparation
