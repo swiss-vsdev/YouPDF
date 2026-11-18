@@ -551,6 +551,68 @@ impl YouPdfApp {
                 return;
             }
             let sanitize = self.redact_sanitize;
+            let repeat = self.redact_repeat_across_pages;
+            let auto_size = self.redact_auto_size;
+            // Reproduire chaque marque sur toutes les pages, si demandé.
+            let marks = if repeat {
+                let total = self
+                    .tabs
+                    .get(self.active)
+                    .map(|t| t.total().max(1))
+                    .unwrap_or(1);
+                let mut expanded = Vec::with_capacity(marks.len() * total);
+                for m in &marks {
+                    for p in 1..=total {
+                        let mut clone = m.clone();
+                        clone.page = p;
+                        if auto_size {
+                            // Le texte superposé est réduit pour tenir dans
+                            // la zone : on baisse le corps jusqu'à ce que
+                            // chaque ligne tienne (planche 4,0 pt).
+                            if let Some(overlay) = clone.overlay.as_mut() {
+                                let w = (clone.rect[2] - clone.rect[0]).abs().max(1.0);
+                                let h = (clone.rect[3] - clone.rect[1]).abs().max(1.0);
+                                let lines: Vec<String> = overlay
+                                    .text
+                                    .split('\n')
+                                    .map(|l| l.trim_end().to_string())
+                                    .filter(|l| !l.trim().is_empty())
+                                    .collect();
+                                if !lines.is_empty() {
+                                    let size = youpdf_core::redact::fit_block(
+                                        &lines, w, h, 1.15,
+                                    );
+                                    overlay.size = size;
+                                }
+                            }
+                        }
+                        expanded.push(clone);
+                    }
+                }
+                expanded
+            } else if auto_size {
+                // Sans réplication, on ajuste le corps de chaque marque.
+                let mut expanded = marks.clone();
+                for m in &mut expanded {
+                    if let Some(overlay) = m.overlay.as_mut() {
+                        let w = (m.rect[2] - m.rect[0]).abs().max(1.0);
+                        let h = (m.rect[3] - m.rect[1]).abs().max(1.0);
+                        let lines: Vec<String> = overlay
+                            .text
+                            .split('\n')
+                            .map(|l| l.trim_end().to_string())
+                            .filter(|l| !l.trim().is_empty())
+                            .collect();
+                        if !lines.is_empty() {
+                            let size = youpdf_core::redact::fit_block(&lines, w, h, 1.15);
+                            overlay.size = size;
+                        }
+                    }
+                }
+                expanded
+            } else {
+                marks
+            };
             let outcome: Result<(RedactionReport, usize), String> = {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
                     return;

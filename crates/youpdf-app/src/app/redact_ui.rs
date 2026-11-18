@@ -128,6 +128,26 @@ impl YouPdfApp {
                         }
                     });
                     ui.add_space(12.0);
+                    ui.collapsing("More options", |ui| {
+                        ui.checkbox(
+                            &mut app.redact_repeat_across_pages,
+                            "Repeat mark across pages",
+                        );
+                        ui.checkbox(
+                            &mut app.redact_auto_size,
+                            "Auto-size text to fit redaction region",
+                        );
+                        if app.redact_auto_size {
+                            ui.label(
+                                RichText::new(
+                                    "Overlay text shrinks to fit the redaction rectangle.",
+                                )
+                                .size(CAPTION)
+                                .color(pal().muted),
+                            );
+                        }
+                    });
+                    ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         if ui.button(t("Cancel")).clicked() {
                             cancel = true;

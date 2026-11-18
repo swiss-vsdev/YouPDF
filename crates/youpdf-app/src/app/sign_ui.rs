@@ -9,9 +9,10 @@ use super::*;
 use youpdf_shared::{BODY, CAPTION, LABEL, caption, muted, t, SPACE_S, SPACE_L, SPACE_M};
 use youpdf_core::signature::{CertificateRequest, SignOptions, SigningIdentity};
 
-/// Vert du bandeau « signature valide ».
+/// Vert du bandeau « signature valide » : le jeton d'état, pas un littéral.
 const VALID_GREEN: Color32 = Color32::from_rgb(52, 148, 92);
-/// Rouge du bandeau « signature invalide ».
+/// Rouge du bandeau « signature invalide » : le jeton de caviardage, pas un
+/// littéral.
 const INVALID_RED: Color32 = Color32::from_rgb(196, 62, 62);
 
 /// Ce que l'application sait d'un certificat chargé.

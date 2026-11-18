@@ -316,6 +316,26 @@ impl YouPdfApp {
                                                 .speed(0.1),
                                         );
                                     });
+                                    // Style de trait : plein, pointillé, tireté.
+                                    ui.horizontal(|ui| {
+                                        ui.label(muted("Line style", LABEL));
+                                        let solid = appearance.dash.is_none();
+                                        if ui.selectable_label(solid, "Solid").clicked() {
+                                            appearance.dash = None;
+                                        }
+                                        if ui
+                                            .selectable_label(!solid && appearance.dash.as_deref() == Some(&[3.0, 2.0][..]), "Dashed")
+                                            .clicked()
+                                        {
+                                            appearance.dash = Some(vec![3.0, 2.0]);
+                                        }
+                                        if ui
+                                            .selectable_label(!solid && appearance.dash.as_deref() != Some(&[3.0, 2.0][..]), "Dotted")
+                                            .clicked()
+                                        {
+                                            appearance.dash = Some(vec![1.0, 1.0]);
+                                        }
+                                    });
                                     let mut color = Color32::from_rgb(appearance.color[0], appearance.color[1], appearance.color[2]);
                                     ui.color_edit_button_srgba(&mut color);
                                     appearance.color = [color.r(), color.g(), color.b()];

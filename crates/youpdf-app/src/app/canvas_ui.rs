@@ -108,7 +108,9 @@ impl YouPdfApp {
             // trackpad signalent le geste tout de suite ; le glissement de la
             // barre de défilement est repéré plus bas, d'après le mouvement des
             // pages. Tant que le geste dure, on rasterise à basse résolution.
-            if ui.input(|i| i.raw_scroll_delta.length() > 0.0) {
+            let scroll_up = ui.input(|i| i.raw_scroll_delta.y < -0.05);
+            let scrolling = ui.input(|i| i.raw_scroll_delta.length() > 0.0);
+            if scrolling {
                 self.scroll_moved_at = now;
             }
             let scroll_settled = now - self.scroll_moved_at >= SCROLL_SETTLE_SECS;
@@ -116,6 +118,28 @@ impl YouPdfApp {
             if fast {
                 // La trame nette est encore due : on la programme.
                 ui.ctx().request_repaint();
+            }
+            // View ▸ Toolbar ▸ Scroll Pages Display : la barre se cache quand on
+            // défile vers le bas, et se révèle vers le haut ou quand le
+            // pointeur touche le haut de la fenêtre. Le signe de
+            // `raw_scroll_delta.y` est la seule information fiable : la barre
+            // native d'egui est un widget séparé, elle n'est pas dans le flux
+            // du ScrollArea.
+            if self.toolbar_visibility == ToolbarVisibility::Scroll {
+                if scrolling {
+                    if scroll_up {
+                        self.reveal_toolbar();
+                    } else {
+                        self.toolbar_hidden = true;
+                    }
+                } else if scroll_settled {
+                    self.toolbar_hidden = false;
+                }
+                if self.toolbar_hidden {
+                    ui.ctx().request_repaint();
+                }
+            } else if self.toolbar_visibility == ToolbarVisibility::Hidden {
+                self.toolbar_hidden = true;
             }
 
             let active = self.active;
@@ -240,7 +264,12 @@ impl YouPdfApp {
                     // disposition choisie décide combien de pages partagent une
                     // ligne ; « Une page » n'en garde que la page courante.
                     let mut placed: Vec<(u32, Rect, Rect, Id, f32)> = Vec::new();
-                    for row_pages in &page_layout_rows(page_layout, total as u32, tab.page as u32) {
+                    for row_pages in &page_layout_rows(
+    page_layout,
+    total as u32,
+    tab.page as u32,
+    self.page_display.show_cover_page,
+) {
                         // Toutes les pages d'une rangée partagent la même échelle :
                         // sinon deux pages côte à côte n'auraient pas la même
                         // hauteur, et la lecture perdrait ses repères.
@@ -398,13 +427,33 @@ impl YouPdfApp {
                                 first_visible = Some(page as usize);
                             }
 
-                            // Ombre douce sous la page.
+                            // Liseré qui détache la page du canevas (UPDF 2.5.6).
+                            // Mesuré sur la capture de référence, en thème sombre :
+                            // fond 48 → 53 → 58 → 53 → page blanche 255. Ce n'est
+                            // donc pas un aplat noir dur mais un liseré de 3 px
+                            // dont le cœur vaut `separator`. Ce jeton suit le thème
+                            // (clair sur fond sombre, sombre sur fond clair), donc
+                            // le liseré reste visible dans les quatre palettes.
+                            // ponytail: trois traits plutôt qu'un flou gaussien —
+                            // le profil mesuré tient en 3 px, un vrai blur serait
+                            // du code mort.
                             if show_shadow {
-                                ui.painter().rect_filled(
-                                    page_rect.translate(vec2(0.0, 2.0)).expand(1.0),
-                                    Rounding::same(RADIUS_TINY),
-                                    Color32::from_black_alpha(70),
-                                );
+                                let rim = pal().separator;
+                                for (expand, alpha) in
+                                    [(0.5_f32, 0.35_f32), (1.5, 0.75), (2.5, 0.35)]
+                                {
+                                    let color = Color32::from_rgba_unmultiplied(
+                                        rim.r(),
+                                        rim.g(),
+                                        rim.b(),
+                                        (alpha * 255.0) as u8,
+                                    );
+                                    ui.painter().rect_stroke(
+                                        page_rect.expand(expand),
+                                        Rounding::ZERO,
+                                        Stroke::new(1.0_f32, color),
+                                    );
+                                }
                             }
 
                             let step = render_step(scale, ppp);
@@ -432,10 +481,7 @@ impl YouPdfApp {
                                 ui.painter().rect_stroke(
                                     page_rect,
                                     Rounding::ZERO,
-                                    Stroke::new(
-                                        1.0_f32,
-                                        Color32::from_rgba_unmultiplied(0x80, 0x80, 0x88, 170),
-                                    ),
+                                    Stroke::new(1.0_f32, pal().scrim),
                                 );
                             }
 
@@ -568,9 +614,9 @@ impl YouPdfApp {
                                         Stroke::new(
                                             if selected { 2.0 } else if active { 1.5 } else { 1.0_f32 },
                                             if selected {
-                                                Color32::from_rgb(230, 120, 40)
+                                                pal().warn
                                             } else {
-                                                Color32::from_rgb(70, 130, 220)
+                                                pal().selection
                                             },
                                         ),
                                     );

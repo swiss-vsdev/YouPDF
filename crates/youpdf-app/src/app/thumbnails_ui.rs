@@ -87,7 +87,7 @@ impl YouPdfApp {
                             ui.painter().rect_filled(
                                 img_rect.expand(5.0),
                                 Rounding::same(RADIUS_S),
-                                Color32::from_rgb(0x3C, 0x3C, 0x3C),
+                                youpdf_shared::theme::darken(pal().chrome_bg, 0x14),
                             );
                         }
 

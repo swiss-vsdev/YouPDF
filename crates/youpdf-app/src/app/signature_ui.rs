@@ -5,7 +5,7 @@
 //! est partagé avec les tampons dans `marks_ui`.
 
 use super::*;
-use super::marks_ui::{centered_rect, encode_png, Canvas, MARKS_RED};
+use super::marks_ui::{centered_rect, encode_png, Canvas};
 use super::marks_ui::{StoredSignature, STORED_SIGNATURE_LIMIT};
 use ab_glyph::ScaleFont;
 use youpdf_shared::{CAPTION, LABEL, TITLE, t, RADIUS_S, SPACE_M, SPACE_S};
@@ -52,7 +52,7 @@ impl YouPdfApp {
                 }
                 if let Some(error) = app.marks.error.clone() {
                     ui.add_space(SPACE_S);
-                    ui.label(RichText::new(error).size(LABEL).color(MARKS_RED));
+                    ui.label(RichText::new(error).size(LABEL).color(pal().redact_red));
                 }
                 ui.separator();
                 app.stored_signatures_list(ui);

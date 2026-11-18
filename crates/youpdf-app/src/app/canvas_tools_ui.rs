@@ -317,10 +317,10 @@ if action != ToolAction::None {
                     Rounding::same(RADIUS_XS),
                     Stroke::new(1.5_f32, pal().accent),
                 );
-                // Guides d'alignement rouges.
+                // Guides d'alignement : le rouge d'alignement est un jeton de
+                // palette, pas un littéral.
                 for (vertical, at) in guides {
-                    let stroke =
-                        Stroke::new(1.0_f32, Color32::from_rgb(220, 60, 60));
+                    let stroke = Stroke::new(1.0_f32, pal().redact_red);
                     if vertical {
                         let x = page_rect.min.x + at * scale;
                         ui.painter().line_segment(
@@ -460,12 +460,17 @@ if action != ToolAction::None {
                     ui.painter().rect_filled(
                         rect,
                         Rounding::same(RADIUS_XS),
-                        Color32::from_rgba_unmultiplied(70, 130, 220, 30),
+                        Color32::from_rgba_unmultiplied(
+                            pal().selection.r(),
+                            pal().selection.g(),
+                            pal().selection.b(),
+                            30,
+                        ),
                     );
                     ui.painter().rect_stroke(
                         rect,
                         Rounding::same(RADIUS_XS),
-                        Stroke::new(1.0_f32, Color32::from_rgb(70, 130, 220)),
+                        Stroke::new(1.0_f32, pal().selection),
                     );
                 }
             }

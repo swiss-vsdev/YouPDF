@@ -12,7 +12,7 @@ impl YouPdfApp {
             };
             let total = tab.total() as u32;
             let current = tab.page as u32;
-            let mut pages: Vec<u32> = page_layout_rows(self.page_layout, total, current)
+            let mut pages: Vec<u32> = page_layout_rows(self.page_layout, total, current, self.page_display.show_cover_page)
                 .into_iter()
                 .find(|row| row.contains(&current))
                 .unwrap_or_default();

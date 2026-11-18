@@ -5,6 +5,96 @@ use super::*;
 use youpdf_shared::{BODY, CAPTION, LABEL, muted, section, t, RADIUS_S, SPACE_L, SPACE_M, SPACE_S};
 
 impl YouPdfApp {
+    /// Fenêtre « Security Properties » : matrice des permissions d'un PDF chiffré.
+    ///
+    /// Lit le dictionnaire `/Encrypt` et décode l'entier `/P` en une
+    /// matrice lisible. N'affiche rien si le document n'est pas chiffré.
+    pub(super) fn security_properties_window(&mut self, ctx: &egui::Context) {
+        if !self.security_props_open {
+            return;
+        }
+        let mut open = true;
+        let Some(tab) = self.tabs.get(self.active) else {
+            self.security_props_open = false;
+            return;
+        };
+        let rows = youpdf_core::protect::permissions::read_permissions(&tab.doc);
+        let encrypted = rows.is_some();
+        self.show_modal(
+            ctx,
+            "modal-security-props",
+            "Security Properties",
+            400.0,
+            &mut open,
+            |app, ui| {
+                if !encrypted {
+                    ui.label(
+                        RichText::new("This document is not encrypted.")
+                            .size(LABEL)
+                            .color(pal().muted),
+                    );
+                    ui.add_space(SPACE_M);
+                    if ui.button("Encrypt…").clicked() {
+                        app.protect_open = true;
+                        app.security_props_open = false;
+                    }
+                    return;
+                }
+                let rows = rows.unwrap_or_default();
+                ui.label(
+                    RichText::new("Permissions granted by the owner password:")
+                        .size(CAPTION)
+                        .color(pal().muted),
+                );
+                ui.add_space(SPACE_XS);
+                egui::Grid::new("security-matrix")
+                    .num_columns(3)
+                    .spacing([14.0, 4.0])
+                    .show(ui, |ui| {
+                        for row in &rows {
+                            let glyph = if row.allowed { "✓" } else { "✗" };
+                            ui.label(
+                                RichText::new(glyph)
+                                    .color(if row.allowed {
+                                        Color32::GREEN
+                                    } else {
+                                        pal().redact_red
+                                    }),
+                            );
+                            ui.label(
+                                RichText::new(row.label)
+                                    .size(BODY)
+                                    .color(pal().icon_bright),
+                            );
+                            ui.label(
+                                RichText::new(row.key)
+                                    .size(CAPTION)
+                                    .color(pal().muted),
+                            );
+                            ui.end_row();
+                        }
+                    });
+                ui.add_space(SPACE_M);
+                ui.label(
+                    RichText::new(
+                        "These permissions are set when the document is encrypted. \
+                         To change them, re-encrypt with a new owner password.",
+                    )
+                    .size(CAPTION)
+                    .color(pal().muted),
+                );
+                ui.add_space(SPACE_M);
+                if ui.button("Encrypt with different permissions…").clicked() {
+                    app.protect_open = true;
+                    app.security_props_open = false;
+                }
+            },
+        );
+        if !open {
+            self.security_props_open = false;
+        }
+    }
+
     /// Fenêtre « Protéger ».
     pub(super) fn protect_window(&mut self, ctx: &egui::Context) {
         if !self.protect_open {

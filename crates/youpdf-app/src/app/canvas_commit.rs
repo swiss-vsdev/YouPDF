@@ -103,7 +103,12 @@ impl YouPdfApp {
             let points = match self.measure_kind {
                 // Un glissé donne deux points : la distance va de l'un à
                 // l'autre, le périmètre et l'aire prennent le rectangle.
-                MeasureKind::Distance => vec![from, to],
+                // Un angle (azimut/altitude) est le même segment que la
+                // distance : sa valeur est calculée à partir de ces deux
+                // points.
+                MeasureKind::Distance | MeasureKind::Azimuth | MeasureKind::Altitude => {
+                    vec![from, to]
+                }
                 MeasureKind::Perimeter => vec![
                     low,
                     [high[0], low[1]],
@@ -120,6 +125,7 @@ impl YouPdfApp {
                 points,
                 scale: self.measure_scale,
                 unit: self.measure_unit.clone(),
+                label: self.measure_label.clone(),
             };
             let page = page as u32;
             let result = self

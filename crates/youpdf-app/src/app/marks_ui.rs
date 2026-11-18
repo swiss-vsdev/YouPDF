@@ -168,7 +168,7 @@ impl YouPdfApp {
                 }
                 if let Some(error) = app.marks.error.clone() {
                     ui.add_space(SPACE_S);
-                    ui.label(RichText::new(error).size(LABEL).color(MARKS_RED));
+                    ui.label(RichText::new(error).size(LABEL).color(pal().redact_red));
                 }
             },
         );
@@ -277,7 +277,10 @@ impl YouPdfApp {
 
 }
 
-/// Couleur d'erreur des deux fenêtres.
+/// Couleur d'erreur des deux fenêtres. Supprimé : le jeton
+/// [`Palette::redact_red`] (`theme.rs`) est le point de vérité unique ; les
+/// deux sites l'appellent directement.
+#[allow(dead_code)]
 pub(super) const MARKS_RED: Color32 = Color32::from_rgb(196, 62, 62);
 
 /// Taille de police du tampon texte personnalisé.

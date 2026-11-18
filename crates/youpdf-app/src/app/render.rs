@@ -86,9 +86,9 @@ pub(crate) fn comment_state_icon(state: AnnotationState) -> &'static str {
 pub(crate) fn comment_state_color(state: AnnotationState) -> Color32 {
     match state {
         AnnotationState::None => pal().muted,
-        AnnotationState::Accepted => Color32::from_rgb(72, 168, 104),
-        AnnotationState::Rejected => Color32::from_rgb(206, 88, 84),
-        AnnotationState::Cancelled => Color32::from_rgb(206, 158, 72),
+        AnnotationState::Accepted => pal().state_ok,
+        AnnotationState::Rejected => pal().state_bad,
+        AnnotationState::Cancelled => pal().state_warn,
         AnnotationState::Completed => pal().icon_bright,
     }
 }

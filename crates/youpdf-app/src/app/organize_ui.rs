@@ -293,7 +293,7 @@ impl YouPdfApp {
             ui.painter().rect_filled(
                 bar,
                 Rounding::ZERO,
-                Color32::from_rgb(230, 120, 40),
+                pal().warn,
             );
         }
 
