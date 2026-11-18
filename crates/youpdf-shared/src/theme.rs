@@ -91,6 +91,18 @@ pub struct Palette {
     pub redact_red: Color32,
     /// Jaune des correspondances de recherche.
     pub search_match: Color32,
+    /// Bleu des guides de sélection (cage d'objets en cours de glissé).
+    pub selection: Color32,
+    /// Orange des barres d'insertion (organiser les pages).
+    pub warn: Color32,
+    /// Voile d'atténuation posé sur le canevas, alpha compris.
+    pub scrim: Color32,
+    /// Badge d'annotation acceptée.
+    pub state_ok: Color32,
+    /// Badge d'annotation rejetée.
+    pub state_bad: Color32,
+    /// Badge d'annotation annulée.
+    pub state_warn: Color32,
 }
 
 /// Thème de l'interface.
@@ -218,6 +230,12 @@ const DARK: Palette = Palette {
     separator: Color32::from_rgb(0x3A, 0x3A, 0x3A),
     redact_red: Color32::from_rgb(0xE0, 0x4F, 0x5F),
     search_match: Color32::from_rgba_premultiplied(0x50, 0x40, 0x05, 0x6E),
+    selection: Color32::from_rgb(0x46, 0x82, 0xDC),
+    warn: Color32::from_rgb(0xE6, 0x78, 0x28),
+    scrim: Color32::from_rgba_premultiplied(91, 91, 95, 170),
+    state_ok: Color32::from_rgb(0x48, 0xA8, 0x68),
+    state_bad: Color32::from_rgb(0xCE, 0x58, 0x54),
+    state_warn: Color32::from_rgb(0xCE, 0x9E, 0x48),
 };
 
 const LIGHT: Palette = Palette {
@@ -233,6 +251,12 @@ const LIGHT: Palette = Palette {
     separator: Color32::from_rgb(0xD0, 0xD0, 0xD6),
     redact_red: Color32::from_rgb(0xC8, 0x38, 0x48),
     search_match: Color32::from_rgba_premultiplied(0xF0, 0xD0, 0x40, 0x9C),
+    selection: Color32::from_rgb(0x3B, 0x6E, 0xC4),
+    warn: Color32::from_rgb(0xD8, 0x70, 0x28),
+    scrim: Color32::from_rgba_premultiplied(91, 91, 95, 170),
+    state_ok: Color32::from_rgb(0x40, 0xA0, 0x60),
+    state_bad: Color32::from_rgb(0xC0, 0x40, 0x48),
+    state_warn: Color32::from_rgb(0xC0, 0x80, 0x40),
 };
 
 const MINT: Palette = Palette {
@@ -248,6 +272,12 @@ const MINT: Palette = Palette {
     separator: Color32::from_rgb(0xC2, 0xDA, 0xCD),
     redact_red: Color32::from_rgb(0xC8, 0x38, 0x48),
     search_match: Color32::from_rgba_premultiplied(0xF5, 0xD8, 0x50, 0x9C),
+    selection: Color32::from_rgb(0x18, 0x9E, 0x77),
+    warn: Color32::from_rgb(0xE6, 0x78, 0x28),
+    scrim: Color32::from_rgba_premultiplied(91, 91, 95, 170),
+    state_ok: Color32::from_rgb(0x40, 0xA0, 0x60),
+    state_bad: Color32::from_rgb(0xC0, 0x40, 0x48),
+    state_warn: Color32::from_rgb(0xC0, 0x80, 0x40),
 };
 
 const STARRY: Palette = Palette {
@@ -263,6 +293,12 @@ const STARRY: Palette = Palette {
     separator: Color32::from_rgb(0x26, 0x2E, 0x4C),
     redact_red: Color32::from_rgb(0xFF, 0x6B, 0x7A),
     search_match: Color32::from_rgba_premultiplied(0x60, 0x50, 0x10, 0x7E),
+    selection: Color32::from_rgb(0x46, 0x82, 0xDC),
+    warn: Color32::from_rgb(0xE6, 0x78, 0x28),
+    scrim: Color32::from_rgba_premultiplied(91, 91, 95, 170),
+    state_ok: Color32::from_rgb(0x48, 0xA8, 0x68),
+    state_bad: Color32::from_rgb(0xCE, 0x58, 0x54),
+    state_warn: Color32::from_rgb(0xCE, 0x9E, 0x48),
 };
 
 thread_local! {
@@ -280,4 +316,27 @@ pub fn pal() -> Palette {
 /// À appeler au début d'une trame, avant toute peinture.
 pub fn set_palette(palette: Palette) {
     PALETTE.with(|cell| cell.set(palette));
+}
+
+/// Assombrit une couleur de `delta` (0..255) par canal, canalisée à 0.
+///
+/// Les états « plus sombres que le chrome » (survol d'un panneau, filet de
+/// page, voile de fenêtre) étaient des littéraux `0x33`/`0x4A`/`0x28` en dur,
+/// qui ne suivaient pas les thèmes Mint/Starry. Les dériver de [`pal`] par
+/// assombrissement uniforme donne un seul point de vérité et quatre thèmes
+/// cohérents. `delta` est mesuré une fois, sur le thème Dark d'origine.
+pub fn darken(color: Color32, delta: u8) -> Color32 {
+    let [r, g, b, a] = color.to_array();
+    Color32::from_rgba_unmultiplied(r.saturating_sub(delta), g.saturating_sub(delta), b.saturating_sub(delta), a)
+}
+
+/// Survol d'un panneau : plus sombre que le chrome, par assombrissement
+/// uniforme (pas un littéral) pour que Mint/Starry restent cohérents.
+pub fn panel_hover() -> Color32 {
+    darken(pal().chrome_bg, 0x28)
+}
+
+/// Filet de page et voile de toast : assombrissement plus prononcé.
+pub fn page_border() -> Color32 {
+    darken(pal().chrome_bg, 0x4A)
 }

@@ -220,6 +220,7 @@ pub fn t(key: &'static str) -> &'static str {
         "Also remove" => "Retirer aussi",
         "Angle" => "Angle",
         "Appearance" => "Apparence",
+        "Enable Liquid Glass" => "Activer Liquid Glass",
         "Apply the crop" => "Appliquer le recadrage",
         "Assemble" => "Assembler",
         "Author" => "Auteur",

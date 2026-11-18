@@ -48,6 +48,10 @@ pub enum MeasureKind {
     Perimeter,
     /// Aire d'un polygone fermé.
     Area,
+    /// Angle azimutal (relatif au nord du dessin).
+    Azimuth,
+    /// Angle d'altitude (élévation au-dessus du plan).
+    Altitude,
 }
 
 impl MeasureKind {
@@ -57,6 +61,8 @@ impl MeasureKind {
             MeasureKind::Distance => "Distance",
             MeasureKind::Perimeter => "Perimeter",
             MeasureKind::Area => "Area",
+            MeasureKind::Azimuth => "Azimuth",
+            MeasureKind::Altitude => "Altitude",
         }
     }
 
@@ -64,6 +70,7 @@ impl MeasureKind {
     fn min_points(self) -> usize {
         match self {
             MeasureKind::Distance | MeasureKind::Perimeter => 2,
+            MeasureKind::Azimuth | MeasureKind::Altitude => 2,
             MeasureKind::Area => 3,
         }
     }
@@ -79,6 +86,8 @@ pub struct Measurement {
     pub scale: f32,
     /// Unité affichée (`mm`, `in`, `pt`…).
     pub unit: String,
+    /// Libellé personnalisé affiché en plus de la valeur (ex. « mur porteur »).
+    pub label: Option<String>,
 }
 
 /// Longueur d'un segment.
@@ -100,12 +109,39 @@ fn measure_value(kind: MeasureKind, points: &[[f32; 2]]) -> f32 {
             }
             (acc / 2.0).abs()
         }
+        // Azimut : angle du segment [P0, P1] par rapport au nord (axe +Y),
+        // en degrés, borné à [0, 360).
+        MeasureKind::Azimuth => {
+            let (a, b) = (points[0], points[1]);
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let deg = (dx.atan2(dy).to_degrees() + 360.0) % 360.0;
+            deg
+        }
+        // Altitude : angle d'élévation du segment par rapport à l'horizontale.
+        // Approximation plane — l'altitude « réelle » exigerait une élévation
+        // de terrain, que le flux de contenu ne porte pas.
+        MeasureKind::Altitude => {
+            let (a, b) = (points[0], points[1]);
+            let horizontal = (b[0] - a[0]).abs();
+            let vertical = (b[1] - a[1]).abs();
+            if horizontal < f32::EPSILON {
+                90.0
+            } else {
+                (vertical / horizontal).atan().to_degrees()
+            }
+        }
     }
 }
 
 /// Libellé affiché : valeur réelle (dessin / échelle, dessin / échelle² pour
 /// une aire), un chiffre après la virgule, suivi de l'unité. Exemple : `12.3 mm`.
+/// Un angle (azimut/altitude) est en degrés, pas en unités — `scale` n'y
+/// s'applique pas.
 fn measure_label(m: &Measurement) -> String {
+    if m.kind == MeasureKind::Azimuth || m.kind == MeasureKind::Altitude {
+        let value = measure_value(m.kind, &m.points);
+        return format!("{value:.1}°");
+    }
     let scale = if m.scale > 0.0 { m.scale } else { 1.0 };
     // Une aire est en unités de dessin au carré : elle se convertit par le
     // carré de l'échelle, sans quoi elle est annoncée `scale` fois trop grande.
@@ -115,6 +151,12 @@ fn measure_label(m: &Measurement) -> String {
         scale
     };
     let value = measure_value(m.kind, &m.points) / divisor;
+    // Un libellé personnalisé est préfixé au chiffre, ex. « mur porteur 12.3 mm ».
+    if let Some(label) = &m.label {
+        if !label.trim().is_empty() {
+            return format!("{label} {value:.1} {}", m.unit);
+        }
+    }
     format!("{value:.1} {}", m.unit)
 }
 

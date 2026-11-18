@@ -73,6 +73,7 @@ fn mesure(kind: MeasureKind, points: &[[f32; 2]], scale: f32, unit: &str) -> Mea
         points: points.to_vec(),
         scale,
         unit: unit.to_string(),
+        label: None,
     }
 }
 
@@ -151,6 +152,53 @@ fn retrait_laisse_le_filigrane() {
     let content = text_of(&bytes, 1);
     assert!(!content.contains("10.0 pt"), "mesure encore présente");
     assert!(content.contains("CONFIDENTIEL"), "filigrane supprimé");
+}
+
+/// Un azimut est l'angle du segment au nord (axe +Y), en degrés.
+#[test]
+fn azimut_angle_depuis_nord() {
+    let mut doc = Document::from_bytes(&page_blanche()).expect("ouverture");
+    // Segment plein est (+X) : azimut 90°. Le « ° » est encodé WinAnsi (0xB0)
+    // dans le flux, pas UTF-8 : on cherche les octets.
+    let est = mesure(MeasureKind::Azimuth, &[[0.0, 0.0], [10.0, 0.0]], 1.0, "pt");
+    doc.add_measurement(1, &est).expect("mesure");
+    let bytes = doc.to_bytes().expect("écriture");
+    let content = page_content(&bytes, 1);
+    let needle: &[u8] = b"90.0\xb0";
+    assert!(
+        content.windows(needle.len()).any(|w| w == needle),
+        "azimut absent : {content:?}"
+    );
+}
+
+/// Une altitude est l'élévation au-dessus de l'horizontale.
+#[test]
+fn altitude_angle_elevation() {
+    let mut doc = Document::from_bytes(&page_blanche()).expect("ouverture");
+    // Segment vertical : altitude 90°.
+    let vertical = mesure(MeasureKind::Altitude, &[[0.0, 0.0], [0.0, 10.0]], 1.0, "pt");
+    doc.add_measurement(1, &vertical).expect("mesure");
+    let bytes = doc.to_bytes().expect("écriture");
+    let content = page_content(&bytes, 1);
+    let needle: Vec<u8> = b"90.0\xb0".to_vec();
+    assert!(
+        content.windows(needle.len()).any(|w| w == needle),
+        "altitude absente : {content:?}"
+    );
+}
+
+/// Un libellé personnalisé est préfixé à la valeur.
+#[test]
+fn libelle_personnalise_prefixe() {
+    let mut doc = Document::from_bytes(&page_blanche()).expect("ouverture");
+    let mut m = mesure(MeasureKind::Distance, &[[0.0, 0.0], [10.0, 0.0]], 1.0, "pt");
+    m.label = Some("mur porteur".to_string());
+    doc.add_measurement(1, &m).expect("mesure");
+    let bytes = doc.to_bytes().expect("écriture");
+    assert!(
+        text_of(&bytes, 1).contains("mur porteur 10.0 pt"),
+        "libellé absent"
+    );
 }
 
 /// Entrées invalides : points manquants ou page hors bornes.
