@@ -1,0 +1,1472 @@
+{
+  ".github/workflows/release.yml": {
+    "mtime": 1795009104.4357755,
+    "seen": 1795011799.831268,
+    "ast_hash": "632cc5424fdcc67b421f2cf0a1a425f3",
+    "semantic_hash": "632cc5424fdcc67b421f2cf0a1a425f3"
+  },
+  "Cargo.toml": {
+    "mtime": 1795010198.582915,
+    "seen": 1795011799.831272,
+    "ast_hash": "5c02a1a9abad0f34b79f0046435928e4",
+    "semantic_hash": "5c02a1a9abad0f34b79f0046435928e4"
+  },
+  "crates/youpdf-ai/Cargo.toml": {
+    "mtime": 1792340641.4415672,
+    "seen": 1795011799.831274,
+    "ast_hash": "c840ea48f99a99a4584c22db4b87c824",
+    "semantic_hash": "c840ea48f99a99a4584c22db4b87c824"
+  },
+  "crates/youpdf-ai/src/config.rs": {
+    "mtime": 1795009343.5099707,
+    "seen": 1795011799.831275,
+    "ast_hash": "2f3ecce83e854fba90f189ed54034981",
+    "semantic_hash": "2f3ecce83e854fba90f189ed54034981"
+  },
+  "crates/youpdf-ai/src/endpoint.rs": {
+    "mtime": 1792343478.846898,
+    "seen": 1795011799.831276,
+    "ast_hash": "295a96195178b63ad6368666332f1fa0",
+    "semantic_hash": "295a96195178b63ad6368666332f1fa0"
+  },
+  "crates/youpdf-ai/src/keyring.rs": {
+    "mtime": 1792141994.9106753,
+    "seen": 1795011799.8312771,
+    "ast_hash": "97b7d84279d76681455686093cd3f8c4",
+    "semantic_hash": "97b7d84279d76681455686093cd3f8c4"
+  },
+  "crates/youpdf-ai/src/lib.rs": {
+    "mtime": 1795010192.890093,
+    "seen": 1795011799.831278,
+    "ast_hash": "0894bdf23c572713050fe453d86ca9ee",
+    "semantic_hash": "0894bdf23c572713050fe453d86ca9ee"
+  },
+  "crates/youpdf-ai/src/message.rs": {
+    "mtime": 1795010176.8573053,
+    "seen": 1795011799.831278,
+    "ast_hash": "53c7d7308ed34a70a5691d3cbbc3724e",
+    "semantic_hash": "53c7d7308ed34a70a5691d3cbbc3724e"
+  },
+  "crates/youpdf-ai/src/provider.rs": {
+    "mtime": 1792141994.9096935,
+    "seen": 1795011799.831279,
+    "ast_hash": "ff821f2a7bdd064d4da94fbd7f502ef5",
+    "semantic_hash": "ff821f2a7bdd064d4da94fbd7f502ef5"
+  },
+  "crates/youpdf-ai/src/providers/anthropic.rs": {
+    "mtime": 1795009044.4915051,
+    "seen": 1795011799.8312802,
+    "ast_hash": "0ce26636c7bb4553fb9adb79b5475000",
+    "semantic_hash": "0ce26636c7bb4553fb9adb79b5475000"
+  },
+  "crates/youpdf-ai/src/providers/mod.rs": {
+    "mtime": 1795010753.0897665,
+    "seen": 1795011799.8312802,
+    "ast_hash": "ecb54bcd7108a98d5ba679072e9bd0dc",
+    "semantic_hash": "ecb54bcd7108a98d5ba679072e9bd0dc"
+  },
+  "crates/youpdf-ai/src/providers/ollama.rs": {
+    "mtime": 1795009052.5325298,
+    "seen": 1795011799.831281,
+    "ast_hash": "ac0f7ad8f65956868b49d7781adfd64a",
+    "semantic_hash": "ac0f7ad8f65956868b49d7781adfd64a"
+  },
+  "crates/youpdf-ai/src/providers/openai_compat.rs": {
+    "mtime": 1795009034.8177006,
+    "seen": 1795011799.831282,
+    "ast_hash": "83a4f71cd28643187c1461319ddc3c31",
+    "semantic_hash": "83a4f71cd28643187c1461319ddc3c31"
+  },
+  "crates/youpdf-ai/src/registry.rs": {
+    "mtime": 1792141994.9056509,
+    "seen": 1795011799.831282,
+    "ast_hash": "5b811c4b27b4b7fa31f90c2d0cee752b",
+    "semantic_hash": "5b811c4b27b4b7fa31f90c2d0cee752b"
+  },
+  "crates/youpdf-ai/src/tasks.rs": {
+    "mtime": 1795010171.7085168,
+    "seen": 1795011799.8312829,
+    "ast_hash": "9686c6377dab5f7f1f7b577e0d81a222",
+    "semantic_hash": "9686c6377dab5f7f1f7b577e0d81a222"
+  },
+  "crates/youpdf-app/Cargo.toml": {
+    "mtime": 1794853495.9309943,
+    "seen": 1795011799.831284,
+    "ast_hash": "f936e9cd4c6a38fcf65d36735080a815",
+    "semantic_hash": "f936e9cd4c6a38fcf65d36735080a815"
+  },
+  "crates/youpdf-app/src/ai.rs": {
+    "mtime": 1795010771.70457,
+    "seen": 1795011799.831285,
+    "ast_hash": "edfc3b7c594d6bff3a4fa41a1088367b",
+    "semantic_hash": "edfc3b7c594d6bff3a4fa41a1088367b"
+  },
+  "crates/youpdf-app/src/app.rs": {
+    "mtime": 1795010203.970401,
+    "seen": 1795011799.831285,
+    "ast_hash": "20fc5af41bb4263fa073a751ad839cce",
+    "semantic_hash": "20fc5af41bb4263fa073a751ad839cce"
+  },
+  "crates/youpdf-app/src/app/annots_ui.rs": {
+    "mtime": 1794852957.4598496,
+    "seen": 1795011799.831286,
+    "ast_hash": "8a1d7849416f852935e43940da9d1283",
+    "semantic_hash": "8a1d7849416f852935e43940da9d1283"
+  },
+  "crates/youpdf-app/src/app/aspect_ui.rs": {
+    "mtime": 1792885699.276357,
+    "seen": 1795011799.8312871,
+    "ast_hash": "0083277e4ba36c70e237822e7d2a8547",
+    "semantic_hash": "0083277e4ba36c70e237822e7d2a8547"
+  },
+  "crates/youpdf-app/src/app/attachments_ui.rs": {
+    "mtime": 1792885699.2765286,
+    "seen": 1795011799.8312871,
+    "ast_hash": "2f50278fba9bb0f4bac3afb1c9bc42dd",
+    "semantic_hash": "2f50278fba9bb0f4bac3afb1c9bc42dd"
+  },
+  "crates/youpdf-app/src/app/batch_types.rs": {
+    "mtime": 1794910341.311793,
+    "seen": 1795011799.831288,
+    "ast_hash": "afdf5740a6e04d0e2e51c793b6ec19a5",
+    "semantic_hash": "afdf5740a6e04d0e2e51c793b6ec19a5"
+  },
+  "crates/youpdf-app/src/app/batch_ui.rs": {
+    "mtime": 1792885699.2768826,
+    "seen": 1795011799.831289,
+    "ast_hash": "584db317392b732c79e820378c267a03",
+    "semantic_hash": "584db317392b732c79e820378c267a03"
+  },
+  "crates/youpdf-app/src/app/bookmarks_ui.rs": {
+    "mtime": 1792885699.2770493,
+    "seen": 1795011799.831289,
+    "ast_hash": "b0018af8040c9c13ddff5b83fc231184",
+    "semantic_hash": "b0018af8040c9c13ddff5b83fc231184"
+  },
+  "crates/youpdf-app/src/app/canvas_commit.rs": {
+    "mtime": 1794852957.4600194,
+    "seen": 1795011799.83129,
+    "ast_hash": "45d3571399018bf5690b053dda91772b",
+    "semantic_hash": "45d3571399018bf5690b053dda91772b"
+  },
+  "crates/youpdf-app/src/app/canvas_image_ui.rs": {
+    "mtime": 1792908878.8053572,
+    "seen": 1795011799.831291,
+    "ast_hash": "e4898fa0684986690db2c87b2f5fc0ee",
+    "semantic_hash": "e4898fa0684986690db2c87b2f5fc0ee"
+  },
+  "crates/youpdf-app/src/app/canvas_text_ui.rs": {
+    "mtime": 1792908878.8057258,
+    "seen": 1795011799.831291,
+    "ast_hash": "c6373cf6aeeb16e44e0dd4f58854a26d",
+    "semantic_hash": "c6373cf6aeeb16e44e0dd4f58854a26d"
+  },
+  "crates/youpdf-app/src/app/canvas_tools_ui.rs": {
+    "mtime": 1794910050.4684346,
+    "seen": 1795011799.831292,
+    "ast_hash": "e3c58072ed3ae5e15f8494e042e790ff",
+    "semantic_hash": "e3c58072ed3ae5e15f8494e042e790ff"
+  },
+  "crates/youpdf-app/src/app/canvas_ui.rs": {
+    "mtime": 1795009135.1942415,
+    "seen": 1795011799.8312929,
+    "ast_hash": "216db49906cd9ae71ff7940007217a1d",
+    "semantic_hash": "216db49906cd9ae71ff7940007217a1d"
+  },
+  "crates/youpdf-app/src/app/chrome_ui.rs": {
+    "mtime": 1794997721.582135,
+    "seen": 1795011799.831294,
+    "ast_hash": "ffb05432a7a7618f2b0d3605205f59b4",
+    "semantic_hash": "ffb05432a7a7618f2b0d3605205f59b4"
+  },
+  "crates/youpdf-app/src/app/comments_ui.rs": {
+    "mtime": 1792885699.2779503,
+    "seen": 1795011799.831294,
+    "ast_hash": "6700f1cea918032f8d4f30372a587b2f",
+    "semantic_hash": "6700f1cea918032f8d4f30372a587b2f"
+  },
+  "crates/youpdf-app/src/app/compare_ui.rs": {
+    "mtime": 1792885699.2781384,
+    "seen": 1795011799.831295,
+    "ast_hash": "872a4618d1da97ed8a4048605ce98a02",
+    "semantic_hash": "872a4618d1da97ed8a4048605ce98a02"
+  },
+  "crates/youpdf-app/src/app/decor_ui.rs": {
+    "mtime": 1793138238.3046522,
+    "seen": 1795011799.831295,
+    "ast_hash": "0bd75372924a118c3bd37dcdbe3c49c2",
+    "semantic_hash": "0bd75372924a118c3bd37dcdbe3c49c2"
+  },
+  "crates/youpdf-app/src/app/documents_ui.rs": {
+    "mtime": 1794907058.2744083,
+    "seen": 1795011799.831296,
+    "ast_hash": "4c48671a8351517cb31a1ae916d0b61e",
+    "semantic_hash": "4c48671a8351517cb31a1ae916d0b61e"
+  },
+  "crates/youpdf-app/src/app/export_ui.rs": {
+    "mtime": 1792885699.2786295,
+    "seen": 1795011799.831297,
+    "ast_hash": "f56945558933cf9a22710f731cd9f6bc",
+    "semantic_hash": "f56945558933cf9a22710f731cd9f6bc"
+  },
+  "crates/youpdf-app/src/app/extract_ui.rs": {
+    "mtime": 1792885699.2787685,
+    "seen": 1795011799.831297,
+    "ast_hash": "c223326dd036b30a6a79e893387c9305",
+    "semantic_hash": "c223326dd036b30a6a79e893387c9305"
+  },
+  "crates/youpdf-app/src/app/files_ui.rs": {
+    "mtime": 1795009431.6354175,
+    "seen": 1795011799.831298,
+    "ast_hash": "a93a5682a74cae3a29804b4245555141",
+    "semantic_hash": "a93a5682a74cae3a29804b4245555141"
+  },
+  "crates/youpdf-app/src/app/forms_editor.rs": {
+    "mtime": 1793043875.3900762,
+    "seen": 1795011799.831298,
+    "ast_hash": "fd027a2b8bd15a2711c370a05d0b5b1a",
+    "semantic_hash": "fd027a2b8bd15a2711c370a05d0b5b1a"
+  },
+  "crates/youpdf-app/src/app/forms_fields.rs": {
+    "mtime": 1793133062.2664826,
+    "seen": 1795011799.831299,
+    "ast_hash": "f02aeea3c9e7bdaa9b465c579dc7fdbb",
+    "semantic_hash": "f02aeea3c9e7bdaa9b465c579dc7fdbb"
+  },
+  "crates/youpdf-app/src/app/forms_ui.rs": {
+    "mtime": 1795010152.9685557,
+    "seen": 1795011799.8313,
+    "ast_hash": "e23dd80a002b2acc0557619f88b1fa11",
+    "semantic_hash": "e23dd80a002b2acc0557619f88b1fa11"
+  },
+  "crates/youpdf-app/src/app/history.rs": {
+    "mtime": 1792788557.339753,
+    "seen": 1795011799.8313,
+    "ast_hash": "1ca84d4c05a6e8b6c30386dacf1c8f52",
+    "semantic_hash": "1ca84d4c05a6e8b6c30386dacf1c8f52"
+  },
+  "crates/youpdf-app/src/app/home_ui.rs": {
+    "mtime": 1795009593.3499298,
+    "seen": 1795011799.8313012,
+    "ast_hash": "33a8442045dcf549104804ed397c21be",
+    "semantic_hash": "33a8442045dcf549104804ed397c21be"
+  },
+  "crates/youpdf-app/src/app/icons.rs": {
+    "mtime": 1795000866.5159152,
+    "seen": 1795011799.831302,
+    "ast_hash": "c374c884aa7abc436da0733c90feb461",
+    "semantic_hash": "c374c884aa7abc436da0733c90feb461"
+  },
+  "crates/youpdf-app/src/app/image_ui.rs": {
+    "mtime": 1793134846.122264,
+    "seen": 1795011799.831302,
+    "ast_hash": "4a8cc1ee6cfbda9117521ab8fa183d73",
+    "semantic_hash": "4a8cc1ee6cfbda9117521ab8fa183d73"
+  },
+  "crates/youpdf-app/src/app/inspector_ui.rs": {
+    "mtime": 1794852957.4602256,
+    "seen": 1795011799.831303,
+    "ast_hash": "fd713215ead0445f457e28cbdfcbc47f",
+    "semantic_hash": "fd713215ead0445f457e28cbdfcbc47f"
+  },
+  "crates/youpdf-app/src/app/marks_ui.rs": {
+    "mtime": 1794914161.0539644,
+    "seen": 1795011799.831303,
+    "ast_hash": "99f8bfdcc0f97d6e8143689c345e77ee",
+    "semantic_hash": "99f8bfdcc0f97d6e8143689c345e77ee"
+  },
+  "crates/youpdf-app/src/app/measure_ui.rs": {
+    "mtime": 1794852957.460356,
+    "seen": 1795011799.8313038,
+    "ast_hash": "da26b58b993d274aaac215bb77e012f9",
+    "semantic_hash": "da26b58b993d274aaac215bb77e012f9"
+  },
+  "crates/youpdf-app/src/app/menu.rs": {
+    "mtime": 1794988155.067492,
+    "seen": 1795011799.831305,
+    "ast_hash": "8573db621a67ca7732a3358898016d04",
+    "semantic_hash": "8573db621a67ca7732a3358898016d04"
+  },
+  "crates/youpdf-app/src/app/ocr_ui.rs": {
+    "mtime": 1792885699.280866,
+    "seen": 1795011799.831305,
+    "ast_hash": "a4e1cf64096ae22ca8df7ced54e96d67",
+    "semantic_hash": "a4e1cf64096ae22ca8df7ced54e96d67"
+  },
+  "crates/youpdf-app/src/app/organize_dialogs.rs": {
+    "mtime": 1792887972.6470942,
+    "seen": 1795011799.831306,
+    "ast_hash": "65ecf5d5b79bdf9465ed86773c7068c3",
+    "semantic_hash": "65ecf5d5b79bdf9465ed86773c7068c3"
+  },
+  "crates/youpdf-app/src/app/organize_ops.rs": {
+    "mtime": 1793103775.0996242,
+    "seen": 1795011799.831306,
+    "ast_hash": "dc32ba513d23559bf29a0855fb68f430",
+    "semantic_hash": "dc32ba513d23559bf29a0855fb68f430"
+  },
+  "crates/youpdf-app/src/app/organize_ui.rs": {
+    "mtime": 1794910059.5852265,
+    "seen": 1795011799.831307,
+    "ast_hash": "8486746976500d92ce36fe96f78da2d3",
+    "semantic_hash": "8486746976500d92ce36fe96f78da2d3"
+  },
+  "crates/youpdf-app/src/app/page_action_ui.rs": {
+    "mtime": 1795010618.6900148,
+    "seen": 1795011799.8313081,
+    "ast_hash": "aa63d2684c2acc519dfdf0b339334b7d",
+    "semantic_hash": "aa63d2684c2acc519dfdf0b339334b7d"
+  },
+  "crates/youpdf-app/src/app/pages_ui.rs": {
+    "mtime": 1795010123.6113217,
+    "seen": 1795011799.8313081,
+    "ast_hash": "b4ace292136271ab5629bacba3584f8d",
+    "semantic_hash": "b4ace292136271ab5629bacba3584f8d"
+  },
+  "crates/youpdf-app/src/app/password_ui.rs": {
+    "mtime": 1795010462.1962535,
+    "seen": 1795011799.831309,
+    "ast_hash": "417bde9156434d143265c6b09763a1ff",
+    "semantic_hash": "417bde9156434d143265c6b09763a1ff"
+  },
+  "crates/youpdf-app/src/app/prefs_ui.rs": {
+    "mtime": 1795010468.1416843,
+    "seen": 1795011799.831309,
+    "ast_hash": "87d64d17fecaf4442525139d8902ff73",
+    "semantic_hash": "87d64d17fecaf4442525139d8902ff73"
+  },
+  "crates/youpdf-app/src/app/readaloud_ui.rs": {
+    "mtime": 1795009999.434626,
+    "seen": 1795011799.83131,
+    "ast_hash": "c5b2418d65f5b9ad21bf995b0eb0fda7",
+    "semantic_hash": "c5b2418d65f5b9ad21bf995b0eb0fda7"
+  },
+  "crates/youpdf-app/src/app/reader.rs": {
+    "mtime": 1792860660.3892577,
+    "seen": 1795011799.831311,
+    "ast_hash": "f59402c469f7ec2f20c95fa042a8b226",
+    "semantic_hash": "f59402c469f7ec2f20c95fa042a8b226"
+  },
+  "crates/youpdf-app/src/app/redact_ui.rs": {
+    "mtime": 1795010480.9908795,
+    "seen": 1795011799.831311,
+    "ast_hash": "c0a7818012c83d6cd6359104beaa7095",
+    "semantic_hash": "c0a7818012c83d6cd6359104beaa7095"
+  },
+  "crates/youpdf-app/src/app/render.rs": {
+    "mtime": 1794910066.9650922,
+    "seen": 1795011799.831312,
+    "ast_hash": "34f7fe1a847885db422be05c81d36aad",
+    "semantic_hash": "34f7fe1a847885db422be05c81d36aad"
+  },
+  "crates/youpdf-app/src/app/search_ui.rs": {
+    "mtime": 1795010613.4576392,
+    "seen": 1795011799.831312,
+    "ast_hash": "61d594348b4c39178ab046fad4577f39",
+    "semantic_hash": "61d594348b4c39178ab046fad4577f39"
+  },
+  "crates/youpdf-app/src/app/shortcuts_ui.rs": {
+    "mtime": 1794988462.9122822,
+    "seen": 1795011799.831313,
+    "ast_hash": "f95f0a40a66884383c4b0635b2c98d94",
+    "semantic_hash": "f95f0a40a66884383c4b0635b2c98d94"
+  },
+  "crates/youpdf-app/src/app/sign_ui.rs": {
+    "mtime": 1794910207.4365907,
+    "seen": 1795011799.8313138,
+    "ast_hash": "969d004f6f4b165ed67f555f4ca9b821",
+    "semantic_hash": "969d004f6f4b165ed67f555f4ca9b821"
+  },
+  "crates/youpdf-app/src/app/signature_ui.rs": {
+    "mtime": 1794910028.971352,
+    "seen": 1795011799.8313138,
+    "ast_hash": "bdd3ae844e26ece2df42b7ae38751da7",
+    "semantic_hash": "bdd3ae844e26ece2df42b7ae38751da7"
+  },
+  "crates/youpdf-app/src/app/slideshow_ui.rs": {
+    "mtime": 1793025534.614925,
+    "seen": 1795011799.831315,
+    "ast_hash": "2d00ba67a4822f8d70dceacf8578dade",
+    "semantic_hash": "2d00ba67a4822f8d70dceacf8578dade"
+  },
+  "crates/youpdf-app/src/app/tabs_ui.rs": {
+    "mtime": 1792885699.2836905,
+    "seen": 1795011799.831315,
+    "ast_hash": "41139f185c7956491917f7cd7b3eb520",
+    "semantic_hash": "41139f185c7956491917f7cd7b3eb520"
+  },
+  "crates/youpdf-app/src/app/text_edit_ui.rs": {
+    "mtime": 1795010397.6411152,
+    "seen": 1795011799.831316,
+    "ast_hash": "8817354b11b9b43004347029f2b7a3a1",
+    "semantic_hash": "8817354b11b9b43004347029f2b7a3a1"
+  },
+  "crates/youpdf-app/src/app/thumbnails_ui.rs": {
+    "mtime": 1795009905.5156252,
+    "seen": 1795011799.831317,
+    "ast_hash": "c75c4efe97dd85d538796a23ab776827",
+    "semantic_hash": "c75c4efe97dd85d538796a23ab776827"
+  },
+  "crates/youpdf-app/src/app/toolbar_ui.rs": {
+    "mtime": 1794988661.2955408,
+    "seen": 1795011799.831317,
+    "ast_hash": "02fa3e81bc5cc19ff7e53afabe33067e",
+    "semantic_hash": "02fa3e81bc5cc19ff7e53afabe33067e"
+  },
+  "crates/youpdf-app/src/app/widgets.rs": {
+    "mtime": 1795010474.156988,
+    "seen": 1795011799.831318,
+    "ast_hash": "9ec7d72777d049e5884896b085a16d74",
+    "semantic_hash": "9ec7d72777d049e5884896b085a16d74"
+  },
+  "crates/youpdf-app/src/app/windows_ui.rs": {
+    "mtime": 1795009853.1009574,
+    "seen": 1795011799.831318,
+    "ast_hash": "1947ef02e7bef19ad2b319b68d41d0b1",
+    "semantic_hash": "1947ef02e7bef19ad2b319b68d41d0b1"
+  },
+  "crates/youpdf-app/src/fonts.rs": {
+    "mtime": 1792753889.4203017,
+    "seen": 1795011799.831319,
+    "ast_hash": "39c97858893675fc979f9054bf821a7c",
+    "semantic_hash": "39c97858893675fc979f9054bf821a7c"
+  },
+  "crates/youpdf-app/src/home.rs": {
+    "mtime": 1795009558.0954177,
+    "seen": 1795011799.83132,
+    "ast_hash": "8c116ddc0b52231f66fbe92fed3768d3",
+    "semantic_hash": "8c116ddc0b52231f66fbe92fed3768d3"
+  },
+  "crates/youpdf-app/src/inspector.rs": {
+    "mtime": 1793107471.5743248,
+    "seen": 1795011799.83132,
+    "ast_hash": "c1f3582b6571a6e5d048464e60145b7e",
+    "semantic_hash": "c1f3582b6571a6e5d048464e60145b7e"
+  },
+  "crates/youpdf-app/src/main.rs": {
+    "mtime": 1792753910.9013038,
+    "seen": 1795011799.831321,
+    "ast_hash": "983dec0ed1bc2ba598f28555177e336e",
+    "semantic_hash": "983dec0ed1bc2ba598f28555177e336e"
+  },
+  "crates/youpdf-core/Cargo.toml": {
+    "mtime": 1793043875.3917842,
+    "seen": 1795011799.831321,
+    "ast_hash": "5b3d6c5b226fdb363c70d06ed720fec7",
+    "semantic_hash": "5b3d6c5b226fdb363c70d06ed720fec7"
+  },
+  "crates/youpdf-core/examples/encrypt_verify.rs": {
+    "mtime": 1792141994.8920527,
+    "seen": 1795011799.8313222,
+    "ast_hash": "1bee4e7370439bfdae59479506710b86",
+    "semantic_hash": "1bee4e7370439bfdae59479506710b86"
+  },
+  "crates/youpdf-core/examples/make_fixtures.rs": {
+    "mtime": 1792343478.8486087,
+    "seen": 1795011799.831323,
+    "ast_hash": "6762ed069a15b7b2922fab816c6f07bf",
+    "semantic_hash": "6762ed069a15b7b2922fab816c6f07bf"
+  },
+  "crates/youpdf-core/examples/pdfdump.rs": {
+    "mtime": 1792164869.2099943,
+    "seen": 1795011799.831323,
+    "ast_hash": "3b45b691f015469b2366b250fcbe82a3",
+    "semantic_hash": "3b45b691f015469b2366b250fcbe82a3"
+  },
+  "crates/youpdf-core/examples/probe_search.rs": {
+    "mtime": 1793050936.109829,
+    "seen": 1795011799.8313239,
+    "ast_hash": "9876389311089dfbe3e7bd8809aeb782",
+    "semantic_hash": "9876389311089dfbe3e7bd8809aeb782"
+  },
+  "crates/youpdf-core/examples/render_probe.rs": {
+    "mtime": 1792343478.8487387,
+    "seen": 1795011799.8313248,
+    "ast_hash": "becac27a87b155dc13cc80e123a71a66",
+    "semantic_hash": "becac27a87b155dc13cc80e123a71a66"
+  },
+  "crates/youpdf-core/examples/t_probe.rs": {
+    "mtime": 1792343478.8488483,
+    "seen": 1795011799.8313248,
+    "ast_hash": "c4f18d361f4740e41040128d98c9c8bd",
+    "semantic_hash": "c4f18d361f4740e41040128d98c9c8bd"
+  },
+  "crates/youpdf-core/examples/text_probe.rs": {
+    "mtime": 1792343478.8489754,
+    "seen": 1795011799.831326,
+    "ast_hash": "db8fbb425a1ae2a1f4c89a906fb188e0",
+    "semantic_hash": "db8fbb425a1ae2a1f4c89a906fb188e0"
+  },
+  "crates/youpdf-core/src/annotate/appearance.rs": {
+    "mtime": 1792883556.0318098,
+    "seen": 1795011799.831327,
+    "ast_hash": "3016cd630f2c45709e7002937df29519",
+    "semantic_hash": "3016cd630f2c45709e7002937df29519"
+  },
+  "crates/youpdf-core/src/annotate/comment.rs": {
+    "mtime": 1792883556.0315845,
+    "seen": 1795011799.831327,
+    "ast_hash": "e7d0ad1f92b309d5461d7bc8fbad29d6",
+    "semantic_hash": "e7d0ad1f92b309d5461d7bc8fbad29d6"
+  },
+  "crates/youpdf-core/src/annotate/export.rs": {
+    "mtime": 1792881889.5897422,
+    "seen": 1795011799.831328,
+    "ast_hash": "8be581a9a14b79fcba1e296f736a6fc0",
+    "semantic_hash": "8be581a9a14b79fcba1e296f736a6fc0"
+  },
+  "crates/youpdf-core/src/annotate/mod.rs": {
+    "mtime": 1792883498.139125,
+    "seen": 1795011799.831329,
+    "ast_hash": "8ac84c88dda0ba7fab660b132ad9d36c",
+    "semantic_hash": "8ac84c88dda0ba7fab660b132ad9d36c"
+  },
+  "crates/youpdf-core/src/annotate/ops.rs": {
+    "mtime": 1792882019.6679041,
+    "seen": 1795011799.831329,
+    "ast_hash": "0e57fa1959199c8fb5c876c53f40a617",
+    "semantic_hash": "0e57fa1959199c8fb5c876c53f40a617"
+  },
+  "crates/youpdf-core/src/annotate/render.rs": {
+    "mtime": 1792790306.817123,
+    "seen": 1795011799.83133,
+    "ast_hash": "a82e4c5a6b8f21941c0db660beaffcd7",
+    "semantic_hash": "a82e4c5a6b8f21941c0db660beaffcd7"
+  },
+  "crates/youpdf-core/src/annotate/types.rs": {
+    "mtime": 1792883556.0319762,
+    "seen": 1795011799.831331,
+    "ast_hash": "b1471a61d67b5826afc04bff7e80ed83",
+    "semantic_hash": "b1471a61d67b5826afc04bff7e80ed83"
+  },
+  "crates/youpdf-core/src/annotate/write.rs": {
+    "mtime": 1792909659.2922504,
+    "seen": 1795011799.831331,
+    "ast_hash": "8c2ba4c0aead2c00329c83e6bd44148e",
+    "semantic_hash": "8c2ba4c0aead2c00329c83e6bd44148e"
+  },
+  "crates/youpdf-core/src/annotation/comments.rs": {
+    "mtime": 1792865559.9303412,
+    "seen": 1795011799.8313322,
+    "ast_hash": "96e95b7147abdf5982bb7754b39f96ab",
+    "semantic_hash": "96e95b7147abdf5982bb7754b39f96ab"
+  },
+  "crates/youpdf-core/src/annotation/mod.rs": {
+    "mtime": 1792855170.2166216,
+    "seen": 1795011799.8313322,
+    "ast_hash": "79d603695cbc21e25cb93b47fa14e6b4",
+    "semantic_hash": "79d603695cbc21e25cb93b47fa14e6b4"
+  },
+  "crates/youpdf-core/src/annotation/transform.rs": {
+    "mtime": 1792855091.0954456,
+    "seen": 1795011799.8313332,
+    "ast_hash": "f0d1ee54dd1a6f40876bf602122c4cff",
+    "semantic_hash": "f0d1ee54dd1a6f40876bf602122c4cff"
+  },
+  "crates/youpdf-core/src/capture/mod.rs": {
+    "mtime": 1793027463.50632,
+    "seen": 1795011799.8313339,
+    "ast_hash": "cf3076a62b12b290b8469f9ae72cd1c2",
+    "semantic_hash": "cf3076a62b12b290b8469f9ae72cd1c2"
+  },
+  "crates/youpdf-core/src/capture/screenshot.rs": {
+    "mtime": 1793026973.495772,
+    "seen": 1795011799.8313339,
+    "ast_hash": "a9f382074b783fe3134971a4893617bc",
+    "semantic_hash": "a9f382074b783fe3134971a4893617bc"
+  },
+  "crates/youpdf-core/src/capture/tts.rs": {
+    "mtime": 1795009872.388294,
+    "seen": 1795011799.8313348,
+    "ast_hash": "3bdba5472ae61841e61b13465c0199be",
+    "semantic_hash": "3bdba5472ae61841e61b13465c0199be"
+  },
+  "crates/youpdf-core/src/compare.rs": {
+    "mtime": 1792770232.8686059,
+    "seen": 1795011799.8313348,
+    "ast_hash": "3f3ee46fb8b58916250dc728fe03fb62",
+    "semantic_hash": "3f3ee46fb8b58916250dc728fe03fb62"
+  },
+  "crates/youpdf-core/src/compress.rs": {
+    "mtime": 1792444737.1518307,
+    "seen": 1795011799.831336,
+    "ast_hash": "d70145b2b265c42feae59b5980f5e037",
+    "semantic_hash": "d70145b2b265c42feae59b5980f5e037"
+  },
+  "crates/youpdf-core/src/convert.rs": {
+    "mtime": 1792444473.6332,
+    "seen": 1795011799.831337,
+    "ast_hash": "b27260aa097c4f4f17db7d3b45bc63f7",
+    "semantic_hash": "b27260aa097c4f4f17db7d3b45bc63f7"
+  },
+  "crates/youpdf-core/src/create.rs": {
+    "mtime": 1792750550.1454701,
+    "seen": 1795011799.831337,
+    "ast_hash": "641fd8541bffd32621fe1dc0e15f48e0",
+    "semantic_hash": "641fd8541bffd32621fe1dc0e15f48e0"
+  },
+  "crates/youpdf-core/src/crop.rs": {
+    "mtime": 1792573125.7215767,
+    "seen": 1795011799.831338,
+    "ast_hash": "40f7a2f219dc28638d5fcb3867d1b975",
+    "semantic_hash": "40f7a2f219dc28638d5fcb3867d1b975"
+  },
+  "crates/youpdf-core/src/document.rs": {
+    "mtime": 1795009307.8592615,
+    "seen": 1795011799.831338,
+    "ast_hash": "82977823d377758cb5a54f721ada8ace",
+    "semantic_hash": "82977823d377758cb5a54f721ada8ace"
+  },
+  "crates/youpdf-core/src/edit/crop.rs": {
+    "mtime": 1792869296.5176685,
+    "seen": 1795011799.8313391,
+    "ast_hash": "ada9a53f30d7127f278777708b21d049",
+    "semantic_hash": "ada9a53f30d7127f278777708b21d049"
+  },
+  "crates/youpdf-core/src/edit/extract.rs": {
+    "mtime": 1792869296.4887886,
+    "seen": 1795011799.83134,
+    "ast_hash": "cc266198966b00ce7ea307dfdaa40cec",
+    "semantic_hash": "cc266198966b00ce7ea307dfdaa40cec"
+  },
+  "crates/youpdf-core/src/edit/image.rs": {
+    "mtime": 1792869615.4436653,
+    "seen": 1795011799.83134,
+    "ast_hash": "772c2b62dbd30438316d67a13d7f601d",
+    "semantic_hash": "772c2b62dbd30438316d67a13d7f601d"
+  },
+  "crates/youpdf-core/src/edit/matrix.rs": {
+    "mtime": 1792869615.4611232,
+    "seen": 1795011799.831341,
+    "ast_hash": "367be0ec459c9dde74b72add8fa7e8a0",
+    "semantic_hash": "367be0ec459c9dde74b72add8fa7e8a0"
+  },
+  "crates/youpdf-core/src/edit/mod.rs": {
+    "mtime": 1793107412.1767325,
+    "seen": 1795011799.831342,
+    "ast_hash": "b00064bb6e78eb6042ac579afce806f5",
+    "semantic_hash": "b00064bb6e78eb6042ac579afce806f5"
+  },
+  "crates/youpdf-core/src/edit/replace.rs": {
+    "mtime": 1792869323.4852426,
+    "seen": 1795011799.831342,
+    "ast_hash": "15c2e3234dac7566a5c1debc9697e48a",
+    "semantic_hash": "15c2e3234dac7566a5c1debc9697e48a"
+  },
+  "crates/youpdf-core/src/edit/text_helpers.rs": {
+    "mtime": 1792869615.4558532,
+    "seen": 1795011799.8313432,
+    "ast_hash": "2085a4ad4a806571eaf1c2f87ed9087f",
+    "semantic_hash": "2085a4ad4a806571eaf1c2f87ed9087f"
+  },
+  "crates/youpdf-core/src/edit/util.rs": {
+    "mtime": 1792869808.0259101,
+    "seen": 1795011799.8313432,
+    "ast_hash": "3fb68adcff50b207e3bf5ec70e84d14a",
+    "semantic_hash": "3fb68adcff50b207e3bf5ec70e84d14a"
+  },
+  "crates/youpdf-core/src/extract.rs": {
+    "mtime": 1792786855.4308186,
+    "seen": 1795011799.8313441,
+    "ast_hash": "32fc7930228ef464d1a4bf48cf93196f",
+    "semantic_hash": "32fc7930228ef464d1a4bf48cf93196f"
+  },
+  "crates/youpdf-core/src/forms/import_export.rs": {
+    "mtime": 1795009412.7151282,
+    "seen": 1795011799.8313448,
+    "ast_hash": "d8c0f42d458da6aa3c464ad3e312de97",
+    "semantic_hash": "d8c0f42d458da6aa3c464ad3e312de97"
+  },
+  "crates/youpdf-core/src/forms/mod.rs": {
+    "mtime": 1792865108.8287694,
+    "seen": 1795011799.8313448,
+    "ast_hash": "e4549c25eaa46149e7cae7404ddedff0",
+    "semantic_hash": "e4549c25eaa46149e7cae7404ddedff0"
+  },
+  "crates/youpdf-core/src/forms/read.rs": {
+    "mtime": 1793132983.3354757,
+    "seen": 1795011799.831346,
+    "ast_hash": "70534ed1e5204fae833c25fab2276bbb",
+    "semantic_hash": "70534ed1e5204fae833c25fab2276bbb"
+  },
+  "crates/youpdf-core/src/forms/write.rs": {
+    "mtime": 1793133018.4280198,
+    "seen": 1795011799.831346,
+    "ast_hash": "f4240613f694ffd97f362d7928fef0fc",
+    "semantic_hash": "f4240613f694ffd97f362d7928fef0fc"
+  },
+  "crates/youpdf-core/src/geom.rs": {
+    "mtime": 1792791562.2202687,
+    "seen": 1795011799.831347,
+    "ast_hash": "0fe1ca2d73da5b04e6c4b7e74ee9aa0d",
+    "semantic_hash": "0fe1ca2d73da5b04e6c4b7e74ee9aa0d"
+  },
+  "crates/youpdf-core/src/lib.rs": {
+    "mtime": 1795008963.8042097,
+    "seen": 1795011799.831348,
+    "ast_hash": "74a4059d98453e8887169ab63daa308a",
+    "semantic_hash": "74a4059d98453e8887169ab63daa308a"
+  },
+  "crates/youpdf-core/src/links.rs": {
+    "mtime": 1795008969.3951712,
+    "seen": 1795011799.831348,
+    "ast_hash": "ee1dd1e7cf70dcc2c78e3c40a0a3f306",
+    "semantic_hash": "ee1dd1e7cf70dcc2c78e3c40a0a3f306"
+  },
+  "crates/youpdf-core/src/measure.rs": {
+    "mtime": 1794852957.4610376,
+    "seen": 1795011799.831349,
+    "ast_hash": "5eb9c991c917991c6ac906cfbc49a5a1",
+    "semantic_hash": "5eb9c991c917991c6ac906cfbc49a5a1"
+  },
+  "crates/youpdf-core/src/metadata.rs": {
+    "mtime": 1792175516.3160832,
+    "seen": 1795011799.831349,
+    "ast_hash": "bf09f23bf38948a0e2ff0244d65d970f",
+    "semantic_hash": "bf09f23bf38948a0e2ff0244d65d970f"
+  },
+  "crates/youpdf-core/src/ocr/mod.rs": {
+    "mtime": 1793051192.8429255,
+    "seen": 1795011799.83135,
+    "ast_hash": "03178e67d708251d84f8bd6ba18cc211",
+    "semantic_hash": "03178e67d708251d84f8bd6ba18cc211"
+  },
+  "crates/youpdf-core/src/ocr/searchable.rs": {
+    "mtime": 1792909348.6763453,
+    "seen": 1795011799.831351,
+    "ast_hash": "3d1f80a5b90ad682b87650acdf188c06",
+    "semantic_hash": "3d1f80a5b90ad682b87650acdf188c06"
+  },
+  "crates/youpdf-core/src/ocr/tesseract.rs": {
+    "mtime": 1792880689.3518999,
+    "seen": 1795011799.831351,
+    "ast_hash": "4b63852c600615bbb569851af1622561",
+    "semantic_hash": "4b63852c600615bbb569851af1622561"
+  },
+  "crates/youpdf-core/src/office/common.rs": {
+    "mtime": 1792872055.6849222,
+    "seen": 1795011799.831352,
+    "ast_hash": "d0320a1d9720833e0e3a884495d15ce6",
+    "semantic_hash": "d0320a1d9720833e0e3a884495d15ce6"
+  },
+  "crates/youpdf-core/src/office/excel.rs": {
+    "mtime": 1792872055.6860223,
+    "seen": 1795011799.831352,
+    "ast_hash": "2b045fee1f831c51499746810b3bef5e",
+    "semantic_hash": "2b045fee1f831c51499746810b3bef5e"
+  },
+  "crates/youpdf-core/src/office/mod.rs": {
+    "mtime": 1793139338.2369473,
+    "seen": 1795011799.8313532,
+    "ast_hash": "1ac110714d8e6b41951b9059073f952b",
+    "semantic_hash": "1ac110714d8e6b41951b9059073f952b"
+  },
+  "crates/youpdf-core/src/office/powerpoint.rs": {
+    "mtime": 1792872055.6865249,
+    "seen": 1795011799.8313532,
+    "ast_hash": "c88f5f9d8f19fefbf4790f270050e38a",
+    "semantic_hash": "c88f5f9d8f19fefbf4790f270050e38a"
+  },
+  "crates/youpdf-core/src/office/word.rs": {
+    "mtime": 1792872055.6854146,
+    "seen": 1795011799.8313541,
+    "ast_hash": "c9de239ad66072214a71e3590e50b7e1",
+    "semantic_hash": "c9de239ad66072214a71e3590e50b7e1"
+  },
+  "crates/youpdf-core/src/organize/exchange.rs": {
+    "mtime": 1793044494.8054602,
+    "seen": 1795011799.8313549,
+    "ast_hash": "48303fb37c8141587d5ae87c64aac346",
+    "semantic_hash": "48303fb37c8141587d5ae87c64aac346"
+  },
+  "crates/youpdf-core/src/organize/labels.rs": {
+    "mtime": 1793135312.0096164,
+    "seen": 1795011799.8313549,
+    "ast_hash": "5d853e4e9f8ac17a6db0dd86bd8b35e8",
+    "semantic_hash": "5d853e4e9f8ac17a6db0dd86bd8b35e8"
+  },
+  "crates/youpdf-core/src/organize/merge.rs": {
+    "mtime": 1792882634.275083,
+    "seen": 1795011799.8313558,
+    "ast_hash": "9cfbf864958d7460b591dcdc3542ede6",
+    "semantic_hash": "9cfbf864958d7460b591dcdc3542ede6"
+  },
+  "crates/youpdf-core/src/organize/merge_batch.rs": {
+    "mtime": 1793103690.7868118,
+    "seen": 1795011799.8313558,
+    "ast_hash": "d1ee0018aeaf70ec5218288f8a91f83b",
+    "semantic_hash": "d1ee0018aeaf70ec5218288f8a91f83b"
+  },
+  "crates/youpdf-core/src/organize/mod.rs": {
+    "mtime": 1793103586.5983686,
+    "seen": 1795011799.831357,
+    "ast_hash": "d6957ff2305fcd5c817e9620c38390d1",
+    "semantic_hash": "d6957ff2305fcd5c817e9620c38390d1"
+  },
+  "crates/youpdf-core/src/organize/resize.rs": {
+    "mtime": 1793044709.8972921,
+    "seen": 1795011799.831358,
+    "ast_hash": "3b99b416911e8a16c53498e59a819d53",
+    "semantic_hash": "3b99b416911e8a16c53498e59a819d53"
+  },
+  "crates/youpdf-core/src/organize/split.rs": {
+    "mtime": 1792882634.2754564,
+    "seen": 1795011799.831358,
+    "ast_hash": "c4c9d467f0b21c9c95353b1444a92609",
+    "semantic_hash": "c4c9d467f0b21c9c95353b1444a92609"
+  },
+  "crates/youpdf-core/src/organize/tree.rs": {
+    "mtime": 1792882623.7156162,
+    "seen": 1795011799.831359,
+    "ast_hash": "a638523affe75748268fd80e72e910f7",
+    "semantic_hash": "a638523affe75748268fd80e72e910f7"
+  },
+  "crates/youpdf-core/src/pdfa.rs": {
+    "mtime": 1792444556.4617712,
+    "seen": 1795011799.831359,
+    "ast_hash": "dadad5fb31eb58b18c68dc4fbfbe1223",
+    "semantic_hash": "dadad5fb31eb58b18c68dc4fbfbe1223"
+  },
+  "crates/youpdf-core/src/protect/crypto.rs": {
+    "mtime": 1792880027.2273564,
+    "seen": 1795011799.83136,
+    "ast_hash": "cd3d6b10c710b60bed1f397b42533f4f",
+    "semantic_hash": "cd3d6b10c710b60bed1f397b42533f4f"
+  },
+  "crates/youpdf-core/src/protect/mod.rs": {
+    "mtime": 1793044119.5697832,
+    "seen": 1795011799.83136,
+    "ast_hash": "fbf01a752ce4b842ff14db66564fc286",
+    "semantic_hash": "fbf01a752ce4b842ff14db66564fc286"
+  },
+  "crates/youpdf-core/src/protect/permissions.rs": {
+    "mtime": 1792918979.5062585,
+    "seen": 1795011799.831361,
+    "ast_hash": "de389727b0bbb02d1e0841bd2b0487a3",
+    "semantic_hash": "de389727b0bbb02d1e0841bd2b0487a3"
+  },
+  "crates/youpdf-core/src/redact.rs": {
+    "mtime": 1793043875.3926048,
+    "seen": 1795011799.831362,
+    "ast_hash": "776b7a0e4bf5cc2ce7666ba6e1c85b75",
+    "semantic_hash": "776b7a0e4bf5cc2ce7666ba6e1c85b75"
+  },
+  "crates/youpdf-core/src/redact/burn.rs": {
+    "mtime": 1792919155.6718,
+    "seen": 1795011799.831362,
+    "ast_hash": "7c8489d6ee3df0c072bd455519b23128",
+    "semantic_hash": "7c8489d6ee3df0c072bd455519b23128"
+  },
+  "crates/youpdf-core/src/redact/codesets.rs": {
+    "mtime": 1793096355.5935435,
+    "seen": 1795011799.831363,
+    "ast_hash": "34f8f69644bd347b9071d1316c5f17f1",
+    "semantic_hash": "34f8f69644bd347b9071d1316c5f17f1"
+  },
+  "crates/youpdf-core/src/redact/geometry/interp.rs": {
+    "mtime": 1792882924.087024,
+    "seen": 1795011799.831363,
+    "ast_hash": "725c3692e7286250c715cbd9d36d8e5a",
+    "semantic_hash": "725c3692e7286250c715cbd9d36d8e5a"
+  },
+  "crates/youpdf-core/src/redact/geometry/mod.rs": {
+    "mtime": 1792882979.8974278,
+    "seen": 1795011799.8313642,
+    "ast_hash": "48f5fcfadca928e9e78a442cc98ac340",
+    "semantic_hash": "48f5fcfadca928e9e78a442cc98ac340"
+  },
+  "crates/youpdf-core/src/redact/surgery.rs": {
+    "mtime": 1792613311.3267837,
+    "seen": 1795011799.831365,
+    "ast_hash": "d5ff5a876e84f742171671c1f3cc5613",
+    "semantic_hash": "d5ff5a876e84f742171671c1f3cc5613"
+  },
+  "crates/youpdf-core/src/render/impl_pdfium.rs": {
+    "mtime": 1793050852.8509376,
+    "seen": 1795011799.831365,
+    "ast_hash": "a1385155559774e2eea2d847d35e8e0f",
+    "semantic_hash": "a1385155559774e2eea2d847d35e8e0f"
+  },
+  "crates/youpdf-core/src/render/mod.rs": {
+    "mtime": 1793050827.9921813,
+    "seen": 1795011799.8313658,
+    "ast_hash": "45e6eb24b972fee040e382645aaf0633",
+    "semantic_hash": "45e6eb24b972fee040e382645aaf0633"
+  },
+  "crates/youpdf-core/src/render/pdfium.rs": {
+    "mtime": 1792884362.5378017,
+    "seen": 1795011799.8313658,
+    "ast_hash": "76f5530848ceeacb385c50d490d2668d",
+    "semantic_hash": "76f5530848ceeacb385c50d490d2668d"
+  },
+  "crates/youpdf-core/src/search.rs": {
+    "mtime": 1793050757.3499007,
+    "seen": 1795011799.831367,
+    "ast_hash": "43a58ab6818e3b1d6e57236def4f919b",
+    "semantic_hash": "43a58ab6818e3b1d6e57236def4f919b"
+  },
+  "crates/youpdf-core/src/signature/identity.rs": {
+    "mtime": 1792873131.1466825,
+    "seen": 1795011799.831368,
+    "ast_hash": "3dcdc63801b1932d97a25ac76c93bdbf",
+    "semantic_hash": "3dcdc63801b1932d97a25ac76c93bdbf"
+  },
+  "crates/youpdf-core/src/signature/mod.rs": {
+    "mtime": 1793128430.1293263,
+    "seen": 1795011799.831368,
+    "ast_hash": "912ca90bfd8b5eab688aba479586aaf6",
+    "semantic_hash": "912ca90bfd8b5eab688aba479586aaf6"
+  },
+  "crates/youpdf-core/src/signature/sign.rs": {
+    "mtime": 1793128687.6480772,
+    "seen": 1795011799.831369,
+    "ast_hash": "dc101f49e48c9d20c61c37f4a5c101c1",
+    "semantic_hash": "dc101f49e48c9d20c61c37f4a5c101c1"
+  },
+  "crates/youpdf-core/src/signature/util.rs": {
+    "mtime": 1792873131.1476254,
+    "seen": 1795011799.8313699,
+    "ast_hash": "c6f7cfb30feac5211ef366da3f3c67ea",
+    "semantic_hash": "c6f7cfb30feac5211ef366da3f3c67ea"
+  },
+  "crates/youpdf-core/src/signature/verify.rs": {
+    "mtime": 1792873131.1478999,
+    "seen": 1795011799.8313699,
+    "ast_hash": "2ff333e7c7b5a330883299fb36daf71d",
+    "semantic_hash": "2ff333e7c7b5a330883299fb36daf71d"
+  },
+  "crates/youpdf-core/src/signature/visual.rs": {
+    "mtime": 1792873131.148161,
+    "seen": 1795011799.831371,
+    "ast_hash": "aa80909ac16f48902cc2d6fdfdf2c7ee",
+    "semantic_hash": "aa80909ac16f48902cc2d6fdfdf2c7ee"
+  },
+  "crates/youpdf-core/src/structure/attachments.rs": {
+    "mtime": 1792909730.1253152,
+    "seen": 1795011799.831371,
+    "ast_hash": "5aa1227c555f0c1f3b51775b516b2697",
+    "semantic_hash": "5aa1227c555f0c1f3b51775b516b2697"
+  },
+  "crates/youpdf-core/src/structure/headings.rs": {
+    "mtime": 1792789255.7174327,
+    "seen": 1795011799.831372,
+    "ast_hash": "1727ef61f659a46c929ad8e3bfebadd5",
+    "semantic_hash": "1727ef61f659a46c929ad8e3bfebadd5"
+  },
+  "crates/youpdf-core/src/structure/mod.rs": {
+    "mtime": 1792789708.030966,
+    "seen": 1795011799.831373,
+    "ast_hash": "39499e2b08cdeb33efc659fd14114a1c",
+    "semantic_hash": "39499e2b08cdeb33efc659fd14114a1c"
+  },
+  "crates/youpdf-core/src/structure/outline.rs": {
+    "mtime": 1792864544.788532,
+    "seen": 1795011799.831373,
+    "ast_hash": "5402c32ab8b3ce83582fda827768d66a",
+    "semantic_hash": "5402c32ab8b3ce83582fda827768d66a"
+  },
+  "crates/youpdf-core/src/text/geometry.rs": {
+    "mtime": 1792856343.2482462,
+    "seen": 1795011799.8313742,
+    "ast_hash": "0b2e075c6c906fcc0056acddb6fdf263",
+    "semantic_hash": "0b2e075c6c906fcc0056acddb6fdf263"
+  },
+  "crates/youpdf-core/src/text/mod.rs": {
+    "mtime": 1792855900.211161,
+    "seen": 1795011799.8313742,
+    "ast_hash": "d3aec8c7302a88bc74b62d9bf6c2ceaa",
+    "semantic_hash": "d3aec8c7302a88bc74b62d9bf6c2ceaa"
+  },
+  "crates/youpdf-core/src/units.rs": {
+    "mtime": 1792573115.3305845,
+    "seen": 1795011799.8313751,
+    "ast_hash": "bb2c45c5c7e47156e170e10cd98eaad2",
+    "semantic_hash": "bb2c45c5c7e47156e170e10cd98eaad2"
+  },
+  "crates/youpdf-core/src/util.rs": {
+    "mtime": 1792864954.7675211,
+    "seen": 1795011799.8313758,
+    "ast_hash": "71ccc0b4b08937837885122f89bb9251",
+    "semantic_hash": "71ccc0b4b08937837885122f89bb9251"
+  },
+  "crates/youpdf-core/src/watermark/apply.rs": {
+    "mtime": 1793138331.524358,
+    "seen": 1795011799.8313758,
+    "ast_hash": "023bde1678c8dfe49b3e48996138508c",
+    "semantic_hash": "023bde1678c8dfe49b3e48996138508c"
+  },
+  "crates/youpdf-core/src/watermark/mod.rs": {
+    "mtime": 1793138322.2291813,
+    "seen": 1795011799.8313768,
+    "ast_hash": "19a58c5f4abd449002f6f806ee34cb31",
+    "semantic_hash": "19a58c5f4abd449002f6f806ee34cb31"
+  },
+  "crates/youpdf-core/src/watermark/ops.rs": {
+    "mtime": 1793138196.9985328,
+    "seen": 1795011799.8313768,
+    "ast_hash": "2058fb22e625b89c88d2b886b4a2cd91",
+    "semantic_hash": "2058fb22e625b89c88d2b886b4a2cd91"
+  },
+  "crates/youpdf-core/tests/audit_fixes.rs": {
+    "mtime": 1792343478.8527124,
+    "seen": 1795011799.831378,
+    "ast_hash": "d2c4e53eb6d3e6b2ecca31a0e2785fd5",
+    "semantic_hash": "d2c4e53eb6d3e6b2ecca31a0e2785fd5"
+  },
+  "crates/youpdf-core/tests/audit_fixes2.rs": {
+    "mtime": 1792343478.8528504,
+    "seen": 1795011799.831379,
+    "ast_hash": "5cf198792ff7db60ece908358f642aa0",
+    "semantic_hash": "5cf198792ff7db60ece908358f642aa0"
+  },
+  "crates/youpdf-core/tests/comments.rs": {
+    "mtime": 1792417476.635849,
+    "seen": 1795011799.831379,
+    "ast_hash": "0b5be6e33d7ee415711222fc0f4dad59",
+    "semantic_hash": "0b5be6e33d7ee415711222fc0f4dad59"
+  },
+  "crates/youpdf-core/tests/compress.rs": {
+    "mtime": 1792613329.4108856,
+    "seen": 1795011799.831381,
+    "ast_hash": "a198e4e192b6fb097a4be530f5af644d",
+    "semantic_hash": "a198e4e192b6fb097a4be530f5af644d"
+  },
+  "crates/youpdf-core/tests/convert_export.rs": {
+    "mtime": 1792343478.8531837,
+    "seen": 1795011799.831381,
+    "ast_hash": "525f72f59a1fb1a150ea65119d45c34a",
+    "semantic_hash": "525f72f59a1fb1a150ea65119d45c34a"
+  },
+  "crates/youpdf-core/tests/convert_text.rs": {
+    "mtime": 1792343478.8533049,
+    "seen": 1795011799.831382,
+    "ast_hash": "da945c2a1da831c5deaf122c4ac60d74",
+    "semantic_hash": "da945c2a1da831c5deaf122c4ac60d74"
+  },
+  "crates/youpdf-core/tests/create.rs": {
+    "mtime": 1792750585.3284197,
+    "seen": 1795011799.831383,
+    "ast_hash": "31f160fa567c8000592157add2f75157",
+    "semantic_hash": "31f160fa567c8000592157add2f75157"
+  },
+  "crates/youpdf-core/tests/crop.rs": {
+    "mtime": 1792573301.5274282,
+    "seen": 1795011799.831383,
+    "ast_hash": "b942dacde6d1de470f3d0cc4fe9e3220",
+    "semantic_hash": "b942dacde6d1de470f3d0cc4fe9e3220"
+  },
+  "crates/youpdf-core/tests/edit_image.rs": {
+    "mtime": 1795009681.9822505,
+    "seen": 1795011799.8313842,
+    "ast_hash": "b170374ccc742e75c8b873bbbc334ef1",
+    "semantic_hash": "b170374ccc742e75c8b873bbbc334ef1"
+  },
+  "crates/youpdf-core/tests/edit_style.rs": {
+    "mtime": 1792394123.0457861,
+    "seen": 1795011799.8313842,
+    "ast_hash": "409f90296a045b1dd87515be40603137",
+    "semantic_hash": "409f90296a045b1dd87515be40603137"
+  },
+  "crates/youpdf-core/tests/extract.rs": {
+    "mtime": 1792414394.9189053,
+    "seen": 1795011799.8313851,
+    "ast_hash": "9f0f78ca511768946f14ffcc08465ffa",
+    "semantic_hash": "9f0f78ca511768946f14ffcc08465ffa"
+  },
+  "crates/youpdf-core/tests/flatten.rs": {
+    "mtime": 1792343478.8539395,
+    "seen": 1795011799.831386,
+    "ast_hash": "f946c263afbbe9cf431c88cdc72c2f93",
+    "semantic_hash": "f946c263afbbe9cf431c88cdc72c2f93"
+  },
+  "crates/youpdf-core/tests/form_create.rs": {
+    "mtime": 1795009746.8626184,
+    "seen": 1795011799.831386,
+    "ast_hash": "119af934101c21dc8492dd20c5feecf4",
+    "semantic_hash": "119af934101c21dc8492dd20c5feecf4"
+  },
+  "crates/youpdf-core/tests/forms_data.rs": {
+    "mtime": 1792343478.854213,
+    "seen": 1795011799.8313868,
+    "ast_hash": "1b41fdecf3e89cf8cebe8f92a4866c95",
+    "semantic_hash": "1b41fdecf3e89cf8cebe8f92a4866c95"
+  },
+  "crates/youpdf-core/tests/forms_inherited.rs": {
+    "mtime": 1792484911.5561109,
+    "seen": 1795011799.8313868,
+    "ast_hash": "1c943c9662fd4b20ceb5b86c63dfe811",
+    "semantic_hash": "1c943c9662fd4b20ceb5b86c63dfe811"
+  },
+  "crates/youpdf-core/tests/link_appearance.rs": {
+    "mtime": 1793002524.8668976,
+    "seen": 1795011799.831388,
+    "ast_hash": "60ed4b51fd0acc1705e9f3dbb348cf74",
+    "semantic_hash": "60ed4b51fd0acc1705e9f3dbb348cf74"
+  },
+  "crates/youpdf-core/tests/links.rs": {
+    "mtime": 1792648346.8317006,
+    "seen": 1795011799.831389,
+    "ast_hash": "95e50831e19a8162d68047e9b20c4169",
+    "semantic_hash": "95e50831e19a8162d68047e9b20c4169"
+  },
+  "crates/youpdf-core/tests/measure.rs": {
+    "mtime": 1794852957.4611943,
+    "seen": 1795011799.831389,
+    "ast_hash": "2b6d8708b1a80cc424fbb35d67fdaf9f",
+    "semantic_hash": "2b6d8708b1a80cc424fbb35d67fdaf9f"
+  },
+  "crates/youpdf-core/tests/ocr_modes.rs": {
+    "mtime": 1792611545.8960903,
+    "seen": 1795011799.83139,
+    "ast_hash": "ea2014aae2f72a4884313619d885d27d",
+    "semantic_hash": "ea2014aae2f72a4884313619d885d27d"
+  },
+  "crates/youpdf-core/tests/office_export.rs": {
+    "mtime": 1792594658.9133801,
+    "seen": 1795011799.83139,
+    "ast_hash": "777945487509e2144bbbd716085ff8df",
+    "semantic_hash": "777945487509e2144bbbd716085ff8df"
+  },
+  "crates/youpdf-core/tests/organize.rs": {
+    "mtime": 1792573251.4346824,
+    "seen": 1795011799.8313909,
+    "ast_hash": "2cc1241b112ab7a6c2f1fd567237ac12",
+    "semantic_hash": "2cc1241b112ab7a6c2f1fd567237ac12"
+  },
+  "crates/youpdf-core/tests/outline_gen.rs": {
+    "mtime": 1792349196.0958285,
+    "seen": 1795011799.831392,
+    "ast_hash": "aac0d2b77a53fb3015a2df8ccb8658e1",
+    "semantic_hash": "aac0d2b77a53fb3015a2df8ccb8658e1"
+  },
+  "crates/youpdf-core/tests/page_exchange.rs": {
+    "mtime": 1793044512.3923304,
+    "seen": 1795011799.831392,
+    "ast_hash": "9a960b7216b2a83e00cbff318f0861dd",
+    "semantic_hash": "9a960b7216b2a83e00cbff318f0861dd"
+  },
+  "crates/youpdf-core/tests/page_labels.rs": {
+    "mtime": 1793096090.962823,
+    "seen": 1795011799.831393,
+    "ast_hash": "2437c1f91bd59ca1a0cb6edfe1d1d93e",
+    "semantic_hash": "2437c1f91bd59ca1a0cb6edfe1d1d93e"
+  },
+  "crates/youpdf-core/tests/page_resize.rs": {
+    "mtime": 1793044658.3521733,
+    "seen": 1795011799.831394,
+    "ast_hash": "aa7e701fb0f3d5cc44d407844fb36107",
+    "semantic_hash": "aa7e701fb0f3d5cc44d407844fb36107"
+  },
+  "crates/youpdf-core/tests/page_view.rs": {
+    "mtime": 1792344172.852939,
+    "seen": 1795011799.831394,
+    "ast_hash": "28f80a4dec0a08fd3154b42a452f0d28",
+    "semantic_hash": "28f80a4dec0a08fd3154b42a452f0d28"
+  },
+  "crates/youpdf-core/tests/pdf_dates.rs": {
+    "mtime": 1792343478.8547359,
+    "seen": 1795011799.8313951,
+    "ast_hash": "6f84cca840f6674e930348d889825226",
+    "semantic_hash": "6f84cca840f6674e930348d889825226"
+  },
+  "crates/youpdf-core/tests/pdfa.rs": {
+    "mtime": 1792444627.8734462,
+    "seen": 1795011799.8313951,
+    "ast_hash": "049bdca2b8e4f6329dd5fa2e0927a6bc",
+    "semantic_hash": "049bdca2b8e4f6329dd5fa2e0927a6bc"
+  },
+  "crates/youpdf-core/tests/pdfium_text.rs": {
+    "mtime": 1792415264.4329083,
+    "seen": 1795011799.831396,
+    "ast_hash": "e0dc2d1e97ef8b65c83768463a718584",
+    "semantic_hash": "e0dc2d1e97ef8b65c83768463a718584"
+  },
+  "crates/youpdf-core/tests/permissions.rs": {
+    "mtime": 1792918979.4989843,
+    "seen": 1795011799.831396,
+    "ast_hash": "1d453d61539d62ab9098f4152117cb1c",
+    "semantic_hash": "1d453d61539d62ab9098f4152117cb1c"
+  },
+  "crates/youpdf-core/tests/protect.rs": {
+    "mtime": 1792627348.2149587,
+    "seen": 1795011799.831397,
+    "ast_hash": "17b856bde21358f29f5163eae5e84e58",
+    "semantic_hash": "17b856bde21358f29f5163eae5e84e58"
+  },
+  "crates/youpdf-core/tests/redact_engine.rs": {
+    "mtime": 1792612987.5363076,
+    "seen": 1795011799.8313978,
+    "ast_hash": "99d7fc1d9e97d1860ecd8de4105991bb",
+    "semantic_hash": "99d7fc1d9e97d1860ecd8de4105991bb"
+  },
+  "crates/youpdf-core/tests/render_cache.rs": {
+    "mtime": 1792741759.3044877,
+    "seen": 1795011799.8313978,
+    "ast_hash": "7214e5b4cce21255aa32ac7623d80462",
+    "semantic_hash": "7214e5b4cce21255aa32ac7623d80462"
+  },
+  "crates/youpdf-core/tests/scan_detect.rs": {
+    "mtime": 1792444182.3983629,
+    "seen": 1795011799.831399,
+    "ast_hash": "fb6a09867718446d406de49ae218b605",
+    "semantic_hash": "fb6a09867718446d406de49ae218b605"
+  },
+  "crates/youpdf-core/tests/signature.rs": {
+    "mtime": 1793128776.7478774,
+    "seen": 1795011799.831399,
+    "ast_hash": "b813a5a6b38ff2bcae164632e3b8a781",
+    "semantic_hash": "b813a5a6b38ff2bcae164632e3b8a781"
+  },
+  "crates/youpdf-core/tests/smoke.rs": {
+    "mtime": 1795009753.4934638,
+    "seen": 1795011799.8314,
+    "ast_hash": "9748438f9576a7e86aa80f587bf981c5",
+    "semantic_hash": "9748438f9576a7e86aa80f587bf981c5"
+  },
+  "crates/youpdf-core/tests/stamps.rs": {
+    "mtime": 1792752693.4879363,
+    "seen": 1795011799.8314009,
+    "ast_hash": "ce8e4fa31a7ade024c7ada8dc23797df",
+    "semantic_hash": "ce8e4fa31a7ade024c7ada8dc23797df"
+  },
+  "crates/youpdf-core/tests/watermark.rs": {
+    "mtime": 1793130226.740263,
+    "seen": 1795011799.8314009,
+    "ast_hash": "2c5a11bb0647184e876bffba44f6d6f4",
+    "semantic_hash": "2c5a11bb0647184e876bffba44f6d6f4"
+  },
+  "crates/youpdf-core/tests/watermark_bg.rs": {
+    "mtime": 1792573263.1444273,
+    "seen": 1795011799.831402,
+    "ast_hash": "c9772bd8def0dc31ae242ee195803b45",
+    "semantic_hash": "c9772bd8def0dc31ae242ee195803b45"
+  },
+  "crates/youpdf-core/tests/word_count.rs": {
+    "mtime": 1793044093.1172543,
+    "seen": 1795011799.831402,
+    "ast_hash": "5c9ecfe3022f22b6b5e358133dc1937b",
+    "semantic_hash": "5c9ecfe3022f22b6b5e358133dc1937b"
+  },
+  "crates/youpdf-shared/Cargo.toml": {
+    "mtime": 1792141994.8839066,
+    "seen": 1795011799.831403,
+    "ast_hash": "b809fee0c8d7dd64959874c15a253cbe",
+    "semantic_hash": "b809fee0c8d7dd64959874c15a253cbe"
+  },
+  "crates/youpdf-shared/src/error.rs": {
+    "mtime": 1792141994.8850417,
+    "seen": 1795011799.831404,
+    "ast_hash": "a53a0b4bddad3c1089d5af6b6e05a06e",
+    "semantic_hash": "a53a0b4bddad3c1089d5af6b6e05a06e"
+  },
+  "crates/youpdf-shared/src/i18n.rs": {
+    "mtime": 1794993168.5313454,
+    "seen": 1795011799.831404,
+    "ast_hash": "7dde3d581710192b16ea76b1ddf32561",
+    "semantic_hash": "7dde3d581710192b16ea76b1ddf32561"
+  },
+  "crates/youpdf-shared/src/lib.rs": {
+    "mtime": 1795009301.8658261,
+    "seen": 1795011799.8314052,
+    "ast_hash": "8ea6062c3a1d925bac3d0ce2987f9c2b",
+    "semantic_hash": "8ea6062c3a1d925bac3d0ce2987f9c2b"
+  },
+  "crates/youpdf-shared/src/theme.rs": {
+    "mtime": 1794910426.6497073,
+    "seen": 1795011799.8314052,
+    "ast_hash": "13254c361258457d63760261b3efc9c9",
+    "semantic_hash": "13254c361258457d63760261b3efc9c9"
+  },
+  "scripts/build-linux-appimage.sh": {
+    "mtime": 1793051218.42762,
+    "seen": 1795011799.831406,
+    "ast_hash": "180a986571d3f0ce98c22695f7ab428c",
+    "semantic_hash": "180a986571d3f0ce98c22695f7ab428c"
+  },
+  "scripts/build-macos-app.sh": {
+    "mtime": 1793051233.78192,
+    "seen": 1795011799.831407,
+    "ast_hash": "c3a2425e926e5f2ca98ad5065f93c4ac",
+    "semantic_hash": "c3a2425e926e5f2ca98ad5065f93c4ac"
+  },
+  "scripts/build-macos-icon.sh": {
+    "mtime": 1792518616.6378171,
+    "seen": 1795011799.831407,
+    "ast_hash": "6c056da1f4e73a611f5f0aedd68f35fd",
+    "semantic_hash": "6c056da1f4e73a611f5f0aedd68f35fd"
+  },
+  "scripts/build-windows-zip.sh": {
+    "mtime": 1793051238.0249228,
+    "seen": 1795011799.831408,
+    "ast_hash": "77fb6115446288096ae17d31c9585a37",
+    "semantic_hash": "77fb6115446288096ae17d31c9585a37"
+  },
+  "scripts/i18n_extract.py": {
+    "mtime": 1792766254.4311764,
+    "seen": 1795011799.831408,
+    "ast_hash": "b68fefc19393aa3c2090f1786113c667",
+    "semantic_hash": "b68fefc19393aa3c2090f1786113c667"
+  },
+  "scripts/i18n_wrap.py": {
+    "mtime": 1792763759.030588,
+    "seen": 1795011799.831409,
+    "ast_hash": "b2e3dc58e38adcca8c73e156c2566f95",
+    "semantic_hash": "b2e3dc58e38adcca8c73e156c2566f95"
+  },
+  "scripts/install-pdfium.ps1": {
+    "mtime": 1793051200.4013908,
+    "seen": 1795011799.83141,
+    "ast_hash": "62f042337e69bc98b95d9a9107b47eec",
+    "semantic_hash": "62f042337e69bc98b95d9a9107b47eec"
+  },
+  "scripts/install-pdfium.sh": {
+    "mtime": 1792141994.9267883,
+    "seen": 1795011799.83141,
+    "ast_hash": "213524b449d79dd76b79de25b70230f6",
+    "semantic_hash": "213524b449d79dd76b79de25b70230f6"
+  },
+  "AUDIT_STATUS.md": {
+    "mtime": 1795010910.1097372,
+    "seen": 1795011799.831411,
+    "ast_hash": "bcfe363a260137ac8995f40b83e83015",
+    "semantic_hash": "bcfe363a260137ac8995f40b83e83015"
+  },
+  "IMPROVEMENTS_SUMMARY.md": {
+    "mtime": 1795010923.6515076,
+    "seen": 1795011799.831411,
+    "ast_hash": "d636dde38b86cf6b32f1506e6de8a939",
+    "semantic_hash": "d636dde38b86cf6b32f1506e6de8a939"
+  },
+  "README.md": {
+    "mtime": 1795010858.5072362,
+    "seen": 1795011799.831412,
+    "ast_hash": "e753c6e6b23f7021257033be88a49138",
+    "semantic_hash": "e753c6e6b23f7021257033be88a49138"
+  },
+  "docs/AUDIT_REPORT.md": {
+    "mtime": 1795008917.0983906,
+    "seen": 1795011799.831413,
+    "ast_hash": "d0ecde08eac0e5f011604f2041c8cf5a",
+    "semantic_hash": "d0ecde08eac0e5f011604f2041c8cf5a"
+  },
+  "docs/CONTRIBUTING.md": {
+    "mtime": 1792917641.5230336,
+    "seen": 1795011799.831413,
+    "ast_hash": "ab4716682c19b127e174b7c87186cb76",
+    "semantic_hash": "ab4716682c19b127e174b7c87186cb76"
+  },
+  "docs/GAP.md": {
+    "mtime": 1794852957.4613836,
+    "seen": 1795011799.831414,
+    "ast_hash": "990b9cbfcbb3eb34294b539bf520fe16",
+    "semantic_hash": "990b9cbfcbb3eb34294b539bf520fe16"
+  },
+  "docs/PARITY_AGENT_SPECS.md": {
+    "mtime": 1794852957.4615812,
+    "seen": 1795011799.831415,
+    "ast_hash": "3610c4d19818b92b316826e2b1b3fc81",
+    "semantic_hash": "3610c4d19818b92b316826e2b1b3fc81"
+  },
+  "docs/PLAN.md": {
+    "mtime": 1795006660.0377893,
+    "seen": 1795011799.831415,
+    "ast_hash": "c5ecb653741ee6dd9d665f5ff1fa4dfa",
+    "semantic_hash": "c5ecb653741ee6dd9d665f5ff1fa4dfa"
+  },
+  "docs/STATUS.md": {
+    "mtime": 1795010889.2174408,
+    "seen": 1795011799.8314161,
+    "ast_hash": "f9b7bf769159f3435b19eeac7df90662",
+    "semantic_hash": "f9b7bf769159f3435b19eeac7df90662"
+  },
+  "docs/reference/UPDF_Deep.md": {
+    "mtime": 1792141246.2091532,
+    "seen": 1795011799.8314161,
+    "ast_hash": "1c25877c71e2a61fc50337d40b5e657f",
+    "semantic_hash": "1c25877c71e2a61fc50337d40b5e657f"
+  },
+  "docs/updf-parity-visual-and-feature.md": {
+    "mtime": 1794852957.4620166,
+    "seen": 1795011799.831417,
+    "ast_hash": "abf407871f39f33627ee5171bb9e1538",
+    "semantic_hash": "abf407871f39f33627ee5171bb9e1538"
+  },
+  "docs/visual-parity.md": {
+    "mtime": 1795006493.6066008,
+    "seen": 1795011799.831418,
+    "ast_hash": "9696ae75d3255d5e46a389c36512aede",
+    "semantic_hash": "9696ae75d3255d5e46a389c36512aede"
+  },
+  "pdfium/README.md": {
+    "mtime": 1792141994.9236922,
+    "seen": 1795011799.831418,
+    "ast_hash": "3b20b6734a1db07e31b8800f38d5ec84",
+    "semantic_hash": "3b20b6734a1db07e31b8800f38d5ec84"
+  },
+  "assets/icon.png": {
+    "mtime": 1792854258.5923405,
+    "seen": 1795011799.831419,
+    "ast_hash": "ed9f6d9a3cc2a0582a80bdf372888081",
+    "semantic_hash": "ed9f6d9a3cc2a0582a80bdf372888081"
+  },
+  "crates/youpdf-app/src/assets/YouPDF-icon.png": {
+    "mtime": 1792518658.801671,
+    "seen": 1795011799.831419,
+    "ast_hash": "ca00af382269c9bb343e9f82f5c00407",
+    "semantic_hash": "ca00af382269c9bb343e9f82f5c00407"
+  },
+  "crates/youpdf-app/src/assets/icon.png": {
+    "mtime": 1792518658.9812624,
+    "seen": 1795011799.83142,
+    "ast_hash": "ed9f6d9a3cc2a0582a80bdf372888081",
+    "semantic_hash": "ed9f6d9a3cc2a0582a80bdf372888081"
+  },
+  "docs/screenshots/document-editor.png": {
+    "mtime": 1792610475.9459972,
+    "seen": 1795011799.831421,
+    "ast_hash": "34a60577f99d40d1f9f38b58133dabd7",
+    "semantic_hash": "34a60577f99d40d1f9f38b58133dabd7"
+  },
+  "docs/screenshots/document-view.png": {
+    "mtime": 1792593688.1140568,
+    "seen": 1795011799.831421,
+    "ast_hash": "d493d577d9d35fe8e20011ef7332b59c",
+    "semantic_hash": "d493d577d9d35fe8e20011ef7332b59c"
+  },
+  "docs/screenshots/home.png": {
+    "mtime": 1792593688.1106136,
+    "seen": 1795011799.8314219,
+    "ast_hash": "af8c8f73ab474b588473426071370c69",
+    "semantic_hash": "af8c8f73ab474b588473426071370c69"
+  },
+  "docs/screenshots/youpdf-doc.png": {
+    "mtime": 1794926112.7705133,
+    "seen": 1795011799.8314219,
+    "ast_hash": "ba25a930dda9523931ee7bb94a3d942f",
+    "semantic_hash": "ba25a930dda9523931ee7bb94a3d942f"
+  },
+  "docs/screenshots/youpdf-modepill-selected.png": {
+    "mtime": 1795000593.5351489,
+    "seen": 1795011799.831423,
+    "ast_hash": "8e35cc537f4fb27f9f369aafd4e29d14",
+    "semantic_hash": "8e35cc537f4fb27f9f369aafd4e29d14"
+  },
+  "docs/screenshots/youpdf-modepill.png": {
+    "mtime": 1795000144.2858799,
+    "seen": 1795011799.831424,
+    "ast_hash": "8e35cc537f4fb27f9f369aafd4e29d14",
+    "semantic_hash": "8e35cc537f4fb27f9f369aafd4e29d14"
+  },
+  "docs/screenshots/youpdf-toolbar-keep.png": {
+    "mtime": 1794988745.078228,
+    "seen": 1795011799.831424,
+    "ast_hash": "3a02959c49f07e827ad4a25516960b10",
+    "semantic_hash": "3a02959c49f07e827ad4a25516960b10"
+  },
+  "docs/screenshots/youpdf-view.png": {
+    "mtime": 1794924528.9976077,
+    "seen": 1795011799.831425,
+    "ast_hash": "b84cf7cd7433306fa94197476ad7097b",
+    "semantic_hash": "b84cf7cd7433306fa94197476ad7097b"
+  }
+}
