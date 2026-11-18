@@ -35,7 +35,7 @@ impl YouPdfApp {
         // ---- Barre flottante « Organiser », calquée sur UPDF 2.5.6 -------
         // Capture : docs/screenshots/Capture … 18.59.15.png.
         fn bar_button(ui: &mut egui::Ui, icon: IconFn, label: &str) -> bool {
-            let (rect, resp) = ui.allocate_exact_size(vec2(104.0, 34.0), Sense::click());
+            let (rect, resp) = ui.allocate_exact_size(vec2(150.0, 32.0), Sense::click());
             let fill = if resp.hovered() {
                 pal().hover_bg
             } else {
@@ -49,14 +49,14 @@ impl YouPdfApp {
             };
             icon(
                 ui.painter(),
-                Rect::from_center_size(pos2(rect.min.x + 18.0, rect.center().y), vec2(18.0, 18.0)),
+                Rect::from_center_size(pos2(rect.min.x + 21.0, rect.center().y), vec2(20.0, 20.0)),
                 color,
             );
             ui.painter().text(
-                pos2(rect.min.x + 34.0, rect.center().y),
+                pos2(rect.min.x + 38.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 label,
-                FontId::proportional(12.5),
+                FontId::proportional(13.0),
                 color,
             );
             resp.clicked()
@@ -93,7 +93,7 @@ impl YouPdfApp {
             .show(ui.ctx(), |ui| {
                 group().show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        let (help, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
+                        let (help, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
                         ui.painter().text(
                             help.center(),
                             Align2::CENTER_CENTER,
@@ -102,12 +102,12 @@ impl YouPdfApp {
                             pal().muted,
                         );
                         ui.add_space(4.0);
-                        ui.label(RichText::new(t("Multiple selection")).size(LABEL));
+                        ui.label(RichText::new(t("Multiple selection")).size(13.0));
                         let (sw, sw_resp) =
-                            ui.allocate_exact_size(vec2(28.0, 16.0), Sense::click());
+                            ui.allocate_exact_size(vec2(30.0, 18.0), Sense::click());
                         ui.painter().rect_filled(
                             sw,
-                            Rounding::same(8.0),
+                            Rounding::same(9.0),
                             if self.organize_multi {
                                 pal().accent
                             } else {
@@ -115,12 +115,12 @@ impl YouPdfApp {
                             },
                         );
                         let knob = if self.organize_multi {
-                            sw.max.x - 8.0
+                            sw.max.x - 9.0
                         } else {
-                            sw.min.x + 8.0
+                            sw.min.x + 9.0
                         };
                         ui.painter()
-                            .circle_filled(pos2(knob, sw.center().y), 6.0, Color32::WHITE);
+                            .circle_filled(pos2(knob, sw.center().y), 7.0, Color32::WHITE);
                         if sw_resp.clicked() {
                             self.organize_multi = !self.organize_multi;
                         }
@@ -136,7 +136,7 @@ impl YouPdfApp {
                 group().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.menu_button(
-                            RichText::new(t("Select pages")).size(LABEL),
+                            RichText::new(format!("{} ▾", t("Select pages"))).size(13.0),
                             |ui| {
                                 if ui.button(t("Select all")).clicked() {
                                     selected = (1..=total).collect();
@@ -159,7 +159,7 @@ impl YouPdfApp {
                             },
                         );
                         ui.separator();
-                        if bar_button(ui, icon_file_plus, t("Insert")) {
+                        if bar_button(ui, icon_file_plus, &format!("{} ▾", t("Insert"))) {
                             dialog = Some(OrganizeDialog::Insert);
                         }
                         if bar_button(ui, icon_export, t("Extract")) {
@@ -171,7 +171,7 @@ impl YouPdfApp {
                         if bar_button(ui, icon_scissors, &format!("{} ▾", t("Split"))) {
                             dialog = Some(OrganizeDialog::Split);
                         }
-                        ui.menu_button("•••", |ui| {
+                        ui.menu_button(RichText::new("••• Autres").size(13.0), |ui| {
                             if ui.button(t("Rotate left")).clicked() {
                                 self.rotate_pages(ui.ctx(), &selected, total, -90);
                                 ui.close_menu();
@@ -203,7 +203,7 @@ impl YouPdfApp {
 
         // Annuler / rétablir / supprimer / Fermer, collé au bord droit.
         egui::Area::new(Id::new("org-actions"))
-            .anchor(Align2::RIGHT_TOP, vec2(-10.0, TITLE_H + 8.0))
+            .anchor(Align2::RIGHT_TOP, vec2(-4.0, TITLE_H + 8.0))
             .order(Order::Foreground)
             .show(ui.ctx(), |ui| {
                 group().show(ui, |ui| {
@@ -224,7 +224,7 @@ impl YouPdfApp {
                             }
                         }
                         ui.add_space(6.0);
-                        if ui.button(RichText::new(t("Close")).size(LABEL)).clicked() {
+                        if ui.button(RichText::new(t("Close")).size(13.0)).clicked() {
                             close = true;
                         }
                     });
@@ -253,19 +253,33 @@ impl YouPdfApp {
                     // La barre flottante occupe le haut : on laisse la place
                     // pour que la première rangée ne passe pas dessous.
                     ui.add_space(68.0);
-                    ui.horizontal_wrapped(|ui| {
-                        // Cellules dimensionnées sur la page : plus de grand
-                        // vide vertical pour les documents paysage.
-                        ui.spacing_mut().item_spacing = vec2(20.0, 28.0);
-                        ui.add_space(20.0);
-                        for page in 1..=total as u32 {
+                    // Rangées explicites : `horizontal_wrapped` ne répète pas
+                    // le `add_space` initial, donc la 1re ligne était centrée
+                    // et les suivantes collaient au bord.
+                    let (sw, _) = tab.page_size_cached(1);
+                    let sample_scale = 216.0 / sw.max(1.0);
+                    let cell_w = sw * sample_scale + 20.0;
+                    let gap_x = 35.0;
+                    let avail = ui.available_width();
+                    let columns = ((avail + gap_x) / (cell_w + gap_x)).floor().max(1.0) as usize;
+                    let grid_w = columns as f32 * cell_w + (columns - 1) as f32 * gap_x;
+                    let left_gap = ((avail - grid_w) * 0.5).max(12.0);
+                    let mut page = 1u32;
+                    while page <= total as u32 {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(gap_x, 24.0);
+                            ui.add_space(left_gap);
+                            for _ in 0..columns {
+                                if page > total as u32 {
+                                    break;
+                                }
                             let (wp, hp) = tab.page_size_cached(page);
                             // Mesuré sur la capture UPDF 18.59.15 (2×) :
                             // page ≈ 432 px → 216 pt de large.
                             let scale = 216.0 / wp.max(1.0);
                             let thumb = vec2(wp * scale, hp * scale);
                             let (rect, resp) = ui.allocate_exact_size(
-                                vec2(thumb.x + 20.0, thumb.y + 48.0),
+                                vec2(thumb.x + 20.0, thumb.y + 40.0),
                                 Sense::click_and_drag(),
                             );
                             let img_rect = Rect::from_min_max(
@@ -413,9 +427,11 @@ impl YouPdfApp {
                                     anchor = Some(page_usize);
                                 }
                             }
-                        }
-                    });
-                    ui.add_space(16.0);
+                                page += 1;
+                            }
+                        });
+                        ui.add_space(24.0);
+                    }
                 });
             });
 
