@@ -2,6 +2,12 @@
 
 *Target: 18 subagents across 5 waves, closing 31 parity gaps against UPDF 2.5.6. Each spec includes the plan, the thought (why this approach), the lightweight trick, file ownership, API surface, test cases, and `ponytail:` ceilings.*
 
+> **Status:** all 18 agents landed (HEAD `e8b3a8ea`), and the Tier 1/2 + Wave 4/5 rounds shipped
+> on top of them — see `docs/GAP.md` (per-feature + reference material) and `docs/visual-parity.md`
+> (appearance). The per-wave specs below are the **historical build plan** — they describe what the
+> agents were told to build, not work that is still outstanding. Open items are tracked in
+> `docs/GAP.md` (Tier 2/3) and `docs/visual-parity.md` (Wave 6, appearance-only).
+
 ---
 
 ## Wave 0 — Collision Prep (Do This Yourself, One Commit)
@@ -866,12 +872,17 @@ pub async fn translate_pdf(doc: &mut Document, options: TranslationOptions, prov
 
 ## Wave 5 — Strategic Product Decisions (No Code Agents)
 
+> **Status:** all 18 agents across Waves 1–4 **landed** (HEAD `e8b3a8ea`); the Tier 1/2 round
+> shipped on top of them. The specs below are the historical build plan, not future work —
+> see `docs/GAP.md` for what actually shipped and `docs/visual-parity.md` for the appearance
+> backlog. Of the Wave 5 decisions: **Office Import is done**; the other three are deferred.
+
 | Gap | Recommendation | Rationale |
 |---|---|---|
-| **Office Import** | Shell to `soffice --convert-to pdf` when LibreOffice is present; else show install prompt. | OOXML readers are 10k+ LoC each (docx, xlsx, pptx). LibreOffice is free, cross-platform, and already perfect at this. |
-| **Validating PDF/A** | Scope as PDF/A-2b with an embedded sRGB ICC profile and `/OutputIntent` (skip full validation engine). | Full validation = color-space analysis, font embedding checks, metadata validation. Buy the sRGB ICC from a public source (e.g. LittleCMS) and write `/OutputIntent << /S /GTS_PDFA1 /OutputConditionIdentifier (sRGB) >>`. |
-| **Element Align/Arrange Panel** | Blocked on multi-select; single-object arrange is already done. | Align/arrange requires 2+ selected objects. Multi-select is a canvas interaction overhaul — do that first or don't build the panel. |
-| **PDF Portfolio** | Treat as `/Collections` wrapper over existing `/EmbeddedFiles` attachments. | You already have attachments. `/Collections` is just a navigation layer — worth ~1 day once anything else touches collections; not before. |
+| **Office Import** ✅ | Shell to `soffice --convert-to pdf` when LibreOffice is present; else show install prompt. | OOXML readers are 10k+ LoC each (docx, xlsx, pptx). LibreOffice is free, cross-platform, and already perfect at this. |
+| **Validating PDF/A** ☐ | Scope as PDF/A-2b with an embedded sRGB ICC profile and `/OutputIntent` (skip full validation engine). | Full validation = color-space analysis, font embedding checks, metadata validation. Buy the sRGB ICC from a public source (e.g. LittleCMS) and write `/OutputIntent << /S /GTS_PDFA1 /OutputConditionIdentifier (sRGB) >>`. |
+| **Element Align/Arrange Panel** ☐ | Blocked on multi-select; single-object arrange is already done. | Align/arrange requires 2+ selected objects. Multi-select is a canvas interaction overhaul — do that first or don't build the panel. |
+| **PDF Portfolio** ☐ | Treat as `/Collections` wrapper over existing `/EmbeddedFiles` attachments. | You already have attachments. `/Collections` is just a navigation layer — worth ~1 day once anything else touches collections; not before. |
 
 ---
 
