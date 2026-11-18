@@ -642,14 +642,14 @@ impl YouPdfApp {
                 ("Extract data", "extract"),
                 ("Batch", "batch"),
             ];
-            let usable = (ui.available_width() - 2.0 * margin).max(CELL_W);
-            let columns = ((usable + GAP) / (CELL_W + GAP)).floor().max(1.0) as usize;
+            let usable = (ui.available_width() - 2.0 * margin).max(CARD_W);
+            let columns = ((usable + GAP) / (CARD_W + GAP)).floor().max(1.0) as usize;
             let mut index = 0usize;
             while index < TOOLS.len() {
                 ui.horizontal(|ui| {
                     ui.add_space(margin);
                     for (label, id) in TOOLS.iter().skip(index).take(columns) {
-                        let (rect, resp) = ui.allocate_exact_size(vec2(CELL_W, CELL_H), Sense::click());
+                        let (rect, resp) = ui.allocate_exact_size(vec2(CARD_W, CELL_H), Sense::click());
                         if resp.hovered() {
                             ui.painter()
                                 .rect_filled(rect, Rounding::same(RADIUS_L), pal().widget_bg);

@@ -81,9 +81,9 @@ pub(super) enum BatchEvent {
     Note(String),
 }
 
-/// Vert des lignes « Done ».
+/// Vert des lignes « Done » : le jeton d'état, pas un littéral.
 const DONE_GREEN: Color32 = Color32::from_rgb(52, 148, 92);
-/// Rouge des lignes « Error ».
+/// Rouge des lignes « Error » : le jeton de caviardage, pas un littéral.
 const FAILED_RED: Color32 = Color32::from_rgb(196, 62, 62);
 
 /// « 1.4 MB », « 812 B ».

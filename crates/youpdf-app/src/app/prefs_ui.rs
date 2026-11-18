@@ -157,6 +157,9 @@ fn prefs_body(app: &mut YouPdfApp, ui: &mut egui::Ui, settings: &mut youpdf_ai::
             }
         }
     });
+    // ponytail: UPDF 2.5.6 Settings ▸ Appearance ▸ "Enable Liquid Glass".
+    // Full wgpu blur deferred; toggle controls chrome translucency.
+    ui.checkbox(&mut settings.liquid_glass, t("Enable Liquid Glass"));
     ui.add_space(SPACE_M);
     ui.label(section(t("AI")));
     ui.checkbox(&mut settings.ai_enabled, t("Enable the AI layer"));

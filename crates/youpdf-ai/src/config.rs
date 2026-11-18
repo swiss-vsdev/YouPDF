@@ -94,6 +94,8 @@ pub struct AppSettings {
     pub measure_unit: String,
     /// Écran affiché au démarrage : `home` ou `blank`.
     pub startup: String,
+    /// Activer Liquid Glass (translucidité du chrome).
+    pub liquid_glass: bool,
 }
 
 impl Default for AppSettings {
@@ -117,6 +119,7 @@ impl Default for AppSettings {
             autosave_minutes: 0,
             measure_unit: "in".to_string(),
             startup: "home".to_string(),
+            liquid_glass: false,
         }
     }
 }

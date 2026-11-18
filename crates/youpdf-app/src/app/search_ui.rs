@@ -16,7 +16,7 @@ impl YouPdfApp {
                 let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 28.0), Sense::click());
                 if resp.hovered() {
                     ui.painter()
-                        .rect_filled(rect, Rounding::same(RADIUS_M), Color32::from_rgb(0x33, 0x33, 0x33));
+                        .rect_filled(rect, Rounding::same(RADIUS_M), youpdf_shared::theme::panel_hover());
                 }
                 ui.painter().text(
                     rect.center(),
@@ -174,7 +174,7 @@ impl YouPdfApp {
                                     ui.painter().rect_filled(
                                         rect,
                                         Rounding::same(RADIUS_M),
-                                        Color32::from_rgb(0x33, 0x33, 0x33),
+                                        youpdf_shared::theme::panel_hover(),
                                     );
                                 }
                                 icon_trash(
@@ -245,7 +245,7 @@ impl YouPdfApp {
                                         ui.painter().rect_filled(
                                             rect,
                                             Rounding::same(RADIUS_M),
-                                            Color32::from_rgb(0x33, 0x33, 0x33),
+                                            youpdf_shared::theme::panel_hover(),
                                         );
                                     }
                                     icon_caret_up(

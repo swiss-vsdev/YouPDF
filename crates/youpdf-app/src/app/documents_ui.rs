@@ -50,6 +50,8 @@ impl YouPdfApp {
                 path: path.clone(),
                 title: title.clone(),
                 page: 1,
+                page_history: vec![1],
+                page_history_pos: 0,
                 zoom: initial_zoom,
                 zoom_fit_page: fit_page,
                 cache: HashMap::new(),

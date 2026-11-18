@@ -30,10 +30,22 @@ pub(crate) fn pill_button(
         + if chevron { 15.0 } else { 0.0 }
         + 12.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 26.0), Sense::click());
+    // ponytail: capsule, not a rounded-rect. UPDF's mode pills are more oval
+    // than `RADIUS_L` (8.0) would render: a 26 px tall pill needs a 13 px
+    // corner radius to read as a true capsule. `RADIUS_M` (6.0) left the
+    // corners visibly square. `Rounding::same(rect.height()/2.0)` keeps the
+    // shape self-adjusting if the height ever changes.
+    let capsule = Rounding::same(rect.height() / 2.0);
+    // §5.2: UPDF paints every pill — active gets accent, inactive gets
+    // `widget_bg`, hover lifts to `hover_bg`. Without the inactive fill the
+    // pill is invisible against the toolbar background.
     if primary || selected {
-        ui.painter().rect_filled(rect, Rounding::same(RADIUS_M), pal().accent);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(RADIUS_M), pal().hover_bg);
+        ui.painter().rect_filled(rect, capsule, pal().accent);
+    } else {
+        ui.painter().rect_filled(rect, capsule, pal().widget_bg);
+        if resp.hovered() {
+            ui.painter().rect_filled(rect, capsule, pal().hover_bg);
+        }
     }
     let icon_rect = Rect::from_center_size(
         pos2(rect.min.x + 12.0 + 7.5, rect.center().y),
