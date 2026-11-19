@@ -185,12 +185,10 @@ impl YouPdfApp {
             None
         };
 
-        egui::Window::new("Presenter View")
-            .collapsible(false)
-            .resizable(true)
+        Popup::window(t("Presenter View"))
             .default_width(420.0)
             .anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -16.0))
-            .show(ctx, |ui| {
+            .show_detached(ctx, |ui| {
                 let elapsed = Instant::now() - presenter.start_time;
                 let minutes = elapsed.as_secs() / 60;
                 let seconds = elapsed.as_secs() % 60;

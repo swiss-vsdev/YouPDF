@@ -8,7 +8,8 @@
 //!
 //! L'appel réseau tourne sur un fil de travail : l'interface ne se fige
 //! jamais, même quand le fournisseur ne répond pas.
-use youpdf_shared::{BODY, LABEL, caption, modal_frame, muted, pal, section, t, SPACE_S, SPACE_L, SPACE_M};
+use youpdf_shared::{BODY, LABEL, caption, muted, pal, section, t, SPACE_S, SPACE_L, SPACE_M};
+use crate::popup::Popup;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -682,12 +683,10 @@ impl AiPanel {
         self.poll();
 
         let mut open = self.open;
-        egui::Window::new(t("AI assistant"))
-            .open(&mut open)
+        Popup::window(t("AI assistant"))
             .default_size([560.0, 640.0])
             .min_width(420.0)
-            .frame(modal_frame(ctx))
-            .show(ctx, |ui| {
+            .show(ctx, &mut open, |ui| {
                 self.body(ui, doc, doc_text, doc_name, doc_pages);
             });
         self.open = open;
@@ -1080,13 +1079,11 @@ impl AiPanel {
         let mut open = self.translate_open;
         let mut do_translate = false;
         let mut do_apply = false;
-        egui::Window::new(t("Translate PDF (preserve layout)"))
+        Popup::window(t("Translate PDF (preserve layout)"))
             .id(egui::Id::new("translate-pdf"))
-            .open(&mut open)
             .default_size([420.0, 280.0])
             .min_width(360.0)
-            .frame(modal_frame(ctx))
-            .show(ctx, |ui| {
+            .show(ctx, &mut open, |ui| {
                 ui.label(
                     RichText::new(
                         "Translate every page in place. The original text is white-out and \

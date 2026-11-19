@@ -148,7 +148,7 @@ impl YouPdfApp {
                 ui.add_space(SPACE_M);
                 ui.label(section(t("Saved presets")));
                 ui.horizontal(|ui| {
-                    for (_i, preset) in app.watermark_presets.iter().enumerate() {
+                    for preset in app.watermark_presets.iter() {
                         if ui.selectable_label(false, &preset.text).clicked() {
                             app.watermark = preset.clone();
                         }

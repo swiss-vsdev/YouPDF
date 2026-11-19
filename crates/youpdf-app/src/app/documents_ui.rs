@@ -362,6 +362,7 @@ impl YouPdfApp {
         /// le thème a changé.
         pub(super) fn sync_theme(&mut self, ctx: &egui::Context) {
             set_palette(self.theme.palette());
+            youpdf_shared::set_liquid_glass(self.ai.settings.liquid_glass);
             if self.theme != self.applied_theme {
                 self.applied_theme = self.theme;
                 apply_theme(ctx, self.theme);

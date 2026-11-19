@@ -154,6 +154,11 @@ pub fn icon_file_plus(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::FILE_PLUS);
 }
 
+/// Rouage de la catégorie « Générales » des préférences.
+pub fn icon_gear(p: &Painter, r: Rect, c: Color32) {
+    glyph(p, r, c, ph::GEAR);
+}
+
 /// Dossier avec un plus : bouton « Ouvrir un fichier » de l'accueil UPDF.
 pub fn icon_folder_plus(p: &Painter, r: Rect, c: Color32) {
     glyph(p, r, c, ph::FOLDER_PLUS);

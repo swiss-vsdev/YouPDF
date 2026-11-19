@@ -5,13 +5,13 @@ use youpdf_shared::Result;
 /// Create a single A4 page PDF in memory.
 fn a4_pdf() -> Result<Vec<u8>> {
     let doc = youpdf_core::create::blank_document(1, 595.0, 842.0)?;
-    Ok(doc.to_bytes()?)
+    doc.to_bytes()
 }
 
 /// Create a single Legal page PDF in memory.
 fn legal_pdf() -> Result<Vec<u8>> {
     let doc = youpdf_core::create::blank_document(1, 612.0, 612.0)?;
-    Ok(doc.to_bytes()?)
+    doc.to_bytes()
 }
 
 #[test]

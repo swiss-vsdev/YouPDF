@@ -188,25 +188,6 @@ fn parse_tsv(stdout: &str) -> (String, Vec<OcrWord>) {
     (full_text, words)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::parse_tsv;
-
-    /// Tesseract 5 émet `conf` en décimal ; les mots fiables sont gardés.
-    #[test]
-    fn tsv_decimal_confidence_keeps_words() {
-        let tsv = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n\
-1\t1\t0\t0\t0\t0\t0\t0\t2250\t750\t-1\t\n\
-5\t1\t1\t1\t1\t1\t152\t305\t61\t20\t95.547981\tHello\n\
-5\t1\t1\t1\t1\t2\t217\t305\t69\t21\t12.100000\tlow\n";
-        let (text, words) = parse_tsv(tsv);
-        assert_eq!(text, "Hello");
-        assert_eq!(words.len(), 1);
-        assert_eq!(words[0].text, "Hello");
-        assert_eq!(words[0].confidence, 96);
-    }
-}
-
 impl OcrEngine for TesseractEngine {
     fn display_name(&self) -> &str {
         match self.binary {
@@ -269,6 +250,25 @@ impl OcrEngine for TesseractEngine {
             mode,
             words,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_tsv;
+
+    /// Tesseract 5 émet `conf` en décimal ; les mots fiables sont gardés.
+    #[test]
+    fn tsv_decimal_confidence_keeps_words() {
+        let tsv = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n\
+1\t1\t0\t0\t0\t0\t0\t0\t2250\t750\t-1\t\n\
+5\t1\t1\t1\t1\t1\t152\t305\t61\t20\t95.547981\tHello\n\
+5\t1\t1\t1\t1\t2\t217\t305\t69\t21\t12.100000\tlow\n";
+        let (text, words) = parse_tsv(tsv);
+        assert_eq!(text, "Hello");
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].text, "Hello");
+        assert_eq!(words[0].confidence, 96);
     }
 }
 

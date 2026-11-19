@@ -65,19 +65,12 @@ pub fn merge_pages(
         source_pages.push((view, content, resources));
     }
 
-    // Compute tile dimensions for the grid.
-    let cols = (per_output as f32).sqrt().ceil() as usize;
-    let cols = cols.max(1).min(source_pages.len());
-    let rows = (source_pages.len() + cols - 1) / cols;
-    let _tile_w = width / cols as f32;
-    let _tile_h = height / rows as f32;
-
     // Create merged output pages.
     let mut new_ids = Vec::new();
     for chunk in source_pages.chunks(per_output) {
         let ncols = (chunk.len() as f32).sqrt().ceil() as usize;
         let ncols = ncols.max(1).min(chunk.len());
-        let nrows = (chunk.len() + ncols - 1) / ncols;
+        let nrows = chunk.len().div_ceil(ncols);
         let tw = width / ncols as f32;
         let th = height / nrows as f32;
 

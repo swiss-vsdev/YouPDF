@@ -7,6 +7,7 @@ new (an AI image generator) is out of scope here; a feature that changes how a b
 looks (a mode pill) is in scope. Each entry is either `DONE`, `DIFF` (YouPDF looks
 different today), or `N/A` (UPDF-only surface with no YouPDF equivalent yet).*
 
+**Reference:** UPDF 2.5.6 (Build 1362), Superace Software.
 Screenshot pairs are the gate: for every `DIFF` below, capture UPDF and YouPDF at the
 same window size and diff the pixels. A gap closes when the diff is empty.
 

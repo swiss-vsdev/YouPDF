@@ -14,8 +14,9 @@ pub mod theme;
 pub use error::{Error, Result};
 pub use i18n::{t, Language};
 pub use theme::{
-    caption, modal_frame, muted, pal, section, set_palette, Palette, Theme, BODY, CAPTION,
-    LABEL, MONO, TITLE, RADIUS_L, RADIUS_M, RADIUS_S, RADIUS_TINY, RADIUS_XS, RADIUS_XL,
+    caption, current_theme, darken, liquid_glass, modal_frame, muted, pal, section,
+    set_liquid_glass, set_palette, Palette, Theme, BODY, CAPTION, LABEL, MONO, TITLE,
+    RADIUS_L, RADIUS_M, RADIUS_S, RADIUS_TINY, RADIUS_XS, RADIUS_XL, RADIUS_2XL, RADIUS_3XL,
     SPACE_L, SPACE_M, SPACE_S, SPACE_TINY, SPACE_XS,
 };
 

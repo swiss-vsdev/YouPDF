@@ -5,6 +5,7 @@
 ## AUDIT SUMMARY
 
 Waves 0–5 and the Tier 1/2 round have **landed** (HEAD `e8b3a8ea`). The per-feature
+verdict table in the feature inventory §(b) is now **46 PRESENT / 29
 PARTIAL / 42 MISSING / 1 UNKNOWN across 118 feature families**. Remaining gaps are the
 appearance-only diffs in `docs/visual-parity.md` and the Tier 2/3 backlog in `docs/GAP.md`.
 

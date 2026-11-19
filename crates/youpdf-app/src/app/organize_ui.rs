@@ -102,12 +102,12 @@ impl YouPdfApp {
                             pal().muted,
                         );
                         ui.add_space(4.0);
-                        ui.label(RichText::new(t("Multiple selection")).size(13.0));
+                        ui.label(RichText::new(t("Multiple selection")).size(TITLE));
                         let (sw, sw_resp) =
                             ui.allocate_exact_size(vec2(30.0, 18.0), Sense::click());
                         ui.painter().rect_filled(
                             sw,
-                            Rounding::same(9.0),
+                            Rounding::same(RADIUS_L),
                             if self.organize_multi {
                                 pal().accent
                             } else {
@@ -136,7 +136,7 @@ impl YouPdfApp {
                 group().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.menu_button(
-                            RichText::new(format!("{} ▾", t("Select pages"))).size(13.0),
+                            RichText::new(format!("{} ▾", t("Select pages"))).size(TITLE),
                             |ui| {
                                 if ui.button(t("Select all")).clicked() {
                                     selected = (1..=total).collect();
@@ -171,7 +171,7 @@ impl YouPdfApp {
                         if bar_button(ui, icon_scissors, &format!("{} ▾", t("Split"))) {
                             dialog = Some(OrganizeDialog::Split);
                         }
-                        ui.menu_button(RichText::new("••• Autres").size(13.0), |ui| {
+                        ui.menu_button(RichText::new(format!("••• {}", t("Other"))).size(TITLE), |ui| {
                             if ui.button(t("Rotate left")).clicked() {
                                 self.rotate_pages(ui.ctx(), &selected, total, -90);
                                 ui.close_menu();
@@ -224,7 +224,7 @@ impl YouPdfApp {
                             }
                         }
                         ui.add_space(6.0);
-                        if ui.button(RichText::new(t("Close")).size(13.0)).clicked() {
+                        if ui.button(RichText::new(t("Close")).size(TITLE)).clicked() {
                             close = true;
                         }
                     });

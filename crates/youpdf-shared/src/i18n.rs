@@ -85,6 +85,7 @@ pub fn t(key: &'static str) -> &'static str {
         "Remove" => "Retirer",
         "Choose…" => "Choisir…",
         "Open" => "Ouvrir",
+        "Open Quickly" => "Ouverture rapide",
         // Outils.
         "Comment" => "Commentaire",
         "Edit PDF" => "Modifier",
@@ -197,6 +198,7 @@ pub fn t(key: &'static str) -> &'static str {
         "Any except extracting pages" => "Sauf extraction de pages",
         "Screen" => "Écran",
         "Ebook" => "Livre électronique",
+        "Presenter View" => "Mode présentateur",
         "Print" => "Impression",
         // Mode pills.
         "Edit" => "Modifier",
@@ -207,6 +209,7 @@ pub fn t(key: &'static str) -> &'static str {
         // UI strings wired during the full localization pass.
         "#" => "#",
         "A field needs a name" => "A field needs a name",
+        "A signature was modified after signing" => "Une signature a été modifiée après la signature",
         "AI" => "IA",
         "AI assistant" => "Assistant IA",
         "API key" => "Clé API",
@@ -220,6 +223,7 @@ pub fn t(key: &'static str) -> &'static str {
         "Add folder…" => "Ajouter un dossier…",
         "Add the date" => "Ajouter la date",
         "All authors" => "Tous les auteurs",
+        "All digital signatures are valid" => "Toutes les signatures numériques sont valides",
         "All colors" => "Toutes les couleurs",
         "All types" => "Tous les types",
         "Allow custom text" => "Autoriser le texte personnalisé",
@@ -384,6 +388,16 @@ pub fn t(key: &'static str) -> &'static str {
         "Excel" => "Excel",
         "PowerPoint" => "PowerPoint",
         "Compare" => "Comparaison",
+        // Préférences (barre latérale et cartes UPDF).
+        "Documents" => "Documents",
+        "Comments" => "Commentaires",
+        "Measurements" => "Mesures",
+        "Default page layout" => "Mise en page par défaut",
+        "Page display" => "Affichage de page",
+        "Single page" => "Une seule page",
+        "Two pages" => "Deux pages",
+        "Enable scrolling" => "Activer le défilement",
+        "Show cover page in two-page view" => "Afficher la page de couverture en mode Deux pages",
         // Barre « Organiser les pages ».
         "Multiple selection" => "Sélection multiple",
         "Select pages" => "Sélection des pages",

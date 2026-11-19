@@ -277,12 +277,6 @@ impl YouPdfApp {
 
 }
 
-/// Couleur d'erreur des deux fenêtres. Supprimé : le jeton
-/// [`Palette::redact_red`] (`theme.rs`) est le point de vérité unique ; les
-/// deux sites l'appellent directement.
-#[allow(dead_code)]
-pub(super) const MARKS_RED: Color32 = Color32::from_rgb(196, 62, 62);
-
 /// Taille de police du tampon texte personnalisé.
 const YOUPDF_STAMP_FONT: f32 = 18.0;
 

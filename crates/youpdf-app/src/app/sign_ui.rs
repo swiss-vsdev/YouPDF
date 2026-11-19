@@ -9,12 +9,6 @@ use super::*;
 use youpdf_shared::{BODY, CAPTION, LABEL, caption, muted, t, SPACE_S, SPACE_L, SPACE_M};
 use youpdf_core::signature::{CertificateRequest, SignOptions, SigningIdentity};
 
-/// Vert du bandeau « signature valide » : le jeton d'état, pas un littéral.
-const VALID_GREEN: Color32 = Color32::from_rgb(52, 148, 92);
-/// Rouge du bandeau « signature invalide » : le jeton de caviardage, pas un
-/// littéral.
-const INVALID_RED: Color32 = Color32::from_rgb(196, 62, 62);
-
 /// Ce que l'application sait d'un certificat chargé.
 ///
 /// `SigningIdentity` n'est ni `Clone` ni sérialisable ; on en garde donc les
@@ -104,7 +98,7 @@ impl YouPdfApp {
             }
             if let Some(error) = app.sign.error.clone() {
                 ui.add_space(SPACE_S);
-                ui.label(RichText::new(error).size(LABEL).color(INVALID_RED));
+                ui.label(RichText::new(error).size(LABEL).color(pal().state_bad));
             }
         });
         if !open {
@@ -195,11 +189,9 @@ impl YouPdfApp {
             if ui.button(t("Choose file…")).clicked() {
                 self.choose_signature_image_file(ctx);
             }
-            if self.sign.options.signature_image.is_some() {
-                if ui.button(t("Clear")).clicked() {
-                    self.sign.options.signature_image = None;
-                    self.sign.signature_preview = None;
-                }
+            if self.sign.options.signature_image.is_some() && ui.button(t("Clear")).clicked() {
+                self.sign.options.signature_image = None;
+                self.sign.signature_preview = None;
             }
         });
         if let Some(png) = &self.sign.options.signature_image {
@@ -247,9 +239,9 @@ impl YouPdfApp {
         }
         for info in &self.sign.signatures {
             let (colour, headline) = if info.valid {
-                (VALID_GREEN, "All digital signatures are valid")
+                (pal().state_ok, t("All digital signatures are valid"))
             } else {
-                (INVALID_RED, "A signature was modified after signing")
+                (pal().state_bad, t("A signature was modified after signing"))
             };
             ui.label(RichText::new(headline).size(BODY).color(colour));
             let field = if info.field.is_empty() {
@@ -279,7 +271,7 @@ impl YouPdfApp {
                 );
             }
             if let Some(error) = &info.error {
-                ui.label(RichText::new(error).size(CAPTION).color(INVALID_RED));
+                ui.label(RichText::new(error).size(CAPTION).color(pal().state_bad));
             }
         }
     }

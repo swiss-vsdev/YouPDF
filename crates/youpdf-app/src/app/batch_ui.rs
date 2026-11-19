@@ -5,7 +5,7 @@
 
 use super::*;
 use super::batch_types::*;
-use youpdf_shared::{CAPTION, LABEL, caption, modal_frame, muted, section, t, SPACE_S, SPACE_L, SPACE_M};
+use youpdf_shared::{CAPTION, LABEL, caption, muted, section, t, SPACE_S, SPACE_L, SPACE_M};
 
 impl YouPdfApp {
     pub(super) fn batch_window(&mut self, ctx: &egui::Context) {
@@ -31,14 +31,10 @@ impl YouPdfApp {
             .batch_dir
             .as_ref()
             .map(|p| p.display().to_string());
-        egui::Window::new(t("Batch processing"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
+        Popup::window(t("Batch processing"))
             .default_size(vec2(520.0, 470.0))
             .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .frame(modal_frame(ctx))
-            .show(ctx, |ui| {
+            .show(ctx, &mut open, |ui| {
                 ui.label(section(t("Queue")));
                 ui.horizontal(|ui| {
                     if ui.button(t("Add PDFs…")).clicked() {

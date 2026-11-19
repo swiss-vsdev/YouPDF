@@ -1000,7 +1000,7 @@ mod translate_tests {
         assert_eq!(fit_block(&lines, 500.0, 100.0, 1.0), 24.0);
         // Boîte moyenne : on descend d'un cran, sans passer sous le plancher.
         let size = fit_block(&lines, 120.0, 100.0, 1.0);
-        assert!(size >= 4.0 && size < 24.0);
+        assert!((4.0..24.0).contains(&size));
         // Une ligne vide renvoie le plancher.
         assert_eq!(fit_block(&[], 100.0, 100.0, 1.0), 4.0);
     }

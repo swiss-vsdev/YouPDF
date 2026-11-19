@@ -76,7 +76,7 @@ pub(crate) fn pill_button(
 pub(crate) fn menu_row_checked(ui: &mut egui::Ui, label: &str, checked: bool) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(210.0, 26.0), Sense::click());
     if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(5.0), pal().hover_bg);
+        ui.painter().rect_filled(rect, Rounding::same(RADIUS_M), pal().hover_bg);
     }
     if checked {
         glyph(
@@ -140,7 +140,7 @@ pub(crate) fn submenu_row(ui: &mut egui::Ui, label: &str, icon: Option<fn(&egui:
 pub(crate) fn menu_row(ui: &mut egui::Ui, label: &str, shortcut: &str, icon: Option<fn(&egui::Painter, egui::Rect, egui::Color32)>) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(210.0, 26.0), Sense::click());
     if resp.hovered() {
-        ui.painter().rect_filled(rect, Rounding::same(5.0), pal().hover_bg);
+        ui.painter().rect_filled(rect, Rounding::same(RADIUS_M), pal().hover_bg);
     }
     let label_x = rect.min.x + 10.0;
     let shortcut_x = rect.max.x - 10.0;

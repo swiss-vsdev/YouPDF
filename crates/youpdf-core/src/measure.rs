@@ -114,8 +114,7 @@ fn measure_value(kind: MeasureKind, points: &[[f32; 2]]) -> f32 {
         MeasureKind::Azimuth => {
             let (a, b) = (points[0], points[1]);
             let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-            let deg = (dx.atan2(dy).to_degrees() + 360.0) % 360.0;
-            deg
+            (dx.atan2(dy).to_degrees() + 360.0) % 360.0
         }
         // Altitude : angle d'élévation du segment par rapport à l'horizontale.
         // Approximation plane — l'altitude « réelle » exigerait une élévation

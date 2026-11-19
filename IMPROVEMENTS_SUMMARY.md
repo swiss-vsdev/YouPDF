@@ -2,8 +2,8 @@
 
 > **Coverage note:** this file records the Wave 2–3 session (theme fix, overflow menu, AI
 > history, merge/sticker/connected-lines). It does **not** cover the later Tier 1/2 round,
-> Wave 4/5, or the external reference material — see `docs/GAP.md` (per-feature + analysis
-> evidence), `docs/STATUS.md` (shipped state), and `docs/visual-parity.md` (appearance).
+> Wave 4/5 — see `docs/GAP.md` (per-feature notes), `docs/STATUS.md` (shipped state),
+> and `docs/visual-parity.md` (appearance).
 > A condensed Tier 1/2 supplement follows this historical record.
 
 ## Tier 1/2 round + Wave 4/5 supplement (November 2026)
@@ -24,7 +24,6 @@ Landed since this file's original session, per `docs/GAP.md` / `docs/STATUS.md`:
 - **Wave 5:** Office import (`soffice --convert-to pdf`); create-from-capture
   (`capture/screenshot.rs`); PDF-file watermarks; watermark rotation randomness +
   template/starred presets.
-
 ## Original session changes (Wave 2–3)
 
 ### 1. Visual Theme Fix
@@ -124,7 +123,7 @@ Landed since this file's original session, per `docs/GAP.md` / `docs/STATUS.md`:
 4. `crates/youpdf-ai/src/tasks.rs` - suggested_questions() function
 5. `crates/youpdf-app/src/app/organize_ui.rs` - Merge button + color fix
 6. `crates/youpdf-app/src/app/canvas_tools_ui.rs` - Sticker + ConnectedLines + accent color
-7. `crates/youpdf-app/src/app/app.rs` - New ToolAction variants + ToolsEntry
+7. `crates/youpdf-app/src/app.rs` - New ToolAction variants + ToolsEntry
 8. `crates/youpdf-app/src/app/toolbar_ui.rs` - New tools in menu
 9. `crates/youpdf-core/src/organize/merge_batch.rs` - New: merge_pages function
 10. `crates/youpdf-core/src/organize/mod.rs` - Added `pub mod merge_batch`

@@ -6,6 +6,7 @@ mod fluent;
 mod fonts;
 mod home;
 mod inspector;
+mod popup;
 
 use app::YouPdfApp;
 

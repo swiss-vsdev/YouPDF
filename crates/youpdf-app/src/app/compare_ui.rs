@@ -14,14 +14,10 @@ impl YouPdfApp {
             let mut pick = false;
             let mut run = false;
             let mut jump: Option<usize> = None;
-            egui::Window::new(t("Compare PDFs"))
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(true)
+            Popup::window(t("Compare PDFs"))
                 .default_size(vec2(900.0, 600.0))
                 .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-                .frame(modal_frame(ctx))
-                .show(ctx, |ui| {
+                .show(ctx, &mut open, |ui| {
                     self.compare_controls(ui, &mut pick, &mut run);
                     ui.add_space(SPACE_L);
                     // La vue côte à côte n'apparaît qu'une fois les deux documents chargés.

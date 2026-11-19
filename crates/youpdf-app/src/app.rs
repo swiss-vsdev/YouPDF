@@ -7,7 +7,7 @@
 //!
 //! Rendu net sur écrans HiDPI : les bitmaps PDFium sont rastérisés à
 //! `échelle_logique × pixels_per_point`, puis dessinés à la taille logique.
-use youpdf_shared::{BODY, CAPTION, LABEL, Language, TITLE, Theme, caption, i18n, modal_frame, muted, pal, section, set_palette, t, RADIUS_L, RADIUS_S, RADIUS_M, RADIUS_XS, SPACE_L, SPACE_M, SPACE_S, SPACE_XS, RADIUS_TINY};
+use youpdf_shared::{BODY, CAPTION, LABEL, Language, TITLE, Theme, caption, i18n, muted, pal, section, set_palette, t, RADIUS_L, RADIUS_S, RADIUS_M, RADIUS_XS, RADIUS_XL, RADIUS_3XL, SPACE_L, SPACE_M, SPACE_S, SPACE_XS, RADIUS_TINY};
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -85,6 +85,7 @@ use crate::home::{
     self, HomeCategory, HomeView, ViewMode, load_opened_times, load_recents,
     save_recents_with_times, shorten,
 };
+use crate::popup::Popup;
 use crate::app::batch_types::{BatchEntry, BatchEvent};
 use crate::inspector::{
     arrow_x, image_controls, markup_row, paint_arrow, place_inspector, text_style_row, AnnotationId,
@@ -1392,6 +1393,8 @@ pub struct YouPdfApp {
     /// modifications seraient recréées à l'identique à chaque frame et ne
     /// survivraient jamais jusqu'au bouton Save.
     prefs_draft: Option<youpdf_ai::AppSettings>,
+    /// Catégorie affichée dans la fenêtre Préférences (barre latérale UPDF).
+    prefs_tab: usize,
     /// Instant du dernier enregistrement automatique, en secondes egui.
     autosave_at: f64,
     /// Fenêtre de découpage en tuiles.
@@ -1911,6 +1914,7 @@ impl YouPdfApp {
             crop_target: 0,
             prefs_open: false,
             prefs_draft: None,
+            prefs_tab: 0,
             autosave_at: 0.0,
             scan_banner: false,
             scan_banner_off: false,

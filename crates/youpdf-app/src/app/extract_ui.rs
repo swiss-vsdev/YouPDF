@@ -14,14 +14,10 @@ impl YouPdfApp {
             let mut scan = false;
             let mut export_tables = false;
             let mut export_pairs = false;
-            egui::Window::new(t("Extract data"))
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(true)
+            Popup::window(t("Extract data"))
                 .default_size(vec2(560.0, 460.0))
                 .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-                .frame(modal_frame(ctx))
-                .show(ctx, |ui| {
+                .show(ctx, &mut open, |ui| {
                     ui.horizontal(|ui| {
                         if ui.button(t("Scan the document")).clicked() {
                             scan = true;

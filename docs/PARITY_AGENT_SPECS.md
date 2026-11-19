@@ -3,7 +3,7 @@
 *Target: 18 subagents across 5 waves, closing 31 parity gaps against UPDF 2.5.6. Each spec includes the plan, the thought (why this approach), the lightweight trick, file ownership, API surface, test cases, and `ponytail:` ceilings.*
 
 > **Status:** all 18 agents landed (HEAD `e8b3a8ea`), and the Tier 1/2 + Wave 4/5 rounds shipped
-> on top of them — see `docs/GAP.md` (per-feature + reference material) and `docs/visual-parity.md`
+> on top of them — see `docs/GAP.md` (per-feature notes) and `docs/visual-parity.md`
 > (appearance). The per-wave specs below are the **historical build plan** — they describe what the
 > agents were told to build, not work that is still outstanding. Open items are tracked in
 > `docs/GAP.md` (Tier 2/3) and `docs/visual-parity.md` (Wave 6, appearance-only).
@@ -215,7 +215,7 @@ pub fn mark_code_matches(doc: &Document, page: usize, code_sets: &[CodeSetEntry]
 - Use `regex` crate (already in workspace via `tracing-subscriber`/`reqwest` deps) or hand-roll a simple matcher for the 8 patterns.
 - `ponytail:` comment: *"No nested/compound rules (e.g. SSN adjacent to a name); add a rule DSL if legal workflows need it."*
 
-**Test Cases (`crates/youpdf-core/tests/redact_codesets.rs`):**
+**Test Cases (`crates/youpdf-core/src/redact/codesets.rs`):**
 ```rust
 #[test]
 fn ssn_detection() { assert_eq!(find_code_matches("SSN: 123-45-6789", DEFAULT_CODE_SETS).len(), 1); }
@@ -804,7 +804,7 @@ pub fn detect_page_defects(doc: &Document, page: usize) -> Vec<PageDefect> {
 
 ### Agent D2 — Whole-PDF Bilingual Translation
 
-**Files:** `crates/youpdf-app/src/ai.rs` (extend), `crates/youpdf-core/src/office.rs` (reuse text placement, ~150 LoC)
+**Files:** `crates/youpdf-app/src/ai.rs` (extend), `crates/youpdf-core/src/office/mod.rs` (reuse text placement, ~150 LoC)
 
 **Plan:**
 ```rust

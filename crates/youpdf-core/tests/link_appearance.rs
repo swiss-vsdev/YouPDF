@@ -24,7 +24,7 @@ fn doc_with_link(x1: f32, y1: f32, x2: f32, y2: f32) -> (Document, lopdf::Object
     let annot_id = doc.inner_mut().add_object(Object::Dictionary(annot_dict));
 
     // Ajouter la référence à l'annotation dans le tableau `/Annots` de la page.
-    let mut page_dict = doc.inner_mut().get_dictionary_mut(page_id).expect("page dict");
+    let page_dict = doc.inner_mut().get_dictionary_mut(page_id).expect("page dict");
     match page_dict.get_mut(b"Annots") {
         Ok(Object::Array(arr)) => arr.push(Object::Reference(annot_id)),
         _ => {

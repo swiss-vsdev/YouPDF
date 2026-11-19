@@ -258,8 +258,8 @@ impl YouPdfApp {
                                     ] {
                                         if ui
                                             .add(
-                                                Button::new(RichText::new(t(label)).size(11.0))
-                                                    .rounding(Rounding::same(5.0)),
+                                                Button::new(RichText::new(t(label)).size(LABEL))
+                                                    .rounding(Rounding::same(RADIUS_M)),
                                             )
                                             .clicked()
                                         {
@@ -289,7 +289,7 @@ impl YouPdfApp {
                                     };
                                     ui.painter().rect_filled(
                                         rect.shrink(3.0),
-                                        Rounding::same(10.0),
+                                        Rounding::same(RADIUS_XL),
                                         fill,
                                     );
                                     let color = if resp.hovered() {
@@ -328,7 +328,7 @@ impl YouPdfApp {
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                             ui.label(
                                                 RichText::new(t("Other"))
-                                                    .size(11.0)
+                                                    .size(LABEL)
                                                     .color(pal().accent),
                                             );
                                         });
@@ -909,9 +909,7 @@ impl YouPdfApp {
         /// courant. Keep ↔ Hidden ; Scroll repasse à Keep si cachée.
         pub(super) fn toggle_toolbar(&mut self) {
             self.toolbar_hidden = !self.toolbar_hidden;
-            if self.toolbar_hidden {
-                self.toolbar_visibility = ToolbarVisibility::Keep;
-            } else if self.toolbar_visibility == ToolbarVisibility::Hidden {
+            if self.toolbar_hidden || self.toolbar_visibility == ToolbarVisibility::Hidden {
                 self.toolbar_visibility = ToolbarVisibility::Keep;
             }
             menu::set_toolbar_mode(self.toolbar_visibility as u8);

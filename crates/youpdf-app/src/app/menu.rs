@@ -1,7 +1,7 @@
 //! Native macOS menu bar via objc2.
 //!
 //! Construit la barre des 9 menus (YouPDF · File · Edit · View · Tools · Go · Tab · Window · Help)
-//! avec `objc2-app-kit`, calquée sur la structure de UPDF 2.5.6 (voir
+//! avec `objc2-app-kit`, calquée sur la structure de UPDF 2.5.6. Le menu est installé dans
 //! `applicationDidFinishLaunching`.
 //!
 //! Tous les items d'action utilisent un **unique** sélecteur `menuAction:` sur le

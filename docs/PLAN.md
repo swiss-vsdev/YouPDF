@@ -23,7 +23,7 @@ YouPDF/
     youpdf-app/         # egui UI, theme, panels, shortcuts
   assets/icons/         # own SVGs
   docs/PLAN.md          # this file
-  docs/GAP.md           # UPDF 2.5.6 vs YouPDF, per feature (reference material)
+  docs/GAP.md           # UPDF 2.5.6 vs YouPDF, per feature
   docs/visual-parity.md # 1-to-1 appearance parity (pixel diff list)
   docs/STATUS.md        # last commit, verification, next step
   LICENSE               # GPL-3.0

@@ -65,8 +65,8 @@ impl BatchStatus {
         match self {
             Self::Pending => ("Pending", pal().muted),
             Self::Running => ("Processing", pal().icon_bright),
-            Self::Done => ("Done", DONE_GREEN),
-            Self::Failed => ("Error", FAILED_RED),
+            Self::Done => ("Done", pal().state_ok),
+            Self::Failed => ("Error", pal().state_bad),
         }
     }
 }
@@ -80,11 +80,6 @@ pub(super) enum BatchEvent {
     /// Ligne de journal (combine, bilan).
     Note(String),
 }
-
-/// Vert des lignes « Done » : le jeton d'état, pas un littéral.
-const DONE_GREEN: Color32 = Color32::from_rgb(52, 148, 92);
-/// Rouge des lignes « Error » : le jeton de caviardage, pas un littéral.
-const FAILED_RED: Color32 = Color32::from_rgb(196, 62, 62);
 
 /// « 1.4 MB », « 812 B ».
 pub(super) fn human_bytes(bytes: u64) -> String {

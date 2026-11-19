@@ -312,71 +312,20 @@ pub(super) enum FormAlign {
     MatchHeight,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Un champ de test, posé sur la page `page`.
-    fn field(page: usize, rect: [f32; 4]) -> FormField {
-        FormField {
-            object_id: (1, 0),
-            widget_id: (1, 0),
-            name: "a".to_string(),
-            kind: FormFieldKind::Text,
-            value: None,
-            options: Vec::new(),
-            read_only: false,
-            tooltip: String::new(),
-            required: false,
-            multiline: false,
-            page: Some(page),
-            rect,
-            states: Vec::new(),
-            state: None,
-        }
-    }
-
-    /// Le numéro de page d'un champ et celui du canevas se superposent : pas
-    /// de décalage d'une page entre les deux.
-    #[test]
-    fn field_page_matches_the_canvas_page() {
-        assert!(field_on_page(Some(1), 1), "le champ de la page 1 est sur la page 1");
-        assert!(field_on_page(Some(2), 2), "le champ de la page 2 est sur la page 2");
-        assert!(!field_on_page(Some(1), 2), "la page 2 ne porte pas le champ de la page 1");
-        assert!(!field_on_page(Some(2), 1), "la page 1 ne porte pas le champ de la page 2");
-        assert!(!field_on_page(None, 1), "un champ sans page n'est sur aucune page");
-    }
-
-    /// Un clic trouve le champ de la page cliquée, et rien des autres pages.
-    #[test]
-    fn hit_test_finds_the_field_of_the_clicked_page() {
-        let fields = vec![field(1, [10.0, 10.0, 100.0, 30.0])];
-        // Le clic tombe dans le champ de la page 1.
-        assert_eq!(field_at_point(&fields, 1, [50.0, 20.0]), Some(0));
-        // La page 2 n'a pas de champ : le clic ne trouve rien.
-        assert_eq!(field_at_point(&fields, 2, [50.0, 20.0]), None);
-    }
-
-    /// Un clic sur la page 2 ne vise pas le champ posé sur la page 1.
-    #[test]
-    fn hit_test_does_not_reach_a_neighbouring_page() {
-        let fields = vec![field(2, [10.0, 10.0, 100.0, 30.0])];
-        assert_eq!(field_at_point(&fields, 1, [50.0, 20.0]), None);
-        assert_eq!(field_at_point(&fields, 2, [50.0, 20.0]), Some(0));
-    }
-
-    /// L'encadrement ne sélectionne que les champs de la page visée.
-    #[test]
-    fn selection_only_covers_the_selected_page() {
-        let fields = vec![
-            field(1, [10.0, 10.0, 100.0, 30.0]),
-            field(2, [10.0, 10.0, 100.0, 30.0]),
-        ];
-        // L'encadrement englobe les deux champs, mais sur la page 1 seulement.
-        let hits = fields_in_rect(&fields, 1, [0.0, 0.0, 200.0, 200.0]);
-        assert_eq!(hits, vec![0], "le champ de la page 2 ne doit pas être sélectionné");
-        let hits = fields_in_rect(&fields, 2, [0.0, 0.0, 200.0, 200.0]);
-        assert_eq!(hits, vec![1]);
+fn month_name(m: u32) -> &'static str {
+    match m {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        _ => "December",
     }
 }
 
@@ -600,19 +549,70 @@ impl YouPdfApp {
     }
 }
 
-fn month_name(m: u32) -> &'static str {
-    match m {
-        1 => "January",
-        2 => "February",
-        3 => "March",
-        4 => "April",
-        5 => "May",
-        6 => "June",
-        7 => "July",
-        8 => "August",
-        9 => "September",
-        10 => "October",
-        11 => "November",
-        _ => "December",
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Un champ de test, posé sur la page `page`.
+    fn field(page: usize, rect: [f32; 4]) -> FormField {
+        FormField {
+            object_id: (1, 0),
+            widget_id: (1, 0),
+            name: "a".to_string(),
+            kind: FormFieldKind::Text,
+            value: None,
+            options: Vec::new(),
+            read_only: false,
+            tooltip: String::new(),
+            required: false,
+            multiline: false,
+            page: Some(page),
+            rect,
+            states: Vec::new(),
+            state: None,
+        }
+    }
+
+    /// Le numéro de page d'un champ et celui du canevas se superposent : pas
+    /// de décalage d'une page entre les deux.
+    #[test]
+    fn field_page_matches_the_canvas_page() {
+        assert!(field_on_page(Some(1), 1), "le champ de la page 1 est sur la page 1");
+        assert!(field_on_page(Some(2), 2), "le champ de la page 2 est sur la page 2");
+        assert!(!field_on_page(Some(1), 2), "la page 2 ne porte pas le champ de la page 1");
+        assert!(!field_on_page(Some(2), 1), "la page 1 ne porte pas le champ de la page 2");
+        assert!(!field_on_page(None, 1), "un champ sans page n'est sur aucune page");
+    }
+
+    /// Un clic trouve le champ de la page cliquée, et rien des autres pages.
+    #[test]
+    fn hit_test_finds_the_field_of_the_clicked_page() {
+        let fields = vec![field(1, [10.0, 10.0, 100.0, 30.0])];
+        // Le clic tombe dans le champ de la page 1.
+        assert_eq!(field_at_point(&fields, 1, [50.0, 20.0]), Some(0));
+        // La page 2 n'a pas de champ : le clic ne trouve rien.
+        assert_eq!(field_at_point(&fields, 2, [50.0, 20.0]), None);
+    }
+
+    /// Un clic sur la page 2 ne vise pas le champ posé sur la page 1.
+    #[test]
+    fn hit_test_does_not_reach_a_neighbouring_page() {
+        let fields = vec![field(2, [10.0, 10.0, 100.0, 30.0])];
+        assert_eq!(field_at_point(&fields, 1, [50.0, 20.0]), None);
+        assert_eq!(field_at_point(&fields, 2, [50.0, 20.0]), Some(0));
+    }
+
+    /// L'encadrement ne sélectionne que les champs de la page visée.
+    #[test]
+    fn selection_only_covers_the_selected_page() {
+        let fields = vec![
+            field(1, [10.0, 10.0, 100.0, 30.0]),
+            field(2, [10.0, 10.0, 100.0, 30.0]),
+        ];
+        // L'encadrement englobe les deux champs, mais sur la page 1 seulement.
+        let hits = fields_in_rect(&fields, 1, [0.0, 0.0, 200.0, 200.0]);
+        assert_eq!(hits, vec![0], "le champ de la page 2 ne doit pas être sélectionné");
+        let hits = fields_in_rect(&fields, 2, [0.0, 0.0, 200.0, 200.0]);
+        assert_eq!(hits, vec![1]);
     }
 }

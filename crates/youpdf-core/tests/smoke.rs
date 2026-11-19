@@ -199,7 +199,6 @@ fn pdfium_library_is_found_and_loaded() {
         // Le fichier est là mais macOS refuse parfois de le charger
         // (quarantaine / signature) : on l'annonce au lieu de planter.
         eprintln!("pdfium présent mais non chargeable : test ignoré");
-        return;
     }
 }
 

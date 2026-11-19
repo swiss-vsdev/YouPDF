@@ -28,21 +28,8 @@ impl YouPdfApp {
             open: &mut bool,
             add_contents: impl FnOnce(&mut Self, &mut egui::Ui) -> R,
         ) -> Option<R> {
-            let mut result = None;
-            egui::Window::new(title)
-                .id(Id::new(id_source))
-                .open(open)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-                .frame(modal_frame(ctx))
-                .show(ctx, |ui| {
-                    if max_width > 0.0 {
-                        ui.set_max_width(max_width);
-                    }
-                    result = Some(add_contents(self, ui));
-                });
-            result
+            Popup::modal(id_source, title, max_width)
+                .show(ctx, open, |ui| add_contents(self, ui))
         }
 
         /// Pose un message sans disposer du contexte.
@@ -557,13 +544,11 @@ impl YouPdfApp {
             let mut open = true;
             let mut clear = false;
 
-            egui::Window::new(t("Activity"))
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
+            Popup::window(t("Activity"))
+                .fixed()
                 .default_width(320.0)
                 .anchor(Align2::RIGHT_TOP, vec2(-14.0, TITLE_H + 10.0))
-                .show(ctx, |ui| {
+                .show(ctx, &mut open, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new(t("What YouPDF just did"))

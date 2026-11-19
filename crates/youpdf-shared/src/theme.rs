@@ -39,6 +39,10 @@ pub const RADIUS_S: f32 = 4.0;
 pub const RADIUS_M: f32 = 6.0;
 pub const RADIUS_L: f32 = 8.0;
 pub const RADIUS_XL: f32 = 10.0;
+/// Cadres de fenêtre et grandes cartes : gradin au-dessus de [`RADIUS_XL`].
+pub const RADIUS_2XL: f32 = 14.0;
+/// Cartes d'accueil et grandes surfaces : gradin le plus large.
+pub const RADIUS_3XL: f32 = 18.0;
 
 /// Texte éteint à la taille voulue : toute la peinture sourde passe par là.
 pub fn muted(text: impl Into<String>, size: f32) -> RichText {
@@ -59,9 +63,13 @@ pub fn caption(text: impl Into<String>) -> RichText {
 /// le reste ; les fenêtres redimensionables et [`show_modal`] partagent celui-ci
 /// pour que toutes les surfaçes aient la même enveloppe.
 pub fn modal_frame(ctx: &Context) -> Frame {
+    // Cadre UPDF 2.5.6 : coins généreux, fond de chrome, liseré discret.
+    // Une seule définition -> toutes les fenêtres passées par `Popup` (et les
+    // 38 dialogues via `show_modal`) partagent la même enveloppe.
     Frame::window(&ctx.style())
         .fill(pal().chrome_bg)
-        .rounding(Rounding::same(10.0))
+        .rounding(Rounding::same(RADIUS_2XL))
+        .stroke(Stroke::new(1.0_f32, pal().separator))
 }
 
 /// Couleurs de l'interface, choisies par le thème.
@@ -154,6 +162,7 @@ impl Theme {
     /// les visuels natifs d'egui (fenêtres, menus, champs, infobulles) sur la
     /// même palette.
     pub fn apply(self, ctx: &Context) {
+        CURRENT_THEME.with(|cell| cell.set(self));
         let palette = self.palette();
         let mut visuals = if self.is_dark() {
             Visuals::dark()
@@ -169,8 +178,8 @@ impl Theme {
         visuals.selection.bg_fill = palette.accent;
         visuals.selection.stroke = Stroke::new(1.5_f32, Color32::WHITE);
         visuals.hyperlink_color = palette.accent;
-        visuals.window_rounding = Rounding::same(10.0);
-        visuals.menu_rounding = Rounding::same(8.0);
+        visuals.window_rounding = Rounding::same(RADIUS_XL);
+        visuals.menu_rounding = Rounding::same(RADIUS_L);
 
         let widgets = &mut visuals.widgets;
         widgets.noninteractive.bg_fill = palette.canvas_bg;
@@ -180,20 +189,20 @@ impl Theme {
         widgets.inactive.weak_bg_fill = palette.widget_bg;
         widgets.inactive.fg_stroke = Stroke::new(1.0_f32, palette.icon_bright);
         widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.separator);
-        widgets.inactive.rounding = Rounding::same(6.0);
+        widgets.inactive.rounding = Rounding::same(RADIUS_M);
         widgets.hovered.bg_fill = palette.hover_bg;
         widgets.hovered.weak_bg_fill = palette.hover_bg;
         widgets.hovered.fg_stroke = Stroke::new(1.0_f32, palette.icon_bright);
         widgets.hovered.bg_stroke = Stroke::new(1.0_f32, palette.accent);
-        widgets.hovered.rounding = Rounding::same(6.0);
+        widgets.hovered.rounding = Rounding::same(RADIUS_M);
         widgets.active.bg_fill = palette.accent;
         widgets.active.weak_bg_fill = palette.accent;
         widgets.active.fg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
         widgets.active.bg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
-        widgets.active.rounding = Rounding::same(6.0);
+        widgets.active.rounding = Rounding::same(RADIUS_M);
         widgets.open.bg_fill = palette.hover_bg;
         widgets.open.fg_stroke = Stroke::new(1.0_f32, palette.icon_bright);
-        widgets.open.rounding = Rounding::same(6.0);
+        widgets.open.rounding = Rounding::same(RADIUS_M);
 
         ctx.set_visuals(visuals);
 
@@ -304,11 +313,31 @@ const STARRY: Palette = Palette {
 thread_local! {
     /// Palette courante, lue par tout le chrome.
     static PALETTE: Cell<Palette> = const { Cell::new(DARK) };
+    /// Thème courant. Les popups ont leur propre `Context` : sans ça elles
+    /// repartent sur Dark alors que le chrome principal suit le thème choisi.
+    static CURRENT_THEME: Cell<Theme> = const { Cell::new(Theme::Dark) };
+    /// Effet « verre » des fenêtres : simple translucidité, pas de flou GPU.
+    static LIQUID_GLASS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Palette courante.
 pub fn pal() -> Palette {
     PALETTE.with(Cell::get)
+}
+
+/// Thème courant, pour appliquer les visuels à d'autres `Context`.
+pub fn current_theme() -> Theme {
+    CURRENT_THEME.with(Cell::get)
+}
+
+/// Active la translucidité des surfaces de popup.
+pub fn set_liquid_glass(enabled: bool) {
+    LIQUID_GLASS.with(|cell| cell.set(enabled));
+}
+
+/// Vrai si la translucidité des popup est activée.
+pub fn liquid_glass() -> bool {
+    LIQUID_GLASS.with(Cell::get)
 }
 
 /// Installe une palette comme palette courante.

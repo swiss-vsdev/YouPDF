@@ -172,7 +172,7 @@ impl YouPdfApp {
                             let btn = ui.add_sized(
                                 vec2(98.0, 34.0),
                                 Button::new(
-                                    RichText::new(t(category.label())).size(14.0).strong().color(if selected {
+                                    RichText::new(t(category.label())).size(TITLE).strong().color(if selected {
                                         pal().icon_bright
                                     } else {
                                         pal().muted
@@ -183,7 +183,7 @@ impl YouPdfApp {
                                 } else {
                                     Color32::TRANSPARENT
                                 })
-                                .rounding(Rounding::same(11.0)),
+                                .rounding(Rounding::same(RADIUS_XL)),
                             );
                             if btn.clicked() {
                                 self.home.category = category;
@@ -306,7 +306,7 @@ impl YouPdfApp {
                 .show(ui.ctx(), |ui| {
                     egui::Frame::none()
                         .fill(pal().widget_bg)
-                        .rounding(Rounding::same(18.0))
+                        .rounding(Rounding::same(RADIUS_3XL))
                         .inner_margin(Margin::symmetric(14.0, 8.0))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
@@ -483,7 +483,7 @@ impl YouPdfApp {
             // Fond de carte UPDF : présent au repos, plus clair au survol.
             ui.painter().rect_filled(
                 rect,
-                Rounding::same(10.0),
+                Rounding::same(RADIUS_XL),
                 if resp.hovered() {
                     pal().hover_bg
                 } else {
@@ -640,11 +640,10 @@ impl YouPdfApp {
     /// façon Spotlight — champ en haut-centre, douze lignes, Entrée ouvre le
     /// premier, Échap ferme.
     pub(super) fn open_quickly_panel(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Open Quickly")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_TOP, [0.0, 100.0])
-            .show(ctx, |ui| {
+        Popup::window(t("Open Quickly"))
+            .fixed()
+            .anchor(egui::Align2::CENTER_TOP, vec2(0.0, 100.0))
+            .show_detached(ctx, |ui| {
                 ui.add(TextEdit::singleline(&mut self.open_query).desired_width(400.0))
                     .request_focus();
 
@@ -897,7 +896,7 @@ impl YouPdfApp {
                             ui.allocate_exact_size(vec2(CARD_W, 116.0), Sense::click());
                         ui.painter().rect_filled(
                             rect,
-                            Rounding::same(10.0),
+                            Rounding::same(RADIUS_XL),
                             if resp.hovered() {
                                 pal().hover_bg
                             } else {
@@ -1106,7 +1105,7 @@ mod tests {
                 (score > 0).then_some((p, score))
             })
             .collect();
-        ranked.sort_by(|a, b| b.1.cmp(&a.1));
+        ranked.sort_by_key(|b| std::cmp::Reverse(b.1));
         assert_eq!(ranked.first().map(|(p, _)| *p), Some(&"/tmp/rapport-annuel-2024.pdf"));
     }
 }
